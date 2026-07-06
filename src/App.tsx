@@ -533,7 +533,7 @@ function MonthDashboard({
       <ExecutiveSummary
         status={status}
         eyebrow={config.label}
-        title={monthTiming.isClosed ? "Месяц завершен" : "Месяц идет, прогноз Optima важен"}
+        title={monthTiming.isClosed ? "Месяц завершен" : "Месяц в работе"}
         facts={[
           `Прошло дней: ${monthTiming.passed}`,
           `Осталось дней: ${monthTiming.left}`,
@@ -1568,7 +1568,7 @@ function getNiceAxisMax(value: number): number {
 
 function getAxisLabels(max: number): number[] {
   const step = max / 4;
-  return [4, 3, 2, 1, 0].map((part) => Math.round(step * part));
+  return [4, 3, 2, 1].map((part) => Math.round(step * part));
 }
 
 function buildLineSegments<T>(
