@@ -3,6 +3,7 @@ const CONFIG = {
   sheets: {
     daily: 'Data_Daily',
     months: 'Month_Config',
+    plans: 'Month_Plans',
     weekly: 'Weekly_Summary',
     events: 'Event_Map',
   },
@@ -29,10 +30,15 @@ const HEADERS = {
     'year',
     'monthIndex',
     'daysInMonth',
-    'planLeads',
-    'planQualified',
-    'planSales',
+    'status',
     'createdAt',
+  ],
+  Month_Plans: [
+    'monthKey',
+    'city',
+    'metric',
+    'plan',
+    'updatedAt',
   ],
   Weekly_Summary: [
     'monthKey',
@@ -56,6 +62,8 @@ const HEADERS = {
     'endDate',
     'title',
     'type',
+    'group',
+    'source',
     'expectedEffect',
     'actualEffect',
     'importance',
@@ -76,10 +84,6 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    if (!verifyPassword_(request.password)) {
-      throw new Error('Неверный пароль админки');
-    }
-
     ensureServiceSheets_();
 
     const routes = {
@@ -93,6 +97,11 @@ function doPost(e) {
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
+    }
+
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent'];
+    if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
+      throw new Error('Неверный пароль админки');
     }
 
     return jsonResponse({ ok: true, data: routes[action](payload) });
@@ -134,17 +143,19 @@ function ensureServiceSheets_() {
 }
 
 function getMonths_() {
-  return readObjects_(CONFIG.sheets.months);
+  const plans = readObjects_(CONFIG.sheets.plans);
+  return readObjects_(CONFIG.sheets.months).map((month) => decorateMonthConfig_(month, plans));
 }
 
 function getMonthData_(payload) {
   const monthKey = payload.monthKey;
+  const plans = readObjects_(CONFIG.sheets.plans);
   return {
-    config: readObjects_(CONFIG.sheets.months).find((row) => row.monthKey === monthKey) || null,
-    records: readObjects_(CONFIG.sheets.daily).filter((row) => row.month === monthKey),
+    config: decorateMonthConfig_(readObjects_(CONFIG.sheets.months).find((row) => row.monthKey === monthKey) || null, plans),
+    records: readObjects_(CONFIG.sheets.daily).filter((row) => row.month === monthKey).map(normalizeDailyForClient_),
     events: readObjects_(CONFIG.sheets.events).filter((event) => {
       return String(event.startDate).slice(0, 7) <= monthKey && String(event.endDate).slice(0, 7) >= monthKey;
-    }),
+    }).map(normalizeEventForClient_),
   };
 }
 
@@ -153,7 +164,8 @@ function createMonth_(payload) {
   const monthIndex = Number(payload.monthIndex);
   const monthKey = year + '-' + String(monthIndex + 1).padStart(2, '0');
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const label = payload.label || monthKey;
+  const label = payload.label || monthLabel_(year, monthIndex);
+  const plansByCity = normalizePlansByCity_(payload.plansByCity);
   const monthsSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.months);
   const existing = readObjects_(CONFIG.sheets.months).some((row) => row.monthKey === monthKey);
 
@@ -164,14 +176,25 @@ function createMonth_(payload) {
       year,
       monthIndex,
       daysInMonth,
-      Number(payload.planLeads || 0),
-      Number(payload.planQualified || 0),
-      Number(payload.planSales || 0),
+      'active',
       new Date(),
     ]);
   }
 
-  return { monthKey, label, year, monthIndex, daysInMonth };
+  upsertMonthPlans_(monthKey, plansByCity);
+  ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity);
+  rebuildWeeklySummary_(monthKey);
+
+  return {
+    monthKey: monthKey,
+    label: label,
+    year: year,
+    monthIndex: monthIndex,
+    daysInMonth: daysInMonth,
+    plan: reportPlan_(plansByCity),
+    plansByCity: plansByCity,
+    status: 'active',
+  };
 }
 
 function upsertDailyValues_(payload) {
@@ -184,10 +207,11 @@ function upsertDailyValues_(payload) {
   });
 
   rows.forEach((record) => {
-    validateDailyRecord_(record);
-    const values = dailyRow_(record);
-    if (rowById[record.id]) {
-      sheet.getRange(rowById[record.id], 1, 1, values.length).setValues([values]);
+    const normalized = normalizeDailyUpdate_(record);
+    validateDailyRecord_(normalized);
+    const values = dailyRow_(normalized);
+    if (rowById[normalized.id]) {
+      sheet.getRange(rowById[normalized.id], 1, 1, values.length).setValues([values]);
     } else {
       sheet.appendRow(values);
     }
@@ -243,6 +267,7 @@ function rebuildWeeklySummary_(monthKey) {
     const dailyTotals = dates.map((date) => {
       return sum_(rows.filter((row) => row.date === date), 'fact');
     });
+    const nonZeroDailyTotals = dailyTotals.filter(Boolean);
     const weekEvents = events.filter((event) => rangesOverlap_(dates[0], dates[dates.length - 1], event.startDate, event.endDate));
     return [
       monthKey,
@@ -254,7 +279,7 @@ function rebuildWeeklySummary_(monthKey) {
       sum_(rows, 'fact'),
       sum_(rows, 'forecast'),
       dailyTotals[0] || 0,
-      Math.min.apply(null, dailyTotals.filter(Boolean)),
+      nonZeroDailyTotals.length ? Math.min.apply(null, nonZeroDailyTotals) : 0,
       dailyTotals[dailyTotals.length - 1] || 0,
       Math.max.apply(null, dailyTotals),
       weekEvents.map((event) => event.title).join(', '),
@@ -311,6 +336,8 @@ function eventRow_(event) {
     event.endDate,
     event.title,
     event.type,
+    event.group || eventGroupByType_(event.type),
+    event.source || 'manual',
     event.expectedEffect,
     event.actualEffect,
     Number(event.importance || 2),
@@ -319,6 +346,183 @@ function eventRow_(event) {
     event.description || '',
     new Date(),
   ];
+}
+
+function decorateMonthConfig_(month, plans) {
+  if (!month) return null;
+  const monthPlans = plans.filter((row) => row.monthKey === month.monthKey);
+  const plansByCity = plansByCityFromRows_(monthPlans);
+  return {
+    monthKey: month.monthKey,
+    label: month.label,
+    year: Number(month.year || 0),
+    monthIndex: Number(month.monthIndex || 0),
+    daysInMonth: Number(month.daysInMonth || 0),
+    plan: reportPlan_(plansByCity),
+    plansByCity: plansByCity,
+    status: month.status || 'active',
+  };
+}
+
+function upsertMonthPlans_(monthKey, plansByCity) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.plans);
+  const existing = readObjects_(CONFIG.sheets.plans);
+  const rowByKey = {};
+  existing.forEach((row, index) => {
+    rowByKey[row.monthKey + '|' + row.city + '|' + row.metric] = index + 2;
+  });
+
+  ['МСК', 'СПБ', 'сообщения'].forEach((city) => {
+    ['Лиды', 'Квалы', 'Продажи'].forEach((metric) => {
+      const values = [monthKey, city, metric, Number(plansByCity[city][metric] || 0), new Date()];
+      const key = monthKey + '|' + city + '|' + metric;
+      if (rowByKey[key]) {
+        sheet.getRange(rowByKey[key], 1, 1, values.length).setValues([values]);
+      } else {
+        sheet.appendRow(values);
+      }
+    });
+  });
+}
+
+function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.daily);
+  const existing = readObjects_(CONFIG.sheets.daily);
+  const rowById = {};
+  existing.forEach((row, index) => {
+    rowById[row.id] = index + 2;
+  });
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = Utilities.formatDate(new Date(year, monthIndex, day), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    ['МСК', 'СПБ', 'сообщения'].forEach((city) => {
+      ['Лиды', 'Квалы', 'Продажи'].forEach((metric) => {
+        const id = date + '-' + city + '-' + metric;
+        if (rowById[id]) return;
+        sheet.appendRow(dailyRow_({
+          id: id,
+          date: date,
+          month: monthKey,
+          week: weekOfMonth_(date),
+          city: city,
+          channel: city === 'сообщения' ? 'Сообщения' : 'Город',
+          metric: metric,
+          plan: distributeMonthlyPlan_(plansByCity[city][metric], day, daysInMonth),
+          fact: 0,
+          forecast: 0,
+          comment: '',
+        }));
+      });
+    });
+  }
+}
+
+function normalizeDailyUpdate_(record) {
+  const date = record.date;
+  const city = record.city;
+  const metric = record.metric;
+  const current = findDailyRecord_(date, city, metric);
+  return {
+    id: record.id || date + '-' + city + '-' + metric,
+    date: date,
+    month: record.month || String(date).slice(0, 7),
+    week: record.week || weekOfMonth_(date),
+    city: city,
+    channel: record.channel || (city === 'сообщения' ? 'Сообщения' : 'Город'),
+    metric: metric,
+    plan: record.plan !== undefined ? record.plan : (current ? current.plan : 0),
+    fact: record.fact !== undefined ? record.fact : (current ? current.fact : 0),
+    forecast: record.forecast !== undefined ? record.forecast : (current ? current.forecast : 0),
+    comment: record.comment !== undefined ? record.comment : (current ? current.comment : ''),
+  };
+}
+
+function findDailyRecord_(date, city, metric) {
+  return readObjects_(CONFIG.sheets.daily).find((row) => row.date === date && row.city === city && row.metric === metric);
+}
+
+function normalizeDailyForClient_(record) {
+  return {
+    id: record.id,
+    date: stringifyDate_(record.date),
+    city: record.city,
+    channel: record.channel,
+    metric: record.metric,
+    plan: Number(record.plan || 0),
+    fact: Number(record.fact || 0),
+    forecast: Number(record.forecast || 0),
+    comment: record.comment || '',
+  };
+}
+
+function normalizeEventForClient_(event) {
+  return {
+    id: event.id,
+    startDate: stringifyDate_(event.startDate),
+    endDate: stringifyDate_(event.endDate),
+    title: event.title,
+    type: event.type,
+    group: event.group || eventGroupByType_(event.type),
+    source: event.source || 'google_sheets',
+    expectedEffect: event.expectedEffect,
+    actualEffect: event.actualEffect,
+    importance: Number(event.importance || 2),
+    city: event.city || 'все',
+    metric: event.metric || 'все',
+    description: event.description || '',
+  };
+}
+
+function normalizePlansByCity_(plansByCity) {
+  const result = {};
+  ['МСК', 'СПБ', 'сообщения'].forEach((city) => {
+    result[city] = {};
+    ['Лиды', 'Квалы', 'Продажи'].forEach((metric) => {
+      result[city][metric] = Number(plansByCity && plansByCity[city] ? plansByCity[city][metric] || 0 : 0);
+    });
+  });
+  return result;
+}
+
+function plansByCityFromRows_(rows) {
+  const result = normalizePlansByCity_({});
+  rows.forEach((row) => {
+    if (result[row.city] && result[row.city][row.metric] !== undefined) {
+      result[row.city][row.metric] = Number(row.plan || 0);
+    }
+  });
+  return result;
+}
+
+function reportPlan_(plansByCity) {
+  const plan = {};
+  ['Лиды', 'Квалы', 'Продажи'].forEach((metric) => {
+    plan[metric] = Number(plansByCity['МСК'][metric] || 0) + Number(plansByCity['СПБ'][metric] || 0);
+  });
+  return plan;
+}
+
+function distributeMonthlyPlan_(total, day, daysInMonth) {
+  const safeTotal = Math.max(0, Math.round(Number(total || 0)));
+  const base = Math.floor(safeTotal / daysInMonth);
+  const remainder = safeTotal - base * daysInMonth;
+  return base + (day <= remainder ? 1 : 0);
+}
+
+function monthLabel_(year, monthIndex) {
+  const labels = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  return labels[monthIndex] + ' ' + year;
+}
+
+function stringifyDate_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  return String(value).slice(0, 10);
+}
+
+function eventGroupByType_(type) {
+  return ['рекламные изменения', 'техработы', 'продуктовые изменения', 'прочее'].indexOf(type) >= 0 ? 'internal' : 'external';
 }
 
 function validateDailyRecord_(record) {

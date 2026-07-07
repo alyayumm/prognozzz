@@ -319,6 +319,274 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .notice svg { color: var(--blue); }
 
+.admin-dashboard {
+  gap: 15px;
+}
+.admin-command-panel,
+.admin-entry-panel,
+.admin-total-strip {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: var(--soft-shadow), var(--glass-highlight);
+}
+.admin-command-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 14px;
+  padding: 14px;
+}
+.admin-month-select {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.admin-month-select label,
+.admin-date-select,
+.admin-create-top label,
+.admin-plan-grid label,
+.admin-fact-input {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+.admin-month-select select,
+.admin-date-select select,
+.admin-create-top input,
+.admin-create-top select,
+.admin-plan-grid input,
+.admin-fact-input input,
+.admin-week-city input {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--black);
+  outline: none;
+  padding: 0 11px;
+  font-weight: 800;
+}
+.admin-month-select span {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(234, 241, 255, 0.82);
+  color: var(--muted-strong);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 850;
+}
+.admin-tabs {
+  display: inline-flex;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(234, 241, 255, 0.72);
+}
+.admin-tabs button {
+  min-width: 96px;
+  height: 34px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted-strong);
+  font-weight: 900;
+}
+.admin-tabs button.active {
+  background: linear-gradient(180deg, #4d76ff, var(--blue));
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(28, 70, 245, 0.2);
+}
+.admin-total-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+.admin-total-strip article {
+  min-height: 92px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(247, 249, 255, 0.74);
+}
+.admin-total-strip span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+.admin-total-strip strong {
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 780;
+}
+.admin-total-strip small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 780;
+}
+.messages-total-card {
+  background: linear-gradient(135deg, rgba(28, 70, 245, 0.95), rgba(127, 167, 255, 0.76)) !important;
+  color: #fff;
+}
+.messages-total-card span,
+.messages-total-card small {
+  color: rgba(255, 255, 255, 0.76);
+}
+.admin-entry-panel {
+  padding: 16px;
+}
+.admin-date-select {
+  min-width: 180px;
+}
+.admin-date-select span {
+  color: var(--muted);
+}
+.admin-day-grid {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(247, 249, 255, 0.74);
+}
+.admin-day-row {
+  display: grid;
+  grid-template-columns: 170px repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+  align-items: center;
+  min-height: 78px;
+  padding: 11px 12px;
+  border-top: 1px solid var(--line);
+}
+.admin-day-row:first-child {
+  border-top: 0;
+}
+.admin-day-head {
+  min-height: 42px;
+  background: rgba(234, 241, 255, 0.82);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+.admin-day-row strong {
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 900;
+}
+.admin-fact-input input {
+  width: 100%;
+  font-size: 18px;
+}
+.admin-fact-input small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.admin-actions span {
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 760;
+}
+.admin-month-create {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.admin-create-top {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(110px, 0.5fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.admin-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.admin-plan-grid section {
+  display: grid;
+  gap: 9px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(247, 249, 255, 0.82);
+}
+.admin-plan-grid h3 {
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 900;
+}
+.admin-week-list {
+  display: grid;
+  gap: 12px;
+}
+.admin-week-block {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+}
+.admin-week-days {
+  display: grid;
+}
+.admin-week-day {
+  display: grid;
+  grid-template-columns: 96px repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+.admin-week-city {
+  display: grid;
+  grid-template-columns: 1fr repeat(3, minmax(74px, 1fr));
+  gap: 7px;
+  align-items: end;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(154, 180, 234, 0.32);
+  border-radius: 16px;
+  background: rgba(247, 249, 255, 0.7);
+}
+.admin-week-city strong {
+  align-self: center;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 900;
+}
+.admin-week-city .compact-input {
+  display: grid;
+  gap: 4px;
+}
+.admin-week-city .compact-input span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+.admin-week-city input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border-radius: 12px;
+  padding: 0 8px;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;
@@ -1352,8 +1620,12 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .insight-panel { position: static; }
   .weekly-sync-grid,
   .plan-need-grid { grid-template-columns: 1fr; }
+  .admin-total-strip,
+  .admin-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .month-matrix-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .month-create-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .admin-week-day { grid-template-columns: 1fr; }
+  .admin-week-city { grid-template-columns: 110px repeat(3, minmax(74px, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -1377,7 +1649,16 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .kpi-strip,
   .funnel-flow,
   .conversion-grid,
-  .calendar-grid { grid-template-columns: 1fr; }
+  .calendar-grid,
+  .admin-total-strip,
+  .admin-plan-grid { grid-template-columns: 1fr; }
+  .admin-command-panel,
+  .admin-actions { display: grid; }
+  .admin-tabs { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); }
+  .admin-tabs button { min-width: 0; width: 100%; }
+  .admin-day-row,
+  .admin-create-top,
+  .admin-week-city { grid-template-columns: 1fr; }
   .month-create-form { grid-template-columns: 1fr; }
   .table-row { grid-template-columns: 86px repeat(3, minmax(76px, 1fr)); }
   .main-panel,

@@ -1,5 +1,6 @@
 export type City = "МСК" | "СПБ" | "сообщения";
 export type Metric = "Лиды" | "Квалы" | "Продажи";
+export type PlanByCity = Record<City, Record<Metric, number>>;
 export type Effect = "положительный" | "негативный" | "неизвестно";
 export type EventGroup = "internal" | "external";
 export type EventSource = "manual" | "google_sheets";
@@ -31,6 +32,24 @@ export interface MonthConfig {
   monthIndex: number;
   daysInMonth: number;
   plan: Record<Metric, number>;
+  plansByCity?: PlanByCity;
+  status?: "active" | "closed";
+}
+
+export interface DailyValueUpdate {
+  date: string;
+  city: City;
+  metric: Metric;
+  plan?: number;
+  fact?: number;
+  forecast?: number;
+  comment?: string;
+}
+
+export interface CreateMonthPayload {
+  year: number;
+  monthIndex: number;
+  plansByCity: PlanByCity;
 }
 
 export interface EventItem {

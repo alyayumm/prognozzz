@@ -1,7 +1,13 @@
-import type { City, DailyRecord, EventItem, Metric, MonthConfig } from "../types";
+import type { City, DailyRecord, EventItem, Metric, MonthConfig, PlanByCity } from "../types";
 
 export const cities: City[] = ["МСК", "СПБ", "сообщения"];
 export const metrics: Metric[] = ["Лиды", "Квалы", "Продажи"];
+
+const planSplitShare = {
+  [cities[0]]: 0.52,
+  [cities[1]]: 0.38,
+  [cities[2]]: 0.1,
+} as Record<City, number>;
 
 export const monthConfigs: MonthConfig[] = [
   {
@@ -15,6 +21,7 @@ export const monthConfigs: MonthConfig[] = [
       Квалы: 2110,
       Продажи: 760,
     },
+    plansByCity: createPlansByCity({ Лиды: 4360, Квалы: 2110, Продажи: 760 }),
   },
   {
     monthKey: "2026-05",
@@ -27,6 +34,7 @@ export const monthConfigs: MonthConfig[] = [
       Квалы: 2490,
       Продажи: 890,
     },
+    plansByCity: createPlansByCity({ Лиды: 5070, Квалы: 2490, Продажи: 890 }),
   },
   {
     monthKey: "2026-06",
@@ -39,6 +47,7 @@ export const monthConfigs: MonthConfig[] = [
       Квалы: 2290,
       Продажи: 820,
     },
+    plansByCity: createPlansByCity({ Лиды: 4680, Квалы: 2290, Продажи: 820 }),
   },
   {
     monthKey: "2026-07",
@@ -51,12 +60,18 @@ export const monthConfigs: MonthConfig[] = [
       Квалы: 2410,
       Продажи: 859,
     },
+    plansByCity: createPlansByCity({ Лиды: 4889, Квалы: 2410, Продажи: 859 }),
   },
 ];
 
 export const monthConfig: MonthConfig = monthConfigs[monthConfigs.length - 1];
 
-export function createMonthConfig(year: number, monthIndex: number, plan: Record<Metric, number>): MonthConfig {
+export function createMonthConfig(
+  year: number,
+  monthIndex: number,
+  plan: Record<Metric, number>,
+  plansByCity?: PlanByCity,
+): MonthConfig {
   const monthKey = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
   const monthName = new Intl.DateTimeFormat("ru-RU", { month: "long" })
     .format(new Date(year, monthIndex, 1))
@@ -69,33 +84,10 @@ export function createMonthConfig(year: number, monthIndex: number, plan: Record
     monthIndex,
     daysInMonth: new Date(year, monthIndex + 1, 0).getDate(),
     plan,
+    plansByCity: plansByCity ?? createPlansByCity(plan),
+    status: "active",
   };
 }
-
-const julyConfig: MonthConfig = {
-  monthKey: "2026-07",
-  label: "Июль 2026",
-  year: 2026,
-  monthIndex: 6,
-  daysInMonth: 31,
-  plan: {
-    Лиды: 4889,
-    Квалы: 2410,
-    Продажи: 859,
-  },
-};
-
-const cityShare: Record<City, number> = {
-  МСК: 0.52,
-  СПБ: 0.38,
-  сообщения: 0.1,
-};
-
-const metricBase: Record<Metric, number> = {
-  Лиды: 158,
-  Квалы: 78,
-  Продажи: 28,
-};
 
 const weekdayFactor = [0.82, 1.12, 1.18, 1.08, 1.04, 0.86, 0.72];
 
@@ -111,11 +103,12 @@ export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0): Dail
     const weekday = date.getUTCDay();
     metrics.forEach((metric) => {
       cities.forEach((city) => {
-        const monthPlanFactor = config.plan[metric] / julyConfig.plan[metric];
-        const base = metricBase[metric] * cityShare[city] * weekdayFactor[weekday] * monthPlanFactor;
+        const monthlyPlan = getCityMetricPlan(config, city, metric);
+        const dayPlan = distributeMonthlyPlan(monthlyPlan, day, config.daysInMonth);
+        const base = Math.max(0, dayPlan * weekdayFactor[weekday]);
         const pulse = Math.sin((day + monthOffset * 2) / 2.6) * 0.1 + Math.cos((day + monthOffset) / 5.2) * 0.07;
         const eventLift = config.monthKey === "2026-07" && day >= 15 && day <= 18 && metric !== "Продажи" ? -0.16 : 0;
-        const plan = Math.round(base);
+        const plan = dayPlan;
         const fact = Math.max(0, Math.round(base * (1 + pulse + eventLift)));
         const forecast = Math.round(base * (1 + pulse * 0.6 + 0.04));
         records.push({
@@ -134,6 +127,34 @@ export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0): Dail
   }
 
   return records;
+}
+
+export function createPlansByCity(plan: Record<Metric, number>): PlanByCity {
+  return cities.reduce<PlanByCity>((acc, city) => {
+    acc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
+      metricAcc[metric] = Math.round(plan[metric] * planSplitShare[city]);
+      return metricAcc;
+    }, {} as Record<Metric, number>);
+    return acc;
+  }, {} as PlanByCity);
+}
+
+export function combineReportPlan(plansByCity: PlanByCity): Record<Metric, number> {
+  return metrics.reduce<Record<Metric, number>>((acc, metric) => {
+    acc[metric] = plansByCity.МСК[metric] + plansByCity.СПБ[metric];
+    return acc;
+  }, {} as Record<Metric, number>);
+}
+
+function getCityMetricPlan(config: MonthConfig, city: City, metric: Metric): number {
+  return config.plansByCity?.[city]?.[metric] ?? Math.round(config.plan[metric] * planSplitShare[city]);
+}
+
+function distributeMonthlyPlan(total: number, day: number, daysInMonth: number): number {
+  const safeTotal = Math.max(0, Math.round(total || 0));
+  const base = Math.floor(safeTotal / daysInMonth);
+  const remainder = safeTotal - base * daysInMonth;
+  return base + (day <= remainder ? 1 : 0);
 }
 
 export const seedEvents: EventItem[] = [

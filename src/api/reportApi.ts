@@ -1,7 +1,7 @@
-import type { DailyRecord, EventItem, MonthConfig } from "../types";
+import type { CreateMonthPayload, DailyRecord, DailyValueUpdate, EventItem, MonthConfig } from "../types";
 
 const endpoint = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
-const password = import.meta.env.VITE_ADMIN_PASSWORD as string | undefined;
+const envPassword = import.meta.env.VITE_ADMIN_PASSWORD as string | undefined;
 
 type ApiAction =
   | "getMonths"
@@ -12,7 +12,11 @@ type ApiAction =
   | "upsertEvent"
   | "verifyPassword";
 
-export async function callReportApi<T>(action: ApiAction, payload: unknown = {}): Promise<T> {
+export function isReportApiConfigured(): boolean {
+  return Boolean(endpoint);
+}
+
+export async function callReportApi<T>(action: ApiAction, payload: unknown = {}, password = envPassword): Promise<T> {
   if (!endpoint) {
     throw new Error("Apps Script URL is not configured. Local prototype uses sample data.");
   }
@@ -31,7 +35,14 @@ export async function callReportApi<T>(action: ApiAction, payload: unknown = {})
 }
 
 export interface MonthPayload {
-  config: MonthConfig;
+  config: MonthConfig | null;
   records: DailyRecord[];
   events: EventItem[];
 }
+
+export interface DailyValuesPayload {
+  monthKey: string;
+  records: DailyValueUpdate[];
+}
+
+export type CreateMonthRequest = CreateMonthPayload;

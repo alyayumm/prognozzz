@@ -20,12 +20,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buildRecordsForMonth,
   buildSeedRecords,
+  combineReportPlan,
   createMonthConfig,
   metrics,
   monthConfig,
   monthConfigs as seedMonthConfigs,
   seedEvents,
 } from "./data/dashboardMock";
+import { callReportApi, isReportApiConfigured, type MonthPayload } from "./api/reportApi";
 import { buildAttentionItems } from "./lib/insights";
 import {
   buildConversions,
@@ -44,18 +46,27 @@ import {
   type MetricTotals,
   type ReportScope,
 } from "./lib/metrics";
-import type { City, DailyRecord, Effect, EventGroup, EventItem, EventType, Metric, MonthConfig, WeekSummary } from "./types";
+import type {
+  City,
+  CreateMonthPayload,
+  DailyRecord,
+  DailyValueUpdate,
+  Effect,
+  EventGroup,
+  EventItem,
+  EventType,
+  Metric,
+  MonthConfig,
+  PlanByCity,
+  WeekSummary,
+} from "./types";
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "week" | "messages" | "events";
+type Mode = "allMonths" | "month" | "week" | "messages" | "events" | "admin";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
-type MonthDraft = {
-  year: number;
-  monthIndex: number;
-  plan: Record<Metric, number>;
-};
+type MonthDraft = CreateMonthPayload;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -84,6 +95,12 @@ const eventTypes: EventType[] = [
   "прочее",
 ];
 const internalEventTypes: EventType[] = ["рекламные изменения", "техработы", "продуктовые изменения", "прочее"];
+const adminCities: City[] = ["МСК", "СПБ", "сообщения"];
+const cityLabels: Record<City, string> = {
+  МСК: "МСК",
+  СПБ: "СПБ",
+  сообщения: "Сообщения",
+};
 const planRingItems: Array<{ metric: Metric; label: string; className: string; radius: number }> = [
   { metric: "Лиды", label: "Лиды", className: "leads", radius: 58 },
   { metric: "Квалы", label: "Квалы", className: "qualified", radius: 46 },
@@ -104,6 +121,7 @@ export default function App() {
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [auth, setAuth] = useState("");
   const [savedMessage, setSavedMessage] = useState("Локальный режим: факты, месяцы и события сохраняются в этой панели.");
+  const apiConfigured = isReportApiConfigured();
   const todayIso = useMemo(getTodayIso, []);
 
   const selectedMonthConfig = useMemo(
@@ -154,6 +172,48 @@ export default function App() {
     saveLocalState({ monthConfigs, records, events, selectedMonthKey });
   }, [monthConfigs, records, events, selectedMonthKey]);
 
+  useEffect(() => {
+    if (!apiConfigured) return;
+
+    let cancelled = false;
+    async function loadFromSheets() {
+      try {
+        const remoteMonths = await callReportApi<MonthConfig[]>("getMonths");
+        if (cancelled) return;
+
+        if (!remoteMonths.length) {
+          setSavedMessage("Google Sheets подключен. Создайте первый месяц в админке, чтобы заполнить служебные листы.");
+          return;
+        }
+
+        const normalizedMonths = remoteMonths.map(normalizeMonthConfig);
+        setMonthConfigs(normalizedMonths);
+        const remoteMonthKey = normalizedMonths.some((config) => config.monthKey === selectedMonthKey)
+          ? selectedMonthKey
+          : normalizedMonths[normalizedMonths.length - 1].monthKey;
+
+        if (remoteMonthKey !== selectedMonthKey) {
+          setSelectedMonthKey(remoteMonthKey);
+          return;
+        }
+
+        const payload = await callReportApi<MonthPayload>("getMonthData", { monthKey: remoteMonthKey });
+        if (cancelled) return;
+        applyRemotePayload(payload, remoteMonthKey);
+        setSavedMessage("Данные загружены из Google Sheets. Запись доступна после ввода пароля.");
+      } catch (error) {
+        if (!cancelled) {
+          setSavedMessage(`Google Sheets пока недоступен: ${getErrorMessage(error)}. Работаю в локальном fallback.`);
+        }
+      }
+    }
+
+    loadFromSheets();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiConfigured, selectedMonthKey]);
+
   function selectMonth(monthKey: string) {
     const config = monthConfigs.find((item) => item.monthKey === monthKey);
     if (!config) return;
@@ -161,15 +221,60 @@ export default function App() {
     setSelectedWeek(1);
   }
 
+  function applyRemotePayload(payload: MonthPayload, monthKey: string) {
+    const remoteConfig = payload.config;
+    if (remoteConfig) {
+      setMonthConfigs((current) => upsertMonthConfig(current, normalizeMonthConfig(remoteConfig)));
+    }
+    setRecords((current) => [
+      ...current.filter((record) => !record.date.startsWith(monthKey)),
+      ...payload.records.map(normalizeDailyRecord),
+    ]);
+    setEvents(payload.events.map(normalizeEvent));
+  }
+
+  function mergeDailyValues(values: DailyValueUpdate[]) {
+    setRecords((current) => {
+      const byKey = new Map(current.map((record) => [dailyRecordKey(record.date, record.city, record.metric), record]));
+
+      values.forEach((value) => {
+        const key = dailyRecordKey(value.date, value.city, value.metric);
+        const previous = byKey.get(key);
+        byKey.set(key, mergeDailyRecord(previous, value));
+      });
+
+      return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
+    });
+  }
+
+  async function persistDailyValues(values: DailyValueUpdate[], localMessage: string) {
+    const sanitized = values.map(sanitizeDailyValueUpdate);
+    mergeDailyValues(sanitized);
+
+    if (!apiConfigured) {
+      setSavedMessage(`${localMessage} Локальный fallback сохранен в браузере.`);
+      return;
+    }
+
+    if (!auth.trim()) {
+      setSavedMessage(`${localMessage} Для записи в Google Sheets введите пароль админки.`);
+      return;
+    }
+
+    try {
+      await callReportApi("upsertDailyValues", { monthKey: sanitized[0]?.date.slice(0, 7), records: sanitized }, auth);
+      setSavedMessage(`${localMessage} Сохранено в Google Sheets.`);
+    } catch (error) {
+      setSavedMessage(`${localMessage} Локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`);
+    }
+  }
+
   function updateRecord(date: string, city: City, metric: Metric, field: "plan" | "fact" | "forecast", value: number) {
-    setRecords((current) =>
-      current.map((record) =>
-        record.date === date && record.city === city && record.metric === metric
-          ? { ...record, [field]: Math.max(0, value || 0) }
-          : record,
-      ),
-    );
-    setSavedMessage("Факт внесен локально и сохранится в этой панели.");
+    persistDailyValues([{ date, city, metric, [field]: Math.max(0, value || 0) }], "Значение обновлено.");
+  }
+
+  function updateDailyValues(values: DailyValueUpdate[], message = "День обновлен.") {
+    persistDailyValues(values, message);
   }
 
   function updateAggregatedFact(date: string, metric: Metric, value: number) {
@@ -177,18 +282,34 @@ export default function App() {
     const nextValue = Math.max(0, value || 0);
     const baseValue = Math.floor(nextValue / splitCities.length);
     const remainder = nextValue - baseValue * splitCities.length;
-    splitCities.forEach((city, index) => {
-      updateRecord(date, city, metric, "fact", baseValue + (index < remainder ? 1 : 0));
-    });
+    persistDailyValues(
+      splitCities.map((city, index) => ({
+        date,
+        city,
+        metric,
+        fact: baseValue + (index < remainder ? 1 : 0),
+      })),
+      "Факт обновлен.",
+    );
   }
 
   function addEvent(event: EventItem) {
     setEvents((current) => [event, ...current]);
-    setSavedMessage("Событие добавлено в карту факторов.");
+    if (!apiConfigured) {
+      setSavedMessage("Событие добавлено локально в карту факторов.");
+      return;
+    }
+    if (!auth.trim()) {
+      setSavedMessage("Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
+      return;
+    }
+    callReportApi("upsertEvent", { event }, auth)
+      .then(() => setSavedMessage("Событие добавлено и сохранено в Google Sheets."))
+      .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
 
   function createMonthFromPanel(draft: MonthDraft) {
-    const nextConfig = createMonthConfig(draft.year, draft.monthIndex, draft.plan);
+    const nextConfig = createMonthConfig(draft.year, draft.monthIndex, combineReportPlan(draft.plansByCity), draft.plansByCity);
     const exists = monthConfigs.some((config) => config.monthKey === nextConfig.monthKey);
 
     if (!exists) {
@@ -198,8 +319,20 @@ export default function App() {
 
     setSelectedMonthKey(nextConfig.monthKey);
     setSelectedWeek(1);
-    setMode("month");
-    setSavedMessage(exists ? `${nextConfig.label} уже есть, месяц открыт в панели.` : `${nextConfig.label} добавлен, можно вносить факт.`);
+    setMode("admin");
+
+    if (!apiConfigured) {
+      setSavedMessage(exists ? `${nextConfig.label} уже есть, месяц открыт в панели.` : `${nextConfig.label} добавлен локально, можно вносить факт.`);
+      return;
+    }
+    if (!auth.trim()) {
+      setSavedMessage(`${nextConfig.label} подготовлен локально. Для создания в Google Sheets введите пароль админки.`);
+      return;
+    }
+
+    callReportApi("createMonth", draft, auth)
+      .then(() => setSavedMessage(exists ? `${nextConfig.label} открыт в админке.` : `${nextConfig.label} создан в Google Sheets.`))
+      .catch((error) => setSavedMessage(`${nextConfig.label} локально подготовлен, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
 
   return (
@@ -216,7 +349,7 @@ export default function App() {
           todayIso={todayIso}
           selectMonth={selectMonth}
           setSelectedScope={setSelectedScope}
-          onCreateMonth={() => setMode("month")}
+          onCreateMonth={() => setMode("admin")}
         />
 
         <section className="notice">
@@ -224,7 +357,7 @@ export default function App() {
           {savedMessage}
         </section>
 
-        <div className={mode === "events" || mode === "messages" ? "content-single" : "content-grid"}>
+        <div className={mode === "events" || mode === "messages" || mode === "admin" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
               <AllMonthsDashboard
@@ -286,9 +419,24 @@ export default function App() {
                 onAdd={addEvent}
               />
             )}
+            {mode === "admin" && (
+              <AdminDashboard
+                dates={monthDates}
+                months={monthConfigs}
+                selectedMonthKey={selectedMonthKey}
+                selectedMonthConfig={selectedMonthConfig}
+                records={records.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey))}
+                events={currentMonthEvents}
+                todayIso={todayIso}
+                selectMonth={selectMonth}
+                onCreateMonth={createMonthFromPanel}
+                onSaveDailyValues={updateDailyValues}
+                onAddEvent={addEvent}
+              />
+            )}
           </section>
 
-          {mode !== "events" && mode !== "messages" && (
+          {mode !== "events" && mode !== "messages" && mode !== "admin" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -315,6 +463,7 @@ function Sidebar({
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
     { mode: "month", label: "Обзор месяца", icon: <LayoutDashboard /> },
     { mode: "week", label: "Неделя", icon: <CalendarDays /> },
+    { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "messages", label: "Сообщения", icon: <MessageSquare /> },
     { mode: "events", label: "События", icon: <TriangleAlert /> },
   ];
@@ -569,18 +718,6 @@ function MonthDashboard({
 
       <PlanNeedGrid summaries={summaries} />
       <InsightPanel items={insights} />
-
-      <MonthAdminPanel
-        dates={monthDates}
-        months={months}
-        selectedMonthKey={selectedMonthKey}
-        selectedScope={selectedScope}
-        selectedMonthConfig={config}
-        records={records}
-        selectMonth={selectMonth}
-        onCreateMonth={onCreateMonth}
-        updateAggregatedFact={updateAggregatedFact}
-      />
     </div>
   );
 }
@@ -1232,113 +1369,339 @@ function InsightPanel({ items }: { items: string[] }) {
   );
 }
 
-function MonthAdminPanel({
+function AdminDashboard({
   dates,
   months,
   selectedMonthKey,
-  selectedScope,
   selectedMonthConfig,
   records,
+  events,
+  todayIso,
   selectMonth,
   onCreateMonth,
-  updateAggregatedFact,
+  onSaveDailyValues,
+  onAddEvent,
 }: {
   dates: string[];
   months: MonthConfig[];
   selectedMonthKey: string;
-  selectedScope: ReportScope;
   selectedMonthConfig: MonthConfig;
   records: DailyRecord[];
+  events: EventItem[];
+  todayIso: string;
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
-  updateAggregatedFact: (date: string, metric: Metric, value: number) => void;
+  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
+  onAddEvent: (event: EventItem) => void;
 }) {
-  const [draft, setDraft] = useState<MonthDraft>(() => nextMonthDraft(selectedMonthConfig));
-  const datesByWeek = dates.reduce<Record<number, string[]>>((acc, date) => {
-    const week = getWeekOfMonth(date);
-    acc[week] = [...(acc[week] ?? []), date];
-    return acc;
-  }, {});
+  const [tab, setTab] = useState<"day" | "month" | "events">("day");
+  const firstDate = dates.includes(todayIso) ? todayIso : dates[0] ?? todayIso;
+  const [selectedDate, setSelectedDate] = useState(firstDate);
+  const totals = buildMetricTotals(records, metrics);
+  const messageTotals = buildMetricTotals(records.filter((record) => record.city === "сообщения"), metrics);
+
+  useEffect(() => {
+    if (!dates.includes(selectedDate)) {
+      setSelectedDate(dates[0] ?? todayIso);
+    }
+  }, [dates, selectedDate, todayIso]);
 
   return (
-    <section className="month-control-panel">
-      <PanelHead title="Администрирование месяца" description="Месяц можно создать в панели, а факт быстро заполнить по неделям." />
-      <div className="month-picker-row">
-        <label>
-          Месяц
-          <select value={selectedMonthKey} onChange={(event) => selectMonth(event.target.value)}>
-            {months.map((config) => (
-              <option key={config.monthKey} value={config.monthKey}>{config.label}</option>
+    <div className="page-stack admin-dashboard">
+      <ExecutiveSummary
+        status={{ label: "режим ввода", tone: "good" }}
+        eyebrow={selectedMonthConfig.label}
+        title="Админка ежедневного отчета"
+        facts={[
+          "МСК, СПБ и сообщения отдельно",
+          "План по каждому направлению",
+          "День сохраняется пачкой",
+          `Событий месяца: ${events.length}`,
+        ]}
+      />
+
+      <section className="admin-command-panel">
+        <div className="admin-month-select">
+          <label>
+            Рабочий месяц
+            <select value={selectedMonthKey} onChange={(event) => selectMonth(event.target.value)}>
+              {months.map((config) => (
+                <option key={config.monthKey} value={config.monthKey}>{config.label}</option>
+              ))}
+            </select>
+          </label>
+          <span>{dates.length} дней · {Object.keys(groupDatesByWeek(dates)).length} недель</span>
+        </div>
+        <div className="admin-tabs" role="tablist" aria-label="Режим админки">
+          <button className={tab === "day" ? "active" : ""} type="button" onClick={() => setTab("day")}>День</button>
+          <button className={tab === "month" ? "active" : ""} type="button" onClick={() => setTab("month")}>Месяц</button>
+          <button className={tab === "events" ? "active" : ""} type="button" onClick={() => setTab("events")}>События</button>
+        </div>
+      </section>
+
+      <section className="admin-total-strip">
+        {metrics.map((metric) => (
+          <article key={metric}>
+            <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+            <strong>{formatNumber(totals[metric].fact)}</strong>
+            <small>общий факт МСК + СПБ + сообщения</small>
+          </article>
+        ))}
+        <article className="messages-total-card">
+          <span>Сообщения</span>
+          <strong>{formatNumber(messageTotals["Лиды"].fact)}</strong>
+          <small>лиды сообщений отдельно от городов</small>
+        </article>
+      </section>
+
+      {tab === "day" && (
+        <AdminDayPanel
+          dates={dates}
+          selectedDate={selectedDate}
+          setSelectedDate={setSelectedDate}
+          records={records}
+          onSaveDailyValues={onSaveDailyValues}
+        />
+      )}
+      {tab === "month" && (
+        <AdminMonthPanel
+          dates={dates}
+          records={records}
+          selectedMonthConfig={selectedMonthConfig}
+          onCreateMonth={onCreateMonth}
+          onSaveDailyValues={onSaveDailyValues}
+        />
+      )}
+      {tab === "events" && (
+        <AdminEventsPanel dates={dates} events={events} onAddEvent={onAddEvent} />
+      )}
+    </div>
+  );
+}
+
+function AdminDayPanel({
+  dates,
+  selectedDate,
+  setSelectedDate,
+  records,
+  onSaveDailyValues,
+}: {
+  dates: string[];
+  selectedDate: string;
+  setSelectedDate: (date: string) => void;
+  records: DailyRecord[];
+  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
+}) {
+  const [draft, setDraft] = useState(() => createDailyFactDraft(records, selectedDate));
+
+  useEffect(() => {
+    setDraft(createDailyFactDraft(records, selectedDate));
+  }, [records, selectedDate]);
+
+  function setFact(city: City, metric: Metric, value: number) {
+    setDraft((current) => ({
+      ...current,
+      [city]: {
+        ...current[city],
+        [metric]: Math.max(0, value || 0),
+      },
+    }));
+  }
+
+  function saveDay() {
+    const values = adminCities.flatMap((city) =>
+      metrics.map((metric) => ({
+        date: selectedDate,
+        city,
+        metric,
+        fact: draft[city][metric],
+      })),
+    );
+    onSaveDailyValues(values, `${formatDay(selectedDate)} сохранен.`);
+  }
+
+  return (
+    <section className="admin-entry-panel">
+      <PanelHead title="День" description="Одна форма сохраняет все 9 значений: МСК, СПБ и сообщения по лидам, КВАЛ и продажам.">
+        <label className="admin-date-select">
+          <span>Дата</span>
+          <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
+            {dates.map((date) => (
+              <option key={date} value={date}>{formatDay(date)} · {weekdayLabel(date)}</option>
             ))}
           </select>
         </label>
-        <span>Факт: {selectedScope === "Все" ? "МСК + СПБ" : selectedScope}</span>
+      </PanelHead>
+
+      <div className="admin-day-grid">
+        <div className="admin-day-row admin-day-head">
+          <span>Направление</span>
+          {metrics.map((metric) => <span key={metric}>{metric === "Квалы" ? "КВАЛ" : metric}</span>)}
+        </div>
+        {adminCities.map((city) => (
+          <div className="admin-day-row" key={city}>
+            <strong>{cityLabels[city]}</strong>
+            {metrics.map((metric) => {
+              const plan = findDailyRecord(records, selectedDate, city, metric)?.plan ?? 0;
+              return (
+                <label className="admin-fact-input" key={metric}>
+                  <input
+                    type="number"
+                    min="0"
+                    value={draft[city][metric]}
+                    onChange={(event) => setFact(city, metric, Number(event.target.value))}
+                  />
+                  <small>план {formatNumber(plan)}</small>
+                </label>
+              );
+            })}
+          </div>
+        ))}
       </div>
+
+      <div className="admin-actions">
+        <span>Данные сообщений сохраняются отдельно и не попадают в общий дашборд МСК + СПБ.</span>
+        <button className="primary-button" type="button" onClick={saveDay}>
+          <Save size={16} />
+          Сохранить день
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function AdminMonthPanel({
+  dates,
+  records,
+  selectedMonthConfig,
+  onCreateMonth,
+  onSaveDailyValues,
+}: {
+  dates: string[];
+  records: DailyRecord[];
+  selectedMonthConfig: MonthConfig;
+  onCreateMonth: (draft: MonthDraft) => void;
+  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
+}) {
+  const [draft, setDraft] = useState<MonthDraft>(() => nextMonthDraft(selectedMonthConfig));
+  const datesByWeek = groupDatesByWeek(dates);
+
+  useEffect(() => {
+    setDraft(nextMonthDraft(selectedMonthConfig));
+  }, [selectedMonthConfig]);
+
+  function setPlan(city: City, metric: Metric, value: number) {
+    setDraft((current) => ({
+      ...current,
+      plansByCity: {
+        ...current.plansByCity,
+        [city]: {
+          ...current.plansByCity[city],
+          [metric]: Math.max(0, value || 0),
+        },
+      },
+    }));
+  }
+
+  return (
+    <section className="admin-entry-panel">
+      <PanelHead title="Месяц по неделям" description="Новый месяц создается с планами по МСК, СПБ и сообщениям; факт можно править прямо в недельных блоках." />
+
       <form
-        className="month-create-form"
+        className="admin-month-create"
         onSubmit={(event) => {
           event.preventDefault();
           onCreateMonth(draft);
         }}
       >
-        <label>
-          Новый месяц
-          <select value={draft.monthIndex} onChange={(event) => setDraft((current) => ({ ...current, monthIndex: Number(event.target.value) }))}>
-            {monthNames.map((label, index) => (
-              <option key={label} value={index}>{label}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Год
-          <input type="number" value={draft.year} onChange={(event) => setDraft((current) => ({ ...current, year: Number(event.target.value) }))} />
-        </label>
-        {metrics.map((metric) => (
-          <label key={metric}>
-            План: {metric}
-            <input
-              type="number"
-              value={draft.plan[metric]}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  plan: { ...current.plan, [metric]: Math.max(0, Number(event.target.value) || 0) },
-                }))
-              }
-            />
+        <div className="admin-create-top">
+          <label>
+            Новый месяц
+            <select value={draft.monthIndex} onChange={(event) => setDraft((current) => ({ ...current, monthIndex: Number(event.target.value) }))}>
+              {monthNames.map((label, index) => (
+                <option key={label} value={index}>{label}</option>
+              ))}
+            </select>
           </label>
-        ))}
-        <button className="primary-button" type="submit"><Plus size={16} /> Добавить месяц</button>
+          <label>
+            Год
+            <input type="number" value={draft.year} onChange={(event) => setDraft((current) => ({ ...current, year: Number(event.target.value) }))} />
+          </label>
+          <button className="primary-button" type="submit">
+            <Plus size={16} />
+            Создать месяц
+          </button>
+        </div>
+
+        <div className="admin-plan-grid">
+          {adminCities.map((city) => (
+            <section key={city}>
+              <h3>{cityLabels[city]}</h3>
+              {metrics.map((metric) => (
+                <label key={metric}>
+                  {metric === "Квалы" ? "КВАЛ" : metric}
+                  <input
+                    type="number"
+                    min="0"
+                    value={draft.plansByCity[city][metric]}
+                    onChange={(event) => setPlan(city, metric, Number(event.target.value))}
+                  />
+                </label>
+              ))}
+            </section>
+          ))}
+        </div>
       </form>
 
-      <div className="month-weeks">
+      <div className="admin-week-list">
         {Object.entries(datesByWeek).map(([week, weekDates]) => (
-          <section className="week-block" key={week}>
+          <section className="admin-week-block" key={week}>
             <div className="week-header">
               <h3>{week} неделя</h3>
               <span>{formatDay(weekDates[0])} - {formatDay(weekDates[weekDates.length - 1])}</span>
             </div>
-            <div className="week-table">
-              <div className="table-row header">
-                <span>День</span>
-                {metrics.map((metric) => <span key={metric}>{metric}</span>)}
-              </div>
+            <div className="admin-week-days">
               {weekDates.map((date) => (
-                <div className="table-row" key={date}>
-                  <span className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></span>
-                  {metrics.map((metric) => {
-                    const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
-                    return (
-                      <label key={metric} className="compact-input">
-                        <input type="number" value={value} onChange={(event) => updateAggregatedFact(date, metric, Number(event.target.value))} />
-                      </label>
-                    );
-                  })}
-                </div>
+                <article key={date} className="admin-week-day">
+                  <div className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></div>
+                  {adminCities.map((city) => (
+                    <div className="admin-week-city" key={city}>
+                      <strong>{cityLabels[city]}</strong>
+                      {metrics.map((metric) => (
+                        <label className="compact-input" key={metric}>
+                          <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={findDailyRecord(records, date, city, metric)?.fact ?? 0}
+                            onChange={(event) =>
+                              onSaveDailyValues(
+                                [{ date, city, metric, fact: Number(event.target.value) }],
+                                `${formatDay(date)} · ${cityLabels[city]} · ${metric} обновлено.`,
+                              )
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </article>
               ))}
             </div>
           </section>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function AdminEventsPanel({ dates, events, onAddEvent }: { dates: string[]; events: EventItem[]; onAddEvent: (event: EventItem) => void }) {
+  return (
+    <section className="admin-entry-panel">
+      <PanelHead title="События" description="Факторы можно привязать ко всему отчету, конкретному городу, сообщениям или метрике." />
+      <div className="events-layout">
+        <EventCalendar dates={dates} events={events} />
+        <EventForm dates={dates} onAdd={onAddEvent} />
       </div>
     </section>
   );
@@ -1400,18 +1763,25 @@ function EventCalendar({ dates, events }: { dates: string[]; events: EventItem[]
 }
 
 function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem) => void }) {
+  const fallbackDate = dates[0] ?? getTodayIso();
   const [draft, setDraft] = useState({
     title: "",
-    startDate: dates[0],
-    endDate: dates[0],
+    startDate: fallbackDate,
+    endDate: fallbackDate,
     type: "рекламные изменения" as EventType,
     group: "internal" as EventGroup,
     expectedEffect: "неизвестно" as Effect,
     actualEffect: "неизвестно" as Effect,
     city: "все" as City | "все",
     metric: "все" as Metric | "все",
+    importance: 2 as 1 | 2 | 3,
     description: "",
   });
+
+  useEffect(() => {
+    if (!dates.length || dates.includes(draft.startDate)) return;
+    setDraft((current) => ({ ...current, startDate: dates[0], endDate: dates[0] }));
+  }, [dates, draft.startDate]);
 
   function setType(type: EventType) {
     setDraft((current) => ({
@@ -1431,7 +1801,6 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
           id: `evt-${Date.now()}`,
           ...draft,
           source: "manual",
-          importance: 2,
         });
         setDraft((current) => ({ ...current, title: "", description: "" }));
       }}
@@ -1443,7 +1812,28 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
         <label>Конец <input type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} /></label>
       </div>
       <label>Категория <select value={draft.type} onChange={(event) => setType(event.target.value as EventType)}>{eventTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
-      <label>Город <select value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value as City | "все" })}><option value="все">все</option><option value="МСК">МСК</option><option value="СПБ">СПБ</option></select></label>
+      <label>
+        Направление
+        <select value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value as City | "все" })}>
+          <option value="все">все</option>
+          {adminCities.map((city) => <option key={city} value={city}>{cityLabels[city]}</option>)}
+        </select>
+      </label>
+      <label>
+        Метрика
+        <select value={draft.metric} onChange={(event) => setDraft({ ...draft, metric: event.target.value as Metric | "все" })}>
+          <option value="все">все</option>
+          {metrics.map((metric) => <option key={metric} value={metric}>{metric === "Квалы" ? "КВАЛ" : metric}</option>)}
+        </select>
+      </label>
+      <label>
+        Важность
+        <select value={draft.importance} onChange={(event) => setDraft({ ...draft, importance: Number(event.target.value) as 1 | 2 | 3 })}>
+          <option value={1}>низкая</option>
+          <option value={2}>средняя</option>
+          <option value={3}>высокая</option>
+        </select>
+      </label>
       <label>Ожидаемый эффект <select value={draft.expectedEffect} onChange={(event) => setDraft({ ...draft, expectedEffect: event.target.value as Effect })}>{effectLabels.map((effect) => <option key={effect}>{effect}</option>)}</select></label>
       <label>Фактический эффект <select value={draft.actualEffect} onChange={(event) => setDraft({ ...draft, actualEffect: event.target.value as Effect })}>{effectLabels.map((effect) => <option key={effect}>{effect}</option>)}</select></label>
       <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Описание без категоричных причинных выводов" />
@@ -1631,6 +2021,10 @@ function getPageCopy(mode: Mode) {
       title: "Неделя",
       subtitle: "Одна неделя по дням: где началось отклонение и какие события были рядом.",
     },
+    admin: {
+      title: "Админка",
+      subtitle: "Ежедневный ввод факта по МСК, СПБ, сообщениям и карта событий для автоматической сборки отчетов.",
+    },
     messages: {
       title: "Сообщения",
       subtitle: "Отдельная панель для сообщений, чтобы не смешивать их с основными лидами.",
@@ -1648,8 +2042,104 @@ function nextMonthDraft(config: MonthConfig): MonthDraft {
   return {
     year: nextMonth.getFullYear(),
     monthIndex: nextMonth.getMonth(),
-    plan: { ...config.plan },
+    plansByCity: clonePlansByCity(config.plansByCity ?? splitPlanByCity(config.plan)),
   };
+}
+
+function groupDatesByWeek(dates: string[]): Record<number, string[]> {
+  return dates.reduce<Record<number, string[]>>((acc, date) => {
+    const week = getWeekOfMonth(date);
+    acc[week] = [...(acc[week] ?? []), date];
+    return acc;
+  }, {});
+}
+
+function createDailyFactDraft(records: DailyRecord[], date: string): PlanByCity {
+  return adminCities.reduce<PlanByCity>((acc, city) => {
+    acc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
+      metricAcc[metric] = findDailyRecord(records, date, city, metric)?.fact ?? 0;
+      return metricAcc;
+    }, {} as Record<Metric, number>);
+    return acc;
+  }, {} as PlanByCity);
+}
+
+function findDailyRecord(records: DailyRecord[], date: string, city: City, metric: Metric): DailyRecord | undefined {
+  return records.find((record) => record.date === date && record.city === city && record.metric === metric);
+}
+
+function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
+  return {
+    ...value,
+    plan: value.plan === undefined ? undefined : Math.max(0, Number(value.plan) || 0),
+    fact: value.fact === undefined ? undefined : Math.max(0, Number(value.fact) || 0),
+    forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
+  };
+}
+
+function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUpdate): DailyRecord {
+  return {
+    id: previous?.id ?? dailyRecordKey(value.date, value.city, value.metric),
+    date: value.date,
+    city: value.city,
+    channel: previous?.channel ?? (value.city === "сообщения" ? "Сообщения" : "Город"),
+    metric: value.metric,
+    plan: value.plan ?? previous?.plan ?? 0,
+    fact: value.fact ?? previous?.fact ?? 0,
+    forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
+    comment: value.comment ?? previous?.comment ?? "",
+  };
+}
+
+function normalizeDailyRecord(record: DailyRecord): DailyRecord {
+  return {
+    ...record,
+    plan: Number(record.plan || 0),
+    fact: Number(record.fact || 0),
+    forecast: Number(record.forecast || 0),
+    comment: record.comment ?? "",
+  };
+}
+
+function dailyRecordKey(date: string, city: City, metric: Metric): string {
+  return `${date}-${city}-${metric}`;
+}
+
+function splitPlanByCity(plan: Record<Metric, number>): PlanByCity {
+  return {
+    МСК: {
+      Лиды: Math.round(plan["Лиды"] * 0.58),
+      Квалы: Math.round(plan["Квалы"] * 0.58),
+      Продажи: Math.round(plan["Продажи"] * 0.58),
+    },
+    СПБ: {
+      Лиды: Math.round(plan["Лиды"] * 0.42),
+      Квалы: Math.round(plan["Квалы"] * 0.42),
+      Продажи: Math.round(plan["Продажи"] * 0.42),
+    },
+    сообщения: {
+      Лиды: Math.round(plan["Лиды"] * 0.1),
+      Квалы: Math.round(plan["Квалы"] * 0.1),
+      Продажи: Math.round(plan["Продажи"] * 0.1),
+    },
+  };
+}
+
+function clonePlansByCity(plansByCity: PlanByCity): PlanByCity {
+  return adminCities.reduce<PlanByCity>((acc, city) => {
+    acc[city] = { ...plansByCity[city] };
+    return acc;
+  }, {} as PlanByCity);
+}
+
+function upsertMonthConfig(configs: MonthConfig[], config: MonthConfig): MonthConfig[] {
+  const exists = configs.some((item) => item.monthKey === config.monthKey);
+  const next = exists ? configs.map((item) => (item.monthKey === config.monthKey ? config : item)) : [...configs, config];
+  return next.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function loadInitialState() {
@@ -1686,9 +2176,13 @@ function loadInitialState() {
 }
 
 function normalizeMonthConfig(config: MonthConfig): MonthConfig {
+  const plansByCity = config.plansByCity ?? splitPlanByCity(config.plan);
   return {
     ...config,
     label: config.label.replace(/\sг\.$/, ""),
+    plansByCity,
+    plan: combineReportPlan(plansByCity),
+    status: config.status ?? "active",
   };
 }
 
