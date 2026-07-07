@@ -8,7 +8,6 @@ import {
   KeyRound,
   LayoutDashboard,
   MessageSquare,
-  MoreHorizontal,
   Plus,
   Save,
   Settings,
@@ -52,6 +51,7 @@ import type {
   DailyRecord,
   DailyValueUpdate,
   Effect,
+  EventCity,
   EventGroup,
   EventItem,
   EventType,
@@ -64,6 +64,7 @@ import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/
 import { buildWeeklySummary } from "./utils/report";
 
 type Mode = "allMonths" | "month" | "week" | "messages" | "events" | "admin";
+type AdminTab = "day" | "month" | "events";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
@@ -82,8 +83,10 @@ type MetricSummary = {
   dailyTarget: number;
   dailyLabel: string;
 };
+type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
 const storageKey = "weekly-report-local-v3";
+const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const eventTypes: EventType[] = [
   "рекламные изменения",
@@ -117,6 +120,7 @@ export default function App() {
   const [selectedMonthKey, setSelectedMonthKey] = useState(initialState.selectedMonthKey);
   const [selectedScope, setSelectedScope] = useState<ReportScope>("Все");
   const [selectedWeek, setSelectedWeek] = useState(1);
+  const [adminTab, setAdminTab] = useState<AdminTab>("day");
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [auth, setAuth] = useState("");
@@ -132,8 +136,10 @@ export default function App() {
     () => getMonthDates(selectedMonthConfig.year, selectedMonthConfig.monthIndex, selectedMonthConfig.daysInMonth),
     [selectedMonthConfig],
   );
+  const automaticEvents = useMemo(() => buildAutomaticWeekEvents(monthConfigs), [monthConfigs]);
+  const allEvents = useMemo(() => mergeEventLists(events, automaticEvents), [events, automaticEvents]);
   const reportRecords = useMemo(() => filterRecordsByScope(records, selectedScope), [records, selectedScope]);
-  const reportEvents = useMemo(() => filterEventsByScope(events, selectedScope), [events, selectedScope]);
+  const reportEvents = useMemo(() => filterEventsByScope(allEvents, selectedScope), [allEvents, selectedScope]);
   const currentMonthRecords = useMemo(
     () => reportRecords.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey)),
     [reportRecords, selectedMonthConfig.monthKey],
@@ -219,6 +225,15 @@ export default function App() {
     if (!config) return;
     setSelectedMonthKey(monthKey);
     setSelectedWeek(1);
+  }
+
+  function openCreateMonth() {
+    setAdminTab("month");
+    setMode("admin");
+  }
+
+  function printCurrentPage() {
+    window.print();
   }
 
   function applyRemotePayload(payload: MonthPayload, monthKey: string) {
@@ -349,7 +364,8 @@ export default function App() {
           todayIso={todayIso}
           selectMonth={selectMonth}
           setSelectedScope={setSelectedScope}
-          onCreateMonth={() => setMode("admin")}
+          onCreateMonth={openCreateMonth}
+          onExport={printCurrentPage}
         />
 
         <section className="notice">
@@ -410,7 +426,7 @@ export default function App() {
             {mode === "events" && (
               <EventsDashboard
                 dates={monthDates}
-                events={events}
+                events={allEvents}
                 selectedScope={selectedScope}
                 groupFilter={eventGroupFilter}
                 setGroupFilter={setEventGroupFilter}
@@ -432,6 +448,8 @@ export default function App() {
                 onCreateMonth={createMonthFromPanel}
                 onSaveDailyValues={updateDailyValues}
                 onAddEvent={addEvent}
+                tab={adminTab}
+                setTab={setAdminTab}
               />
             )}
           </section>
@@ -506,7 +524,7 @@ function Sidebar({
         </span>
       </div>
 
-      <button className="ghost-button" type="button">
+      <button className="ghost-button" type="button" onClick={() => setMode("admin")}>
         <Settings size={16} />
         Настройки
       </button>
@@ -524,6 +542,7 @@ function Topbar({
   selectMonth,
   setSelectedScope,
   onCreateMonth,
+  onExport,
 }: {
   title: string;
   subtitle: string;
@@ -534,6 +553,7 @@ function Topbar({
   selectMonth: (monthKey: string) => void;
   setSelectedScope: (scope: ReportScope) => void;
   onCreateMonth: () => void;
+  onExport: () => void;
 }) {
   return (
     <header className="topbar">
@@ -554,7 +574,7 @@ function Topbar({
         </label>
         <CityToggle value={selectedScope} onChange={setSelectedScope} />
         <span className="updated-pill">обновлено {formatDay(todayIso)}</span>
-        <button className="select-button" type="button">
+        <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
         </button>
@@ -626,7 +646,7 @@ function AllMonthsDashboard({
       <section className="analytics-panel">
         <PanelHead
           title="Недельная лента всех месяцев"
-          description="Факт показан синими столбиками, план - пунктирной линией, прогноз Optima - светло-синей линией."
+          description="Факт показан синими столбиками, прогноз Optima - пунктирной линией."
         >
           <MetricSelect value={selectedMetric} onChange={setSelectedMetric} />
         </PanelHead>
@@ -702,7 +722,7 @@ function MonthDashboard({
       <section className="analytics-panel">
         <PanelHead
           title="Динамика по неделям"
-          description="Три графика используют одну шкалу: цветной факт, черная пунктирная линия прогноза и события над неделями."
+          description="Три графика используют одну шкалу: факт по столбикам, прогноз Optima пунктиром и события под неделями."
         />
         <div className="weekly-sync-grid">
           {metrics.map((metric) => (
@@ -881,7 +901,7 @@ function ExecutiveSummary({
   title,
   facts,
 }: {
-  status: { label: string; tone: "good" | "warning" | "danger" };
+  status: SummaryStatus;
   eyebrow: string;
   title: string;
   facts: string[];
@@ -892,7 +912,7 @@ function ExecutiveSummary({
         {eyebrow && <span className="eyebrow">{eyebrow}</span>}
         <h2>{title}</h2>
       </div>
-      <strong>{status.label}</strong>
+      {status.label && <strong>{status.label}</strong>}
       <div className="summary-facts">
         {facts.map((fact) => <span key={fact}>{fact}</span>)}
       </div>
@@ -975,7 +995,7 @@ function PlanCompletionWidget({ totals, periodLabel }: { totals: MetricTotals; p
           </svg>
           <div className="plan-rings-center">
             <strong>{formatNumber(totals["Продажи"].fact)}</strong>
-            <span>продажи факт</span>
+            <span>факт продаж</span>
           </div>
         </div>
 
@@ -1105,7 +1125,6 @@ function ContinuousDashboardChart({
   const chartMax = getNiceAxisMax(max * 1.12);
   const minWidth = `${Math.max(100, months.length * 25)}%`;
   const planSegments = buildLineSegments(values, chartMax, (item) => item.plan, () => true, undefined, { top: 7, height: 84 });
-  const forecastSegments = buildLineSegments(values, chartMax, (item) => item.forecast, (item) => item.hasForecast, undefined, { top: 7, height: 84 });
   let cursor = 1;
 
   return (
@@ -1130,16 +1149,15 @@ function ContinuousDashboardChart({
         <div className="continuous-plot">
           <ChartAxisLabels max={chartMax} />
           <ChartLine className="continuous-plan-line" segments={planSegments} pointRadius={0} />
-          <ChartLine className="continuous-forecast-line" segments={forecastSegments} pointRadius={0} />
           <div className="continuous-weeks" style={{ gridTemplateColumns: `repeat(${values.length}, minmax(0, 1fr))` }}>
             {values.map((item, index) => {
-              const barTone = item.hasForecast || index === values.length - 1 ? "selected" : item.fact <= 0 ? "inactive" : "normal";
+              const barTone = item.fact <= 0 ? "inactive" : item.trend;
               const deltaLabel = formatPercentDelta(item.delta, item.trend);
               return (
               <div
                 className="continuous-week"
                 key={`${item.monthKey}-${item.week.week}`}
-                data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПлан: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+                data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
               >
                 <div className="continuous-bar-area">
                   <span
@@ -1149,6 +1167,7 @@ function ContinuousDashboardChart({
                 </div>
                 <strong>{formatNumber(item.fact)}</strong>
                 <small>{item.week.week} нед.</small>
+                <EventDots events={item.week.events} />
                 <em className={item.trend}>{deltaLabel}</em>
                 {index < values.length - 1 && item.week.week === item.monthWeekCount && <i className="month-divider" />}
               </div>
@@ -1157,8 +1176,7 @@ function ContinuousDashboardChart({
           </div>
           <div className="continuous-legend">
             <span><i className="legend-dot fact" /> Факт</span>
-            <span><i className="legend-line plan" /> План</span>
-            <span><i className="legend-line optima" /> Прогноз Optima</span>
+            <span><i className="legend-line plan" /> Прогноз Optima</span>
           </div>
         </div>
       </div>
@@ -1185,9 +1203,6 @@ function MetricWeekCard({
             <Info size={15} aria-hidden="true" />
           </div>
         </div>
-        <button className="chart-more-button" type="button" aria-label="Действия графика">
-          <MoreHorizontal size={18} />
-        </button>
       </div>
       <WeeklyTrendChart weeks={weeks} metric={metric} todayIso={todayIso} />
     </article>
@@ -1221,16 +1236,16 @@ function WeeklyTrendChart({
       <ChartLine className="plan-line" segments={planSegments} />
       <div className="mini-chart-legend">
         <span><i className="legend-dot fact" /> Факт</span>
-        <span><i className="legend-line plan" /> План</span>
+        <span><i className="legend-line plan" /> Прогноз Optima</span>
       </div>
       {values.map((item, index) => {
-        const barTone = item.hasForecast || index === values.length - 1 ? "selected" : item.fact <= 0 ? "inactive" : "normal";
+        const barTone = item.fact <= 0 ? "inactive" : item.trend;
         const deltaLabel = formatPercentDelta(item.delta, item.trend);
         return (
         <div
           key={item.week.week}
           className="trend-week"
-          data-tooltip={`${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПлан: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+          data-tooltip={`${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
         >
           <div className="trend-plot" style={{ height: chartHeight }}>
             <span
@@ -1240,6 +1255,7 @@ function WeeklyTrendChart({
           </div>
           <strong>{formatNumber(item.fact)}</strong>
           <small>{item.week.week} нед.</small>
+          <EventDots events={item.week.events} />
           <em className={item.trend}>{deltaLabel}</em>
         </div>
         );
@@ -1274,6 +1290,18 @@ function ChartLine({
         </g>
       ))}
     </svg>
+  );
+}
+
+function EventDots({ events }: { events: EventItem[] }) {
+  if (!events.length) return <span className="week-event-dots empty" aria-hidden="true" />;
+
+  const visible = events.slice(0, 4);
+  return (
+    <span className="week-event-dots" title={events.map((event) => event.title).join(", ")}>
+      {visible.map((event) => <i key={event.id} className={effectClass(event.actualEffect)} />)}
+      {events.length > visible.length && <b>+{events.length - visible.length}</b>}
+    </span>
   );
 }
 
@@ -1381,6 +1409,8 @@ function AdminDashboard({
   onCreateMonth,
   onSaveDailyValues,
   onAddEvent,
+  tab,
+  setTab,
 }: {
   dates: string[];
   months: MonthConfig[];
@@ -1393,8 +1423,9 @@ function AdminDashboard({
   onCreateMonth: (draft: MonthDraft) => void;
   onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
   onAddEvent: (event: EventItem) => void;
+  tab: AdminTab;
+  setTab: (tab: AdminTab) => void;
 }) {
-  const [tab, setTab] = useState<"day" | "month" | "events">("day");
   const firstDate = dates.includes(todayIso) ? todayIso : dates[0] ?? todayIso;
   const [selectedDate, setSelectedDate] = useState(firstDate);
   const totals = buildMetricTotals(records, metrics);
@@ -1772,7 +1803,7 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
     group: "internal" as EventGroup,
     expectedEffect: "неизвестно" as Effect,
     actualEffect: "неизвестно" as Effect,
-    city: "все" as City | "все",
+    city: "МСК + СПБ" as EventCity,
     metric: "все" as Metric | "все",
     importance: 2 as 1 | 2 | 3,
     description: "",
@@ -1814,8 +1845,9 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
       <label>Категория <select value={draft.type} onChange={(event) => setType(event.target.value as EventType)}>{eventTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
       <label>
         Направление
-        <select value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value as City | "все" })}>
+        <select value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value as EventCity })}>
           <option value="все">все</option>
+          <option value="МСК + СПБ">МСК + СПБ</option>
           {adminCities.map((city) => <option key={city} value={city}>{cityLabels[city]}</option>)}
         </select>
       </label>
@@ -1843,12 +1875,20 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
 }
 
 function EventsPanel({ title, events }: { title: string; events: EventItem[] }) {
+  const groupedEvents = groupEventsByMonth(events);
+  const showMonthGroups = title.toLowerCase().includes("период");
+
   return (
     <aside className="insight-panel">
       <h2>{title}</h2>
       <div className="event-stack">
         {events.length === 0 && <p className="empty-state">Событий за выбранный период нет</p>}
-        {events.map((event) => <EventCard key={event.id} event={event} />)}
+        {groupedEvents.map((group) => (
+          <section className="event-month-group" key={group.monthKey}>
+            {showMonthGroups && <h3>{group.label}</h3>}
+            {group.events.map((event) => <EventCard key={event.id} event={event} />)}
+          </section>
+        ))}
       </div>
     </aside>
   );
@@ -1862,7 +1902,7 @@ function EventCard({ event }: { event: EventItem }) {
         <span>{event.group === "internal" ? "внутреннее" : "внешнее"}</span>
       </div>
       <p>{event.description}</p>
-      <small>{formatDay(event.startDate)} - {formatDay(event.endDate)} · {event.type} · {event.actualEffect}</small>
+      <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
     </article>
   );
 }
@@ -2054,6 +2094,62 @@ function groupDatesByWeek(dates: string[]): Record<number, string[]> {
   }, {});
 }
 
+function buildAutomaticWeekEvents(months: MonthConfig[]): EventItem[] {
+  return months.flatMap((month) => {
+    const datesByWeek = groupDatesByWeek(getMonthDates(month.year, month.monthIndex, month.daysInMonth));
+    return Object.entries(datesByWeek)
+      .filter(([, dates]) => dates.length < 7)
+      .map(([week, dates]) => ({
+        id: `auto-short-week-${month.monthKey}-${week}`,
+        startDate: dates[0],
+        endDate: dates[dates.length - 1],
+        title: "Короткая неделя",
+        type: "прочее" as EventType,
+        group: "external" as EventGroup,
+        source: "system" as const,
+        expectedEffect: "негативный" as Effect,
+        actualEffect: "негативный" as Effect,
+        importance: 2 as const,
+        city: "МСК + СПБ" as EventCity,
+        metric: "все" as const,
+        description: `В неделе ${dates.length} дн. вместо 7, поэтому сравнение с полной неделей может быть ниже.`,
+      }));
+  });
+}
+
+function mergeEventLists(manualEvents: EventItem[], automaticEvents: EventItem[]): EventItem[] {
+  const manualIds = new Set(manualEvents.map((event) => event.id));
+  return [...manualEvents, ...automaticEvents.filter((event) => !manualIds.has(event.id))].sort((a, b) =>
+    a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title),
+  );
+}
+
+function groupEventsByMonth(events: EventItem[]): Array<{ monthKey: string; label: string; events: EventItem[] }> {
+  const groups = new Map<string, EventItem[]>();
+  [...events]
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title))
+    .forEach((event) => {
+      const monthKey = event.startDate.slice(0, 7);
+      groups.set(monthKey, [...(groups.get(monthKey) ?? []), event]);
+    });
+
+  return [...groups.entries()].map(([monthKey, groupEvents]) => ({
+    monthKey,
+    label: eventMonthLabel(`${monthKey}-01`),
+    events: groupEvents,
+  }));
+}
+
+function eventMonthLabel(date: string): string {
+  const [year, month] = date.split("-").map(Number);
+  return `${monthNames[month - 1]} ${year}`;
+}
+
+function eventCityLabel(city: EventCity): string {
+  if (city === "все") return "МСК + СПБ";
+  return cityLabels[city as City] ?? city;
+}
+
 function createDailyFactDraft(records: DailyRecord[], date: string): PlanByCity {
   return adminCities.reduce<PlanByCity>((acc, city) => {
     acc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
@@ -2162,7 +2258,10 @@ function loadInitialState() {
     }
 
     const monthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
-    const events = parsed.events.map(normalizeEvent);
+    const events = mergeEventLists(
+      parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id)),
+      seedEvents,
+    );
 
     return {
       monthConfigs,

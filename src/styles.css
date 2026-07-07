@@ -649,7 +649,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-weight: 880;
   white-space: nowrap;
 }
-.executive-summary.good > strong { background: var(--blue); color: #fff; }
+.executive-summary.good > strong { background: rgba(120, 217, 21, 0.2); color: #347800; }
 .executive-summary.warning > strong { background: #fff4c9; color: #5b4500; }
 .executive-summary.danger > strong { background: #ffe2df; color: #9f2118; }
 .summary-facts {
@@ -801,6 +801,11 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .plan-rings-center {
   position: absolute;
   inset: 0;
+  width: 72px;
+  height: 72px;
+  margin: auto;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
   display: grid;
   place-content: center;
   justify-items: center;
@@ -813,9 +818,11 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-weight: 780;
 }
 .plan-rings-center span {
-  margin-top: 5px;
+  max-width: 58px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 9px;
+  line-height: 1.05;
   font-weight: 850;
 }
 .plan-completion-list {
@@ -977,21 +984,26 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .continuous-chart { min-height: 424px; padding: 0; }
 .continuous-months {
   display: grid;
+  box-sizing: border-box;
   min-height: 48px;
+  padding-left: 38px;
+  padding-right: 12px;
   background: rgba(234, 241, 255, 0.66);
   border-bottom: 1px solid var(--line);
 }
 .continuous-month-label {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 0 11px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 0 20px;
   border-right: 1px solid #fff;
 }
+.continuous-month-label:not(:first-child) { padding-left: 22px; }
 .continuous-month-label:last-child { border-right: 0; }
 .continuous-month-label strong { font-size: 14px; font-weight: 900; color: var(--navy); white-space: nowrap; }
-.continuous-month-label span { color: var(--muted); font-size: 12px; font-weight: 850; white-space: nowrap; }
+.continuous-month-label span { color: var(--muted); font-size: 10px; font-weight: 850; white-space: nowrap; text-transform: uppercase; letter-spacing: 0; }
 .continuous-plot {
   position: relative;
   min-height: 376px;
@@ -1024,9 +1036,10 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .mini-chart-legend {
   position: absolute;
   top: 12px;
-  left: 34px;
-  right: 10px;
-  gap: 18px;
+  left: 22px;
+  right: 4px;
+  gap: 10px;
+  font-size: 11px;
 }
 .continuous-legend {
   position: absolute;
@@ -1128,12 +1141,20 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   min-height: 8px;
   display: block;
   border-radius: 10px 10px 4px 4px;
-  background: linear-gradient(180deg, #afc5ff 0%, var(--soft-blue) 100%);
+  background: linear-gradient(180deg, #7fa7ff 0%, #4f78ff 100%);
   box-shadow: 0 12px 24px rgba(28, 70, 245, 0.12);
 }
+.continuous-bar.positive,
 .continuous-bar.selected {
   background: linear-gradient(180deg, #3e66ff 0%, var(--blue) 100%);
   box-shadow: 0 16px 30px rgba(28, 70, 245, 0.22);
+}
+.continuous-bar.negative {
+  background: linear-gradient(180deg, #c8d8ff 0%, #91b0ff 100%);
+  box-shadow: 0 10px 18px rgba(28, 70, 245, 0.08);
+}
+.continuous-bar.warning {
+  background: linear-gradient(180deg, #8fb0ff 0%, #5d82ff 100%);
 }
 .continuous-bar.inactive {
   background: linear-gradient(180deg, #dde7ff 0%, var(--mist) 100%);
@@ -1301,12 +1322,20 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   width: 25px;
   min-height: 8px;
   border-radius: 10px 10px 4px 4px;
-  background: linear-gradient(180deg, #afc5ff 0%, var(--soft-blue) 100%);
+  background: linear-gradient(180deg, #7fa7ff 0%, #4f78ff 100%);
   box-shadow: 0 12px 22px rgba(28, 70, 245, 0.12);
 }
+.trend-bar.positive,
 .trend-bar.selected {
   background: linear-gradient(180deg, #3e66ff 0%, var(--blue) 100%);
   box-shadow: 0 16px 28px rgba(28, 70, 245, 0.22);
+}
+.trend-bar.negative {
+  background: linear-gradient(180deg, #c8d8ff 0%, #91b0ff 100%);
+  box-shadow: 0 10px 18px rgba(28, 70, 245, 0.08);
+}
+.trend-bar.warning {
+  background: linear-gradient(180deg, #8fb0ff 0%, #5d82ff 100%);
 }
 .trend-bar.inactive {
   background: linear-gradient(180deg, #dde7ff 0%, var(--mist) 100%);
@@ -1319,6 +1348,29 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   white-space: nowrap;
 }
 .trend-week small { color: var(--muted); font-size: 9px; line-height: 12px; }
+.week-event-dots {
+  min-height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.week-event-dots.empty { opacity: 0; }
+.week-event-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.82);
+}
+.week-event-dots i.positive { background: var(--positive); }
+.week-event-dots i.negative { background: var(--negative); }
+.week-event-dots i.unknown { background: #9ea3ad; }
+.week-event-dots b {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 900;
+}
 
 .month-matrix { display: grid; gap: 8px; }
 .month-matrix-row {
@@ -1584,6 +1636,18 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 .event-stack { display: grid; gap: 10px; }
+.event-month-group {
+  display: grid;
+  gap: 10px;
+}
+.event-month-group h3 {
+  margin: 8px 0 0;
+  color: var(--blue);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 900;
+  text-transform: uppercase;
+}
 .event-card {
   border: 1px solid var(--line);
   border-left-width: 5px;
@@ -1666,4 +1730,43 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .dashboard-scroll { min-width: 0; max-width: 100%; }
   .continuous-chart { min-width: 920px !important; }
   .trend-chart { grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; }
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .app-shell {
+    display: block;
+    max-width: none;
+    padding: 0;
+  }
+
+  .sidebar,
+  .topbar-actions,
+  .notice,
+  .chart-more-button,
+  .admin-command-panel,
+  .admin-actions {
+    display: none !important;
+  }
+
+  .workspace,
+  .main-panel,
+  .analytics-panel,
+  .week-chart-card,
+  .insight-panel {
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  .content-grid,
+  .content-single {
+    display: block;
+  }
+
+  .dashboard-scroll {
+    overflow: visible;
+  }
 }

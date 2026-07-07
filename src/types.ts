@@ -3,7 +3,8 @@ export type Metric = "Лиды" | "Квалы" | "Продажи";
 export type PlanByCity = Record<City, Record<Metric, number>>;
 export type Effect = "положительный" | "негативный" | "неизвестно";
 export type EventGroup = "internal" | "external";
-export type EventSource = "manual" | "google_sheets";
+export type EventSource = "manual" | "google_sheets" | "system";
+export type EventCity = City | "все" | "МСК + СПБ";
 export type EventType =
   | "рекламные изменения"
   | "сезонность"
@@ -63,7 +64,7 @@ export interface EventItem {
   expectedEffect: Effect;
   actualEffect: Effect;
   importance: 1 | 2 | 3;
-  city: City | "все";
+  city: EventCity;
   metric: Metric | "все";
   description: string;
 }

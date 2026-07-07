@@ -18,7 +18,7 @@ export function filterRecordsByScope(records: DailyRecord[], scope: ReportScope)
 
 export function filterEventsByScope(events: EventItem[], scope: ReportScope): EventItem[] {
   if (scope === "Все") return events.filter((event) => event.city !== "сообщения");
-  return events.filter((event) => event.city === "все" || event.city === scope);
+  return events.filter((event) => event.city === "все" || event.city === "МСК + СПБ" || event.city === scope);
 }
 
 export function filterEventsForRange(events: EventItem[], startDate?: string, endDate?: string): EventItem[] {
@@ -66,18 +66,26 @@ export function buildConversions(totals: MetricTotals) {
 }
 
 export function getPeriodStatus(totals: MetricTotals) {
-  const completions = Object.values(totals).map((item) => percent(item.fact, item.plan));
-  const minCompletion = Math.min(...completions, 0);
+  const deviations = Object.values(totals)
+    .filter((item) => item.plan > 0)
+    .map((item) => ((item.fact - item.plan) / item.plan) * 100);
 
-  if (minCompletion >= 96) {
-    return { label: "идем по плану", tone: "good" as const };
+  if (!deviations.length) {
+    return { label: "", tone: "neutral" as const };
   }
 
-  if (minCompletion >= 85) {
-    return { label: "есть риск", tone: "warning" as const };
+  const minDeviation = Math.min(...deviations);
+  const maxDeviation = Math.max(...deviations);
+
+  if (minDeviation <= -5) {
+    return { label: "сильное отклонение", tone: "danger" as const };
   }
 
-  return { label: "сильное отклонение", tone: "danger" as const };
+  if (maxDeviation >= 5) {
+    return { label: "сильное отклонение", tone: "good" as const };
+  }
+
+  return { label: "", tone: "neutral" as const };
 }
 
 export function getMonthTiming(monthDates: string[], todayIso: string) {
