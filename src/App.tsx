@@ -383,8 +383,6 @@ export default function App() {
                 selectedScope={selectedScope}
                 todayIso={todayIso}
                 events={reportEvents}
-                selectedMonthConfig={selectedMonthConfig}
-                selectedMonthWeeks={weeks}
               />
             )}
             {mode === "month" && (
@@ -606,8 +604,6 @@ function AllMonthsDashboard({
   selectedScope,
   todayIso,
   events,
-  selectedMonthConfig,
-  selectedMonthWeeks,
 }: {
   months: Array<{ config: MonthConfig; dates: string[]; events: EventItem[]; weeks: WeekSummary[] }>;
   selectedMetric: Metric;
@@ -615,23 +611,23 @@ function AllMonthsDashboard({
   selectedScope: ReportScope;
   todayIso: string;
   events: EventItem[];
-  selectedMonthConfig: MonthConfig;
-  selectedMonthWeeks: WeekSummary[];
 }) {
   const totals = mergeTotals(months.flatMap((month) => month.weeks));
   const status = getPeriodStatus(totals);
   const insights = buildAttentionItems(totals, events);
   const worstMonth = pickMonthByCompletion(months, "worst");
+  const monthRange = getMonthRangeLabel(months);
 
   return (
     <div className="page-stack">
       <ExecutiveSummary
         status={status}
         eyebrow=""
-        title="Динамика по неделям"
+        title="Динамика по месяцам"
+        subtitle="Сравнение план-факт и прогноза Optima по месяцам"
         facts={[
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
-          `Период: ${selectedMonthConfig.label}`,
+          `Период: ${monthRange}`,
           `Зона риска: ${worstMonth}`,
           `Событий в периоде: ${events.length}`,
         ]}
@@ -639,7 +635,7 @@ function AllMonthsDashboard({
 
       <div className="weekly-sync-grid dashboard-weekly-grid">
         {metrics.map((metric) => (
-          <MetricWeekCard key={metric} metric={metric} weeks={selectedMonthWeeks} todayIso={todayIso} />
+          <MetricMonthCard key={metric} metric={metric} months={months} />
         ))}
       </div>
 
@@ -899,11 +895,13 @@ function ExecutiveSummary({
   status,
   eyebrow,
   title,
+  subtitle,
   facts,
 }: {
   status: SummaryStatus;
   eyebrow: string;
   title: string;
+  subtitle?: string;
   facts: string[];
 }) {
   return (
@@ -911,6 +909,7 @@ function ExecutiveSummary({
       <div>
         {eyebrow && <span className="eyebrow">{eyebrow}</span>}
         <h2>{title}</h2>
+        {subtitle && <p>{subtitle}</p>}
       </div>
       {status.label && <strong>{status.label}</strong>}
       <div className="summary-facts">
@@ -1206,6 +1205,92 @@ function MetricWeekCard({
       </div>
       <WeeklyTrendChart weeks={weeks} metric={metric} todayIso={todayIso} />
     </article>
+  );
+}
+
+function MetricMonthCard({
+  metric,
+  months,
+}: {
+  metric: Metric;
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+}) {
+  return (
+    <article className="week-chart-card month-chart-card">
+      <div className="chart-card-head">
+        <div>
+          <span className="chart-eyebrow">график по месяцам</span>
+          <div className="chart-title-row">
+            <strong className="chart-title">{getMonthMetricTitle(metric)}</strong>
+            <Info size={15} aria-hidden="true" />
+          </div>
+        </div>
+      </div>
+      <MonthlyTrendChart months={months} metric={metric} />
+    </article>
+  );
+}
+
+function MonthlyTrendChart({
+  months,
+  metric,
+}: {
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  metric: Metric;
+}) {
+  const chartHeight = 210;
+  const monthTotals = months.map((month) => mergeTotals(month.weeks));
+  const values = months.map((month, index) => {
+    const totals = monthTotals[index];
+    const plan = totals[metric].plan;
+    const fact = totals[metric].fact;
+    const previous = index > 0 ? monthTotals[index - 1][metric].fact : null;
+    const delta = previous ? ((fact - previous) / previous) * 100 : 0;
+    return {
+      month,
+      plan,
+      fact,
+      delta,
+      trend: trendClass(delta, previous === null),
+      label: month.config.label,
+      shortLabel: getShortMonthLabel(month.config),
+    };
+  });
+  const max = Math.max(...values.flatMap((item) => [item.fact, item.plan]), 1);
+  const chartMax = getNiceAxisMax(max * 1.12);
+  const planSegments = buildLineSegments(values, chartMax, (item) => item.plan, () => true, undefined, { top: 8, height: 74 });
+
+  return (
+    <div className="trend-chart month-trend-chart" style={{ gridTemplateColumns: `repeat(${Math.max(values.length, 1)}, minmax(0, 1fr))` }}>
+      <ChartAxisLabels max={chartMax} />
+      <ChartLine className="plan-line" segments={planSegments} />
+      <div className="mini-chart-legend">
+        <span><i className="legend-dot fact" /> Факт</span>
+        <span><i className="legend-line plan" /> Прогноз Optima</span>
+      </div>
+      {values.map((item) => {
+        const barTone = item.fact <= 0 ? "inactive" : item.trend;
+        const deltaLabel = formatPercentDelta(item.delta, item.trend);
+        return (
+          <div
+            key={item.month.config.monthKey}
+            className="trend-week month-trend-item"
+            data-tooltip={`${item.label}\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+          >
+            <div className="trend-plot" style={{ height: chartHeight }}>
+              <span
+                className={`trend-bar ${barTone}`}
+                style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+              />
+            </div>
+            <strong>{formatNumber(item.fact)}</strong>
+            <small>{item.shortLabel}</small>
+            <EventDots events={item.month.events} />
+            <em className={item.trend}>{deltaLabel}</em>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1956,6 +2041,23 @@ function pickMonthByCompletion(months: Array<{ config: MonthConfig; weeks: WeekS
     return percent(aTotals["Продажи"].fact, aTotals["Продажи"].plan) - percent(bTotals["Продажи"].fact, bTotals["Продажи"].plan);
   });
   return (mode === "best" ? sorted[sorted.length - 1] : sorted[0]).config.label;
+}
+
+function getMonthRangeLabel(months: Array<{ config: MonthConfig }>): string {
+  if (!months.length) return "нет данных";
+  const first = months[0].config.label;
+  const last = months[months.length - 1].config.label;
+  return first === last ? first : `${first} → ${last}`;
+}
+
+function getShortMonthLabel(config: MonthConfig): string {
+  const monthName = config.label.split(" ")[0] ?? config.label;
+  return monthName.length <= 3 ? monthName : monthName.slice(0, 3);
+}
+
+function getMonthMetricTitle(metric: Metric): string {
+  if (metric === "Квалы") return "Целевые лиды / Квалы";
+  return metric.toUpperCase();
 }
 
 function getMonthMetricTrend(current: MetricTotals, previous: MetricTotals | null, metric: Metric): "up" | "down" | "flat" {

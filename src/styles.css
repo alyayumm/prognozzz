@@ -635,6 +635,14 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   margin-bottom: 8px;
 }
 .executive-summary h2 { font-size: 28px; line-height: 1.08; font-weight: 780; color: var(--navy); }
+.executive-summary p {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 650;
+}
 .executive-summary > strong {
   min-width: 160px;
   height: 42px;
@@ -1036,10 +1044,20 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .mini-chart-legend {
   position: absolute;
   top: 12px;
-  left: 22px;
-  right: 4px;
-  gap: 10px;
-  font-size: 11px;
+  left: 14px;
+  right: 0;
+  gap: 7px;
+  font-size: 10px;
+}
+.mini-chart-legend span {
+  gap: 4px;
+}
+.mini-chart-legend .legend-line {
+  width: 18px;
+}
+.mini-chart-legend .legend-dot {
+  width: 7px;
+  height: 7px;
 }
 .continuous-legend {
   position: absolute;
@@ -1263,6 +1281,11 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   text-transform: uppercase;
 }
 .chart-title-row svg { color: #b4c0da; }
+.month-chart-card .chart-title {
+  max-width: 230px;
+  font-size: 22px;
+  line-height: 25px;
+}
 .chart-more-button {
   width: 34px;
   height: 34px;
@@ -1289,6 +1312,20 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
     linear-gradient(#dce6fa, #dce6fa) 0 187px / 100% 1px no-repeat,
     linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(247, 249, 255, 0.28));
   overflow: hidden;
+}
+.month-trend-chart {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.month-trend-chart .trend-week small {
+  color: var(--blue);
+  font-size: 9px;
+  line-height: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.month-trend-chart .trend-week strong {
+  font-size: 10px;
+  line-height: 13px;
 }
 .plan-line {
   position: absolute;
