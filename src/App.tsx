@@ -103,7 +103,7 @@ type MetricSummary = {
 };
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
-const storageKey = "weekly-report-local-v4";
+const storageKey = "weekly-report-local-v5";
 const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const eventTypes: EventType[] = [
