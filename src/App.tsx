@@ -49,6 +49,7 @@ import type {
   City,
   CreateMonthPayload,
   DailyRecord,
+  DailyRecordCity,
   DailyValueUpdate,
   Effect,
   EventCity,
@@ -85,7 +86,7 @@ type MetricSummary = {
 };
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
-const storageKey = "weekly-report-local-v3";
+const storageKey = "weekly-report-local-v4";
 const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const eventTypes: EventType[] = [
@@ -1117,7 +1118,17 @@ function ContinuousDashboardChart({
     const forecast = item.week.totals[metric].forecast;
     const previous = index > 0 ? flatWeeks[index - 1].week.totals[metric].fact : null;
     const delta = previous ? ((fact - previous) / previous) * 100 : 0;
-    return { ...item, plan, fact, forecast, delta, trend: trendClass(delta, previous === null), hasForecast: shouldShowForecastForWeek(item.week, todayIso) };
+    const isFutureEmpty = isFutureWeekWithoutFact(item.week, metric, todayIso);
+    return {
+      ...item,
+      plan,
+      fact,
+      forecast,
+      delta,
+      trend: isFutureEmpty ? "warning" as const : trendClass(delta, previous === null),
+      hasForecast: shouldShowForecastForWeek(item.week, todayIso),
+      isFutureEmpty,
+    };
   });
   const max = Math.max(...values.flatMap((item) => [item.fact, item.plan, item.hasForecast ? item.forecast : 0]), 1);
   const chartHeight = 248;
@@ -1151,7 +1162,7 @@ function ContinuousDashboardChart({
           <div className="continuous-weeks" style={{ gridTemplateColumns: `repeat(${values.length}, minmax(0, 1fr))` }}>
             {values.map((item, index) => {
               const barTone = item.fact <= 0 ? "inactive" : item.trend;
-              const deltaLabel = formatPercentDelta(item.delta, item.trend);
+              const deltaLabel = item.isFutureEmpty ? "нет FACT" : formatPercentDelta(item.delta, item.trend);
               return (
               <div
                 className="continuous-week"
@@ -1309,7 +1320,16 @@ function WeeklyTrendChart({
     const fact = week.totals[metric].fact;
     const previous = index > 0 ? weeks[index - 1].totals[metric].fact : null;
     const delta = previous ? ((fact - previous) / previous) * 100 : 0;
-    return { week, plan, fact, delta, trend: trendClass(delta, previous === null), hasForecast: shouldShowForecastForWeek(week, todayIso) };
+    const isFutureEmpty = isFutureWeekWithoutFact(week, metric, todayIso);
+    return {
+      week,
+      plan,
+      fact,
+      delta,
+      trend: isFutureEmpty ? "warning" as const : trendClass(delta, previous === null),
+      hasForecast: shouldShowForecastForWeek(week, todayIso),
+      isFutureEmpty,
+    };
   });
   const max = Math.max(...values.flatMap((item) => [item.fact, item.plan]), 1);
   const chartMax = getNiceAxisMax(max * 1.12);
@@ -1325,7 +1345,7 @@ function WeeklyTrendChart({
       </div>
       {values.map((item, index) => {
         const barTone = item.fact <= 0 ? "inactive" : item.trend;
-        const deltaLabel = formatPercentDelta(item.delta, item.trend);
+        const deltaLabel = item.isFutureEmpty ? "нет FACT" : formatPercentDelta(item.delta, item.trend);
         return (
         <div
           key={item.week.week}
@@ -2082,6 +2102,10 @@ function trendClass(delta: number, isFirstWeek = false): "positive" | "negative"
   return "warning";
 }
 
+function isFutureWeekWithoutFact(week: WeekSummary, metric: Metric, todayIso: string): boolean {
+  return week.startDate > todayIso && week.totals[metric].fact <= 0;
+}
+
 function formatPercentDelta(delta: number, trend: "positive" | "negative" | "warning"): string {
   if (trend === "warning" && delta === 0) return "база";
   const rounded = Math.round(delta);
@@ -2299,7 +2323,7 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
   };
 }
 
-function dailyRecordKey(date: string, city: City, metric: Metric): string {
+function dailyRecordKey(date: string, city: DailyRecordCity, metric: Metric): string {
   return `${date}-${city}-${metric}`;
 }
 
@@ -2351,7 +2375,7 @@ function loadInitialState() {
   if (typeof window === "undefined") return fallback;
 
   try {
-    const rawState = window.localStorage.getItem(storageKey) ?? window.localStorage.getItem("weekly-report-local-v2");
+    const rawState = window.localStorage.getItem(storageKey);
     if (!rawState) return fallback;
 
     const parsed = JSON.parse(rawState) as Partial<typeof fallback>;
@@ -2367,13 +2391,23 @@ function loadInitialState() {
 
     return {
       monthConfigs,
-      records: parsed.records,
+      records: sanitizeStoredRecords(parsed.records, getTodayIso()),
       events,
       selectedMonthKey: parsed.selectedMonthKey || monthConfigs[monthConfigs.length - 1]?.monthKey || fallback.selectedMonthKey,
     };
   } catch {
     return fallback;
   }
+}
+
+function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyRecord[] {
+  return records.map((record) => {
+    const normalized = normalizeDailyRecord(record);
+    if (normalized.date > todayIso && normalized.fact > 0) {
+      return { ...normalized, fact: 0 };
+    }
+    return normalized;
+  });
 }
 
 function normalizeMonthConfig(config: MonthConfig): MonthConfig {

@@ -17,11 +17,15 @@ export const monthConfigs: MonthConfig[] = [
     monthIndex: 3,
     daysInMonth: 30,
     plan: {
-      Лиды: 4360,
-      Квалы: 2110,
-      Продажи: 760,
+      Лиды: 5700,
+      Квалы: 1920,
+      Продажи: 826,
     },
-    plansByCity: createPlansByCity({ Лиды: 4360, Квалы: 2110, Продажи: 760 }),
+    plansByCity: {
+      МСК: { Лиды: 2850, Квалы: 1170, Продажи: 504 },
+      СПБ: { Лиды: 2850, Квалы: 750, Продажи: 322 },
+      сообщения: { Лиды: 0, Квалы: 0, Продажи: 0 },
+    },
   },
   {
     monthKey: "2026-05",
@@ -92,14 +96,18 @@ export function createMonthConfig(
 const weekdayFactor = [0.82, 1.12, 1.18, 1.08, 1.04, 0.86, 0.72];
 
 export function buildSeedRecords(): DailyRecord[] {
-  return monthConfigs.flatMap((config, monthIndex) => buildRecordsForMonth(config, monthIndex));
+  return [
+    ...monthConfigs.flatMap((config, monthIndex) => buildRecordsForMonth(config, monthIndex)),
+    ...buildAprilTotalFactRecords(),
+  ];
 }
 
-export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0): DailyRecord[] {
+export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0, factUntilIso: string | null = null): DailyRecord[] {
   const records: DailyRecord[] = [];
 
   for (let day = 1; day <= config.daysInMonth; day += 1) {
     const date = new Date(Date.UTC(config.year, config.monthIndex, day));
+    const dateIso = date.toISOString().slice(0, 10);
     const weekday = date.getUTCDay();
     metrics.forEach((metric) => {
       cities.forEach((city) => {
@@ -109,11 +117,11 @@ export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0): Dail
         const pulse = Math.sin((day + monthOffset * 2) / 2.6) * 0.1 + Math.cos((day + monthOffset) / 5.2) * 0.07;
         const eventLift = config.monthKey === "2026-07" && day >= 15 && day <= 18 && metric !== "Продажи" ? -0.16 : 0;
         const plan = dayPlan;
-        const fact = Math.max(0, Math.round(base * (1 + pulse + eventLift)));
+        const fact = factUntilIso && dateIso <= factUntilIso ? Math.max(0, Math.round(base * (1 + pulse + eventLift))) : 0;
         const forecast = Math.round(base * (1 + pulse * 0.6 + 0.04));
         records.push({
-          id: `${date.toISOString().slice(0, 10)}-${city}-${metric}`,
-          date: date.toISOString().slice(0, 10),
+          id: `${dateIso}-${city}-${metric}`,
+          date: dateIso,
           city,
           channel: city === "сообщения" ? "Сообщения" : "Город",
           metric,
@@ -127,6 +135,62 @@ export function buildRecordsForMonth(config: MonthConfig, monthOffset = 0): Dail
   }
 
   return records;
+}
+
+const aprilFactRows: Array<[number, number, number, number]> = [
+  [1, 185, 78, 21],
+  [2, 184, 75, 23],
+  [3, 184, 68, 23],
+  [4, 122, 51, 17],
+  [5, 120, 40, 12],
+  [6, 196, 70, 27],
+  [7, 149, 72, 15],
+  [8, 186, 48, 31],
+  [9, 145, 51, 25],
+  [10, 140, 51, 22],
+  [11, 99, 43, 22],
+  [12, 88, 38, 14],
+  [13, 204, 83, 21],
+  [14, 225, 83, 31],
+  [15, 195, 63, 34],
+  [16, 188, 50, 17],
+  [17, 160, 44, 24],
+  [18, 99, 49, 12],
+  [19, 108, 44, 21],
+  [20, 171, 65, 17],
+  [21, 233, 65, 10],
+  [22, 163, 54, 15],
+  [23, 158, 66, 13],
+  [24, 171, 64, 14],
+  [25, 139, 56, 17],
+  [26, 110, 43, 6],
+  [27, 194, 56, 19],
+  [28, 163, 63, 19],
+  [29, 127, 52, 23],
+  [30, 145, 57, 23],
+];
+
+function buildAprilTotalFactRecords(): DailyRecord[] {
+  const config = monthConfigs[0];
+
+  return aprilFactRows.flatMap(([day, leads, qualified, sales]) => {
+    const values = { Лиды: leads, Квалы: qualified, Продажи: sales };
+    const date = `2026-04-${String(day).padStart(2, "0")}`;
+    return metrics.map((metric) => {
+      const plan = distributeMonthlyPlan(config.plan[metric], day, config.daysInMonth);
+      return {
+        id: `${date}-Все-${metric}`,
+        date,
+        city: "Все" as const,
+        channel: "ВСЕГО",
+        metric,
+        plan,
+        fact: values[metric],
+        forecast: plan,
+        comment: "FACT из строки ВСЕГО",
+      };
+    });
+  });
 }
 
 export function createPlansByCity(plan: Record<Metric, number>): PlanByCity {

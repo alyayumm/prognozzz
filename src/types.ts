@@ -1,4 +1,5 @@
 export type City = "МСК" | "СПБ" | "сообщения";
+export type DailyRecordCity = City | "Все";
 export type Metric = "Лиды" | "Квалы" | "Продажи";
 export type PlanByCity = Record<City, Record<Metric, number>>;
 export type Effect = "положительный" | "негативный" | "неизвестно";
@@ -17,7 +18,7 @@ export type EventType =
 export interface DailyRecord {
   id: string;
   date: string;
-  city: City;
+  city: DailyRecordCity;
   channel: string;
   metric: Metric;
   plan: number;
