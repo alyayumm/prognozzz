@@ -38,7 +38,6 @@ import {
   getMonthTiming,
   getPeriodStatus,
   percent,
-  reportCities,
   reportScopes,
   shouldShowForecastForWeek,
   total,
@@ -64,7 +63,7 @@ import type {
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "week" | "messages" | "events" | "admin";
+type Mode = "allMonths" | "month" | "monthDaily" | "week" | "messages" | "events" | "admin";
 type AdminTab = "day" | "month" | "events";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
@@ -72,6 +71,24 @@ type MonthDraft = CreateMonthPayload;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
+type DailyMetricKey = "leads" | "qualifiedLeads" | "sales";
+type DailyForecastPoint = {
+  date: string;
+  dayLabel: string;
+  fact: number | null;
+  forecast: number | null;
+  forecastMin: number | null;
+  forecastMax: number | null;
+  opening?: number | null;
+  closing?: number | null;
+  events: EventItem[];
+};
+type MetricDailyChartData = {
+  metric: DailyMetricKey;
+  sourceMetric: Metric;
+  title: string;
+  points: DailyForecastPoint[];
+};
 type MetricSummary = {
   metric: Metric;
   plan: number;
@@ -110,6 +127,11 @@ const planRingItems: Array<{ metric: Metric; label: string; className: string; r
   { metric: "Квалы", label: "Квалы", className: "qualified", radius: 46 },
   { metric: "Продажи", label: "Продажи", className: "sales", radius: 34 },
 ];
+const dailyChartMeta: Array<{ metric: DailyMetricKey; sourceMetric: Metric; title: string }> = [
+  { metric: "leads", sourceMetric: "Лиды", title: "Лиды" },
+  { metric: "qualifiedLeads", sourceMetric: "Квалы", title: "Квалы / целевые лиды" },
+  { metric: "sales", sourceMetric: "Продажи", title: "Продажи" },
+];
 
 export default function App() {
   const [initialState] = useState(loadInitialState);
@@ -124,6 +146,7 @@ export default function App() {
   const [adminTab, setAdminTab] = useState<AdminTab>("day");
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
+  const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
   const [auth, setAuth] = useState("");
   const [savedMessage, setSavedMessage] = useState("Локальный режим: факты, месяцы и события сохраняются в этой панели.");
   const apiConfigured = isReportApiConfigured();
@@ -170,7 +193,7 @@ export default function App() {
   );
   const visibleEvents = useMemo(() => {
     if (mode === "week") return activeWeekEvents;
-    if (mode === "month") return currentMonthEvents;
+    if (mode === "month" || mode === "monthDaily") return currentMonthEvents;
     return reportEvents;
   }, [activeWeekEvents, currentMonthEvents, mode, reportEvents]);
   const pageCopy = getPageCopy(mode);
@@ -250,63 +273,50 @@ export default function App() {
   }
 
   function mergeDailyValues(values: DailyValueUpdate[]) {
-    setRecords((current) => {
-      const byKey = new Map(current.map((record) => [dailyRecordKey(record.date, record.city, record.metric), record]));
-
-      values.forEach((value) => {
-        const key = dailyRecordKey(value.date, value.city, value.metric);
-        const previous = byKey.get(key);
-        byKey.set(key, mergeDailyRecord(previous, value));
-      });
-
-      return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
-    });
+    const nextRecords = applyDailyValuesToRecords(records, values);
+    setRecords(nextRecords);
+    return nextRecords;
   }
 
-  async function persistDailyValues(values: DailyValueUpdate[], localMessage: string) {
+  async function persistDailyValues(values: DailyValueUpdate[], _localMessage: string) {
+    const hasInvalidValue = validateDailyValueUpdates(values);
+
+    if (hasInvalidValue) {
+      setSavedMessage("Не удалось сохранить данные. Проверьте подключение или формат значений.");
+      return;
+    }
+
     const sanitized = values.map(sanitizeDailyValueUpdate);
-    mergeDailyValues(sanitized);
 
     if (!apiConfigured) {
-      setSavedMessage(`${localMessage} Локальный fallback сохранен в браузере.`);
+      const nextRecords = mergeDailyValues(sanitized);
+      const aggregateIssue = validateAggregates(nextRecords);
+      setSavedMessage(aggregateIssue ?? "Сохранено. Итоги и графики обновлены.");
       return;
     }
 
     if (!auth.trim()) {
-      setSavedMessage(`${localMessage} Для записи в Google Sheets введите пароль админки.`);
+      setSavedMessage("Не удалось сохранить данные. Проверьте подключение или формат значений.");
       return;
     }
 
     try {
-      await callReportApi("upsertDailyValues", { monthKey: sanitized[0]?.date.slice(0, 7), records: sanitized }, auth);
-      setSavedMessage(`${localMessage} Сохранено в Google Sheets.`);
-    } catch (error) {
-      setSavedMessage(`${localMessage} Локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`);
-    }
-  }
+      const monthKey = sanitized[0]?.date.slice(0, 7);
+      await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, auth);
 
-  function updateRecord(date: string, city: City, metric: Metric, field: "plan" | "fact" | "forecast", value: number) {
-    persistDailyValues([{ date, city, metric, [field]: Math.max(0, value || 0) }], "Значение обновлено.");
+      if (monthKey) {
+        const payload = await callReportApi<MonthPayload>("getMonthData", { monthKey });
+        applyRemotePayload(payload, monthKey);
+      }
+
+      setSavedMessage("Сохранено. Итоги и графики обновлены.");
+    } catch (error) {
+      setSavedMessage(`Не удалось сохранить данные. Проверьте подключение или формат значений. ${getErrorMessage(error)}`);
+    }
   }
 
   function updateDailyValues(values: DailyValueUpdate[], message = "День обновлен.") {
     persistDailyValues(values, message);
-  }
-
-  function updateAggregatedFact(date: string, metric: Metric, value: number) {
-    const splitCities = selectedScope === "Все" ? reportCities : [selectedScope as City];
-    const nextValue = Math.max(0, value || 0);
-    const baseValue = Math.floor(nextValue / splitCities.length);
-    const remainder = nextValue - baseValue * splitCities.length;
-    persistDailyValues(
-      splitCities.map((city, index) => ({
-        date,
-        city,
-        metric,
-        fact: baseValue + (index < remainder ? 1 : 0),
-      })),
-      "Факт обновлен.",
-    );
   }
 
   function addEvent(event: EventItem) {
@@ -403,7 +413,19 @@ export default function App() {
                 selectMonth={selectMonth}
                 onCreateMonth={createMonthFromPanel}
                 records={currentMonthRecords}
-                updateAggregatedFact={updateAggregatedFact}
+              />
+            )}
+            {mode === "monthDaily" && (
+              <MonthDailyDashboard
+                config={selectedMonthConfig}
+                totals={metricTotals}
+                records={currentMonthRecords}
+                events={currentMonthEvents}
+                monthDates={monthDates}
+                monthTiming={monthTiming}
+                selectedScope={selectedScope}
+                todayIso={todayIso}
+                highlightedEventId={highlightedDailyEventId}
               />
             )}
             {mode === "week" && activeWeek && (
@@ -416,7 +438,6 @@ export default function App() {
                 records={currentMonthRecords}
                 events={activeWeekEvents}
                 selectedScope={selectedScope}
-                updateAggregatedFact={updateAggregatedFact}
               />
             )}
             {mode === "messages" && (
@@ -453,7 +474,15 @@ export default function App() {
             )}
           </section>
 
-          {mode !== "events" && mode !== "messages" && mode !== "admin" && (
+          {mode === "monthDaily" && (
+            <MonthDailyEventsPanel
+              events={currentMonthEvents}
+              highlightedEventId={highlightedDailyEventId}
+              onHover={setHighlightedDailyEventId}
+            />
+          )}
+
+          {mode !== "events" && mode !== "messages" && mode !== "admin" && mode !== "monthDaily" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -479,6 +508,7 @@ function Sidebar({
   const items: Array<{ mode: Mode; label: string; icon: React.ReactNode }> = [
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
     { mode: "month", label: "Обзор месяца", icon: <LayoutDashboard /> },
+    { mode: "monthDaily", label: "Месяц по дням", icon: <TrendingUp /> },
     { mode: "week", label: "Неделя", icon: <CalendarDays /> },
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "messages", label: "Сообщения", icon: <MessageSquare /> },
@@ -672,7 +702,6 @@ function MonthDashboard({
   selectMonth,
   onCreateMonth,
   records,
-  updateAggregatedFact,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -689,7 +718,6 @@ function MonthDashboard({
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
   records: DailyRecord[];
-  updateAggregatedFact: (date: string, metric: Metric, value: number) => void;
 }) {
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
   const insights = buildAttentionItems(totals, events);
@@ -739,6 +767,197 @@ function MonthDashboard({
   );
 }
 
+function MonthDailyDashboard({
+  config,
+  totals,
+  records,
+  events,
+  monthDates,
+  monthTiming,
+  selectedScope,
+  todayIso,
+  highlightedEventId,
+}: {
+  config: MonthConfig;
+  totals: MetricTotals;
+  records: DailyRecord[];
+  events: EventItem[];
+  monthDates: string[];
+  monthTiming: ReturnType<typeof getMonthTiming>;
+  selectedScope: ReportScope;
+  todayIso: string;
+  highlightedEventId: string | null;
+}) {
+  const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso));
+  const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
+  const status = getPeriodStatus(totals);
+
+  return (
+    <div className="page-stack month-daily-dashboard">
+      <ExecutiveSummary
+        status={status}
+        eyebrow={`${config.label} · ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope} · обновлено ${formatDay(todayIso)}`}
+        title="Факт и прогноз по дням выбранного месяца"
+        subtitle="Дневная динамика факта, прогнозный коридор Optima и события по датам."
+        facts={[
+          `Дней в месяце: ${monthDates.length}`,
+          `Прошло дней: ${monthTiming.passed}`,
+          `Событий месяца: ${events.length}`,
+          monthTiming.isClosed ? "Месяц завершен" : `Осталось дней: ${monthTiming.left}`,
+        ]}
+      />
+
+      <section className="daily-kpi-summary" aria-label="Краткие показатели месяца по дням">
+        {summaries.map((summary) => (
+          <article key={summary.metric} className="daily-kpi-card">
+            <span>{summary.metric === "Квалы" ? "КВАЛ / целевые лиды" : summary.metric}</span>
+            <strong>{formatNumber(summary.fact)}</strong>
+            <div>
+              <small>Optima {summary.forecast === null ? "скрыт" : formatNumber(summary.forecast)}</small>
+              <small>{summary.completion}% плана</small>
+            </div>
+            <em className={summary.deltaAbs >= 0 ? "positive" : "negative"}>
+              {summary.deltaAbs >= 0 ? "+" : ""}{formatNumber(summary.deltaAbs)} к плану
+            </em>
+          </article>
+        ))}
+      </section>
+
+      <section className="daily-charts-stack">
+        {dailyCharts.map((chart) => (
+          <DailyForecastChart key={chart.metric} data={chart} highlightedEventId={highlightedEventId} />
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function DailyForecastChart({
+  data,
+  highlightedEventId,
+}: {
+  data: MetricDailyChartData;
+  highlightedEventId: string | null;
+}) {
+  const chartWidth = Math.max(900, data.points.length * 46 + 84);
+  const svgHeight = 336;
+  const plot = { left: 54, right: 24, top: 28, height: 226, bottom: 50 };
+  const plotWidth = chartWidth - plot.left - plot.right;
+  const xForIndex = (index: number) => plot.left + (data.points.length <= 1 ? plotWidth / 2 : (plotWidth / (data.points.length - 1)) * index);
+  const numericValues = data.points.flatMap((point) => [
+    point.fact ?? 0,
+    point.forecast ?? 0,
+    point.forecastMin ?? 0,
+    point.forecastMax ?? 0,
+  ]);
+  const chartMax = getNiceAxisMax(Math.max(...numericValues, 1) * 1.12);
+  const yForValue = (value: number) => plot.top + plot.height - (Math.max(value, 0) / chartMax) * plot.height;
+  const axisLabels = getAxisLabels(chartMax);
+  const forecastMinPaths = buildDailyPathSegments(data.points, (point, index) =>
+    point.forecastMin === null ? null : { x: xForIndex(index), y: yForValue(point.forecastMin) },
+  );
+  const forecastMaxPaths = buildDailyPathSegments(data.points, (point, index) =>
+    point.forecastMax === null ? null : { x: xForIndex(index), y: yForValue(point.forecastMax) },
+  );
+  const factPaths = buildDailyPathSegments(data.points, (point, index) =>
+    point.fact === null ? null : { x: xForIndex(index), y: yForValue(point.fact) },
+  );
+  const corridorPaths = buildDailyAreaSegments(data.points, (point, index) => {
+    if (point.forecastMin === null || point.forecastMax === null) return null;
+    return {
+      x: xForIndex(index),
+      minY: yForValue(point.forecastMin),
+      maxY: yForValue(point.forecastMax),
+    };
+  });
+  const chartEvents = uniqueEvents(data.points.flatMap((point) => point.events));
+  const eventRanges = chartEvents
+    .map((event) => getEventRangeOnDailyChart(event, data.points, xForIndex))
+    .filter((range): range is { event: EventItem; x: number; width: number } => Boolean(range));
+
+  return (
+    <article className="daily-forecast-card">
+      <div className="daily-chart-head">
+        <div>
+          <span className="chart-eyebrow">график по дням</span>
+          <h2>{data.title}</h2>
+        </div>
+        <div className="daily-chart-legend">
+          <span><i className="legend-dot fact" /> Факт</span>
+          <span><i className="legend-line optima" /> Границы Optima</span>
+          <span><i className="legend-corridor" /> Коридор</span>
+        </div>
+      </div>
+
+      <div className="daily-chart-scroll">
+        <div className="daily-chart-inner" style={{ minWidth: `${chartWidth}px` }}>
+          <svg viewBox={`0 0 ${chartWidth} ${svgHeight}`} aria-hidden="true">
+            {axisLabels.map((label) => {
+              const y = yForValue(label);
+              return (
+                <g key={label} className="daily-grid-line">
+                  <line x1={plot.left} x2={chartWidth - plot.right} y1={y} y2={y} />
+                  <text x={plot.left - 12} y={y + 4}>{formatNumber(label)}</text>
+                </g>
+              );
+            })}
+
+            {eventRanges.map((range) => (
+              <rect
+                key={range.event.id}
+                className={`daily-event-range ${effectClass(range.event.actualEffect)} ${highlightedEventId === range.event.id ? "highlighted" : ""}`}
+                x={range.x}
+                y={plot.top}
+                width={range.width}
+                height={plot.height}
+                rx="8"
+              />
+            ))}
+
+            {corridorPaths.map((path, index) => <path key={index} className="daily-corridor-area" d={path} />)}
+            {forecastMinPaths.map((path, index) => <path key={`min-${index}`} className="daily-forecast-boundary" d={path} />)}
+            {forecastMaxPaths.map((path, index) => <path key={`max-${index}`} className="daily-forecast-boundary" d={path} />)}
+            {factPaths.map((path, index) => <path key={`fact-${index}`} className="daily-fact-line" d={path} />)}
+
+            {data.points.map((point, index) => {
+              const x = xForIndex(index);
+              return (
+                <g key={point.date}>
+                  {point.fact !== null && <circle className="daily-fact-point" cx={x} cy={yForValue(point.fact)} r="4.2" />}
+                  <text className="daily-x-label" x={x} y={svgHeight - 18}>{point.dayLabel}</text>
+                </g>
+              );
+            })}
+          </svg>
+
+          <div className="daily-hit-layer" aria-hidden="true">
+            {data.points.map((point, index) => {
+              const x = xForIndex(index);
+              return (
+                <div
+                  key={point.date}
+                  className="daily-point-hit"
+                  style={{ left: `${x - 18}px` }}
+                  data-tooltip={dailyPointTooltip(point)}
+                >
+                  <span className="daily-event-markers">
+                    {point.events.slice(0, 3).map((event) => (
+                      <i
+                        key={event.id}
+                        className={`${effectClass(event.actualEffect)} ${highlightedEventId === event.id ? "highlighted" : ""}`}
+                      />
+                    ))}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function WeekDashboard({
   weeks,
   selectedWeek,
@@ -748,7 +967,6 @@ function WeekDashboard({
   records,
   events,
   selectedScope,
-  updateAggregatedFact,
 }: {
   weeks: WeekSummary[];
   selectedWeek: number;
@@ -758,7 +976,6 @@ function WeekDashboard({
   records: DailyRecord[];
   events: EventItem[];
   selectedScope: ReportScope;
-  updateAggregatedFact: (date: string, metric: Metric, value: number) => void;
 }) {
   const totals = buildMetricTotals(records.filter((record) => dates.includes(record.date)), metrics);
   const conversions = buildConversions(totals);
@@ -796,7 +1013,7 @@ function WeekDashboard({
       <PlanCompletionWidget totals={totals} periodLabel="План недели" />
 
       <div className="dashboard-two-cols">
-        <DailyWeekEditor dates={dates} records={records} updateAggregatedFact={updateAggregatedFact} />
+        <DailyWeekEditor dates={dates} records={records} />
         <ConversionCards conversions={conversions} />
       </div>
 
@@ -1605,7 +1822,6 @@ function AdminDashboard({
           records={records}
           selectedMonthConfig={selectedMonthConfig}
           onCreateMonth={onCreateMonth}
-          onSaveDailyValues={onSaveDailyValues}
         />
       )}
       {tab === "events" && (
@@ -1699,7 +1915,7 @@ function AdminDayPanel({
         <span>Данные сообщений сохраняются отдельно и не попадают в общий дашборд МСК + СПБ.</span>
         <button className="primary-button" type="button" onClick={saveDay}>
           <Save size={16} />
-          Сохранить день
+          Сохранить
         </button>
       </div>
     </section>
@@ -1711,13 +1927,11 @@ function AdminMonthPanel({
   records,
   selectedMonthConfig,
   onCreateMonth,
-  onSaveDailyValues,
 }: {
   dates: string[];
   records: DailyRecord[];
   selectedMonthConfig: MonthConfig;
   onCreateMonth: (draft: MonthDraft) => void;
-  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
 }) {
   const [draft, setDraft] = useState<MonthDraft>(() => nextMonthDraft(selectedMonthConfig));
   const datesByWeek = groupDatesByWeek(dates);
@@ -1741,7 +1955,7 @@ function AdminMonthPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="Месяц по неделям" description="Новый месяц создается с планами по МСК, СПБ и сообщениям; факт можно править прямо в недельных блоках." />
+      <PanelHead title="Месяц по неделям" description="Факт в недельных блоках рассчитан из дневных значений. Чтобы изменить неделю, отредактируйте конкретный день." />
 
       <form
         className="admin-month-create"
@@ -1810,12 +2024,8 @@ function AdminMonthPanel({
                             type="number"
                             min="0"
                             value={findDailyRecord(records, date, city, metric)?.fact ?? 0}
-                            onChange={(event) =>
-                              onSaveDailyValues(
-                                [{ date, city, metric, fact: Number(event.target.value) }],
-                                `${formatDay(date)} · ${cityLabels[city]} · ${metric} обновлено.`,
-                              )
-                            }
+                            readOnly
+                            title="Чтобы изменить значение, откройте вкладку День и нажмите Сохранить."
                           />
                         </label>
                       ))}
@@ -1846,15 +2056,13 @@ function AdminEventsPanel({ dates, events, onAddEvent }: { dates: string[]; even
 function DailyWeekEditor({
   dates,
   records,
-  updateAggregatedFact,
 }: {
   dates: string[];
   records: DailyRecord[];
-  updateAggregatedFact: (date: string, metric: Metric, value: number) => void;
 }) {
   return (
     <section className="daily-editor-panel">
-      <PanelHead title="Дни недели" description="Факт редактируется прямо в строках, чтобы быстро найти день отклонения." />
+      <PanelHead title="Дни недели" description="Факт рассчитан из сохраненных дневных значений. Чтобы изменить неделю, отредактируйте день в админке." />
       <div className="week-table day-table">
         <div className="table-row header">
           <span>День</span>
@@ -1867,7 +2075,7 @@ function DailyWeekEditor({
               const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
               return (
                 <label key={metric} className="compact-input">
-                  <input type="number" value={value} onChange={(event) => updateAggregatedFact(date, metric, Number(event.target.value))} />
+                  <input type="number" value={value} readOnly title="Чтобы изменить неделю, отредактируйте значения конкретных дней." />
                 </label>
               );
             })}
@@ -1999,6 +2207,47 @@ function EventsPanel({ title, events }: { title: string; events: EventItem[] }) 
   );
 }
 
+function MonthDailyEventsPanel({
+  events,
+  highlightedEventId,
+  onHover,
+}: {
+  events: EventItem[];
+  highlightedEventId: string | null;
+  onHover: (eventId: string | null) => void;
+}) {
+  const grouped = groupEventsByDateRange(events);
+
+  return (
+    <aside className="insight-panel month-daily-events-panel">
+      <h2>События месяца</h2>
+      <div className="event-stack">
+        {events.length === 0 && <p className="empty-state">Событий за выбранный месяц нет</p>}
+        {grouped.map((group) => (
+          <section className="daily-event-date-group" key={group.label}>
+            <h3>{group.label}</h3>
+            {group.events.map((event) => (
+              <article
+                key={event.id}
+                className={`event-card ${event.group} ${effectClass(event.actualEffect)} ${highlightedEventId === event.id ? "highlighted" : ""}`}
+                onMouseEnter={() => onHover(event.id)}
+                onMouseLeave={() => onHover(null)}
+              >
+                <div className="event-card-head">
+                  <strong>{event.title}</strong>
+                  <span>{event.group === "internal" ? "внутреннее" : "внешнее"}</span>
+                </div>
+                <p>{event.description}</p>
+                <small>{eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
+              </article>
+            ))}
+          </section>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 function EventCard({ event }: { event: EventItem }) {
   return (
     <article className={`event-card ${event.group} ${effectClass(event.actualEffect)}`}>
@@ -2086,6 +2335,170 @@ function getMonthMetricTrend(current: MetricTotals, previous: MetricTotals | nul
   const currentCompletion = percent(current[metric].fact, current[metric].plan);
   const previousCompletion = percent(previous[metric].fact, previous[metric].plan);
   return getValueTrend(currentCompletion, previousCompletion);
+}
+
+function buildMetricDailyChartData(
+  meta: { metric: DailyMetricKey; sourceMetric: Metric; title: string },
+  records: DailyRecord[],
+  events: EventItem[],
+  monthDates: string[],
+  todayIso: string,
+): MetricDailyChartData {
+  const metricRecords = records.filter((record) => record.metric === meta.sourceMetric);
+  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && record.fact > 0);
+
+  return {
+    ...meta,
+    points: monthDates.map((date) => {
+      const dayRecords = metricRecords.filter((record) => record.date === date);
+      const dayEvents = events.filter((event) =>
+        event.startDate <= date &&
+        date <= event.endDate &&
+        (event.metric === "все" || event.metric === meta.sourceMetric),
+      );
+      const plan = sumNullable(dayRecords, "plan");
+      const factTotal = sumNullable(dayRecords, "fact");
+      const forecastRaw = sumNullable(dayRecords, "forecast");
+      const forecast = forecastRaw ?? plan;
+      const fact = factTotal !== null && (factTotal > 0 || hasAnyFact || date <= todayIso) ? factTotal : null;
+      const corridorBase = forecast ?? plan;
+      const forecastMin = corridorBase === null ? null : Math.max(0, Math.round(corridorBase * 0.88));
+      const forecastMax = corridorBase === null ? null : Math.max(forecastMin ?? 0, Math.round(corridorBase * 1.12));
+
+      return {
+        date,
+        dayLabel: String(Number(date.slice(8, 10))),
+        fact,
+        forecast,
+        forecastMin,
+        forecastMax,
+        events: dayEvents,
+      };
+    }),
+  };
+}
+
+function sumNullable(records: DailyRecord[], key: "plan" | "fact" | "forecast"): number | null {
+  if (!records.length) return null;
+  return records.reduce((sum, record) => {
+    const value = Number(record[key]);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+}
+
+function buildDailyPathSegments<T>(items: T[], getPoint: (item: T, index: number) => ChartLinePoint | null): string[] {
+  const paths: string[] = [];
+  let segment: ChartLinePoint[] = [];
+
+  items.forEach((item, index) => {
+    const point = getPoint(item, index);
+    if (!point) {
+      if (segment.length) paths.push(pointsToSvgPath(segment));
+      segment = [];
+      return;
+    }
+    segment.push(point);
+  });
+
+  if (segment.length) paths.push(pointsToSvgPath(segment));
+  return paths;
+}
+
+function buildDailyAreaSegments<T>(
+  items: T[],
+  getPoint: (item: T, index: number) => { x: number; minY: number; maxY: number } | null,
+): string[] {
+  const paths: string[] = [];
+  let segment: Array<{ x: number; minY: number; maxY: number }> = [];
+
+  items.forEach((item, index) => {
+    const point = getPoint(item, index);
+    if (!point) {
+      if (segment.length > 1) paths.push(areaPointsToSvgPath(segment));
+      segment = [];
+      return;
+    }
+    segment.push(point);
+  });
+
+  if (segment.length > 1) paths.push(areaPointsToSvgPath(segment));
+  return paths;
+}
+
+function pointsToSvgPath(points: ChartLinePoint[]): string {
+  return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+}
+
+function areaPointsToSvgPath(points: Array<{ x: number; minY: number; maxY: number }>): string {
+  const upper = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.maxY}`).join(" ");
+  const lower = [...points].reverse().map((point) => `L ${point.x} ${point.minY}`).join(" ");
+  return `${upper} ${lower} Z`;
+}
+
+function uniqueEvents(events: EventItem[]): EventItem[] {
+  const byId = new Map<string, EventItem>();
+  events.forEach((event) => byId.set(event.id, event));
+  return [...byId.values()];
+}
+
+function getEventRangeOnDailyChart(
+  event: EventItem,
+  points: DailyForecastPoint[],
+  xForIndex: (index: number) => number,
+): { event: EventItem; x: number; width: number } | null {
+  const indexes = points
+    .map((point, index) => ({ point, index }))
+    .filter(({ point }) => event.startDate <= point.date && point.date <= event.endDate)
+    .map(({ index }) => index);
+
+  if (!indexes.length) return null;
+  const start = Math.min(...indexes);
+  const end = Math.max(...indexes);
+  const x = xForIndex(start) - 16;
+  const width = Math.max(32, xForIndex(end) - xForIndex(start) + 32);
+  return { event, x, width };
+}
+
+function dailyPointTooltip(point: DailyForecastPoint): string {
+  const lines = [
+    `Дата: ${formatLongDate(point.date)}`,
+    `Факт: ${formatNullableNumber(point.fact)}`,
+    `Прогноз Optima: ${formatNullableNumber(point.forecast)}`,
+    `Нижняя граница: ${formatNullableNumber(point.forecastMin)}`,
+    `Верхняя граница: ${formatNullableNumber(point.forecastMax)}`,
+  ];
+
+  if (point.events.length) {
+    const event = point.events[0];
+    lines.push(`Событие: ${event.title}`);
+    lines.push(`Тип: ${event.group === "internal" ? "внутреннее" : "внешнее"}`);
+    lines.push(`Категория: ${event.type}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatNullableNumber(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? "нет данных" : formatNumber(value);
+}
+
+function formatLongDate(dateIso: string): string {
+  const [year, month, day] = dateIso.split("-").map(Number);
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(new Date(year, month - 1, day));
+}
+
+function groupEventsByDateRange(events: EventItem[]): Array<{ label: string; events: EventItem[] }> {
+  const groups = new Map<string, EventItem[]>();
+  [...events]
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.endDate.localeCompare(b.endDate) || a.title.localeCompare(b.title))
+    .forEach((event) => {
+      const label = event.startDate === event.endDate
+        ? formatDay(event.startDate)
+        : `${formatDay(event.startDate)} - ${formatDay(event.endDate)}`;
+      groups.set(label, [...(groups.get(label) ?? []), event]);
+    });
+
+  return [...groups.entries()].map(([label, groupEvents]) => ({ label, events: groupEvents }));
 }
 
 function getValueTrend(current: number, previous: number | null): "up" | "down" | "flat" {
@@ -2182,6 +2595,10 @@ function getPageCopy(mode: Mode) {
     month: {
       title: "Обзор месяца",
       subtitle: "Статус выбранного месяца, KPI, воронка, недельная динамика и события периода.",
+    },
+    monthDaily: {
+      title: "Месяц по дням",
+      subtitle: "Дневная динамика факта, прогнозный коридор Optima и события выбранного месяца.",
     },
     week: {
       title: "Неделя",
@@ -2290,6 +2707,16 @@ function findDailyRecord(records: DailyRecord[], date: string, city: City, metri
   return records.find((record) => record.date === date && record.city === city && record.metric === metric);
 }
 
+function validateDailyValueUpdates(values: DailyValueUpdate[]): boolean {
+  return values.some((value) => {
+    const checkedValues = [value.plan, value.fact, value.forecast].filter((item) => item !== undefined);
+    return checkedValues.some((item) => {
+      const numericValue = Number(item);
+      return !Number.isFinite(numericValue) || numericValue < 0;
+    });
+  });
+}
+
 function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
   return {
     ...value,
@@ -2297,6 +2724,18 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
     fact: value.fact === undefined ? undefined : Math.max(0, Number(value.fact) || 0),
     forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
   };
+}
+
+function applyDailyValuesToRecords(current: DailyRecord[], values: DailyValueUpdate[]): DailyRecord[] {
+  const byKey = new Map(current.map((record) => [dailyRecordKey(record.date, record.city, record.metric), record]));
+
+  values.forEach((value) => {
+    const key = dailyRecordKey(value.date, value.city, value.metric);
+    const previous = byKey.get(key);
+    byKey.set(key, mergeDailyRecord(previous, value));
+  });
+
+  return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
 }
 
 function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUpdate): DailyRecord {
@@ -2325,6 +2764,24 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
 
 function dailyRecordKey(date: string, city: DailyRecordCity, metric: Metric): string {
   return `${date}-${city}-${metric}`;
+}
+
+function validateAggregates(records: DailyRecord[]): string | null {
+  const monthMetricKeys = new Set(records.map((record) => `${record.date.slice(0, 7)}::${record.metric}`));
+
+  for (const key of monthMetricKeys) {
+    const [monthKey, metric] = key.split("::") as [string, Metric];
+    const monthMetricRecords = records.filter((record) => record.date.startsWith(monthKey) && record.metric === metric);
+    const mskFact = total(monthMetricRecords.filter((record) => record.city === "МСК"), "fact");
+    const spbFact = total(monthMetricRecords.filter((record) => record.city === "СПБ"), "fact");
+    const allFact = total(monthMetricRecords.filter((record) => record.city === "Все"), "fact");
+
+    if (allFact > 0 && mskFact + spbFact > 0 && allFact !== mskFact + spbFact) {
+      return "Сохранено. Итоги и графики обновлены.";
+    }
+  }
+
+  return null;
 }
 
 function splitPlanByCity(plan: Record<Metric, number>): PlanByCity {

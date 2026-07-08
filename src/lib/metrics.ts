@@ -11,10 +11,10 @@ export const reportScopes: ReportScope[] = ["Все", "МСК", "СПБ"];
 
 export function filterRecordsByScope(records: DailyRecord[], scope: ReportScope): DailyRecord[] {
   if (scope === "Все") {
-    const totalKeys = new Set(records.filter((record) => record.city === "Все").map((record) => `${record.date}|${record.metric}`));
+    const cityKeys = new Set(records.filter((record) => reportCities.includes(record.city as City)).map((record) => `${record.date}|${record.metric}`));
     return records.filter((record) => {
       const key = `${record.date}|${record.metric}`;
-      return record.city === "Все" || (reportCities.includes(record.city as City) && !totalKeys.has(key));
+      return reportCities.includes(record.city as City) || (record.city === "Все" && !cityKeys.has(key));
     });
   }
 

@@ -48,6 +48,21 @@ export interface DailyValueUpdate {
   comment?: string;
 }
 
+export type DailyFactDraft = PlanByCity;
+export type SavedDailyValues = DailyRecord[];
+
+export interface WeeklyAggregates {
+  week: number;
+  startDate: string;
+  endDate: string;
+  totals: Record<Metric, { plan: number; fact: number; forecast: number }>;
+}
+
+export interface MonthlyAggregates {
+  monthKey: string;
+  totals: Record<Metric, { plan: number; fact: number; forecast: number }>;
+}
+
 export interface CreateMonthPayload {
   year: number;
   monthIndex: number;
