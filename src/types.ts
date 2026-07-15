@@ -2,6 +2,8 @@ export type City = "МСК" | "СПБ" | "сообщения";
 export type DailyRecordCity = City | "Все";
 export type Metric = "Лиды" | "Квалы" | "Продажи";
 export type PlanByCity = Record<City, Record<Metric, number>>;
+export type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+export type ForecastCoefficients = Record<City, Record<Metric, Record<WeekdayCoefficientKey, number>>>;
 export type Effect = "положительный" | "негативный" | "неизвестно";
 export type EventGroup = "internal" | "external";
 export type EventSource = "manual" | "google_sheets" | "system";
@@ -35,6 +37,7 @@ export interface MonthConfig {
   daysInMonth: number;
   plan: Record<Metric, number>;
   plansByCity?: PlanByCity;
+  dailyAverageByCity?: PlanByCity;
   status?: "active" | "closed";
 }
 
@@ -67,6 +70,7 @@ export interface CreateMonthPayload {
   year: number;
   monthIndex: number;
   plansByCity: PlanByCity;
+  dailyAverageByCity?: PlanByCity;
 }
 
 export interface EventItem {

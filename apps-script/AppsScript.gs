@@ -85,13 +85,13 @@ const HEADERS = {
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
 const FORECAST_METRICS = ['Лиды', 'Квалы', 'Продажи'];
 const FORECAST_WEEKDAYS = [
-  { key: 'mon', label: 'ПН', defaultValue: 1.121 },
-  { key: 'tue', label: 'ВТ', defaultValue: 1.19 },
-  { key: 'wed', label: 'СР', defaultValue: 1.123 },
-  { key: 'thu', label: 'ЧТ', defaultValue: 1.063 },
-  { key: 'fri', label: 'ПТ', defaultValue: 0.883 },
-  { key: 'sat', label: 'СБ', defaultValue: 0.795 },
-  { key: 'sun', label: 'ВС', defaultValue: 0.825 },
+  { key: 'mon', label: 'ПН', dayIndex: 1, defaultValue: 1.121 },
+  { key: 'tue', label: 'ВТ', dayIndex: 2, defaultValue: 1.19 },
+  { key: 'wed', label: 'СР', dayIndex: 3, defaultValue: 1.123 },
+  { key: 'thu', label: 'ЧТ', dayIndex: 4, defaultValue: 1.063 },
+  { key: 'fri', label: 'ПТ', dayIndex: 5, defaultValue: 0.883 },
+  { key: 'sat', label: 'СБ', dayIndex: 6, defaultValue: 0.795 },
+  { key: 'sun', label: 'ВС', dayIndex: 0, defaultValue: 0.825 },
 ];
 
 function doPost(e) {
@@ -188,7 +188,12 @@ function createMonth_(payload) {
   const monthKey = year + '-' + String(monthIndex + 1).padStart(2, '0');
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const label = payload.label || monthLabel_(year, monthIndex);
-  const plansByCity = normalizePlansByCity_(payload.plansByCity);
+  const coefficients = getForecastCoefficients_();
+  const dailyAverageByCity = normalizePlansByCity_(payload.dailyAverageByCity);
+  const hasDailyAverage = hasAnyPlanValue_(dailyAverageByCity);
+  const plansByCity = hasDailyAverage
+    ? buildMonthlyPlansFromDailyAverage_(year, monthIndex, daysInMonth, dailyAverageByCity, coefficients)
+    : normalizePlansByCity_(payload.plansByCity);
   const monthsSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.months);
   const existing = readObjects_(CONFIG.sheets.months).some((row) => row.monthKey === monthKey);
 
@@ -205,7 +210,7 @@ function createMonth_(payload) {
   }
 
   upsertMonthPlans_(monthKey, plansByCity);
-  ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity);
+  ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity, hasDailyAverage ? dailyAverageByCity : null, coefficients);
   rebuildWeeklySummary_(monthKey);
 
   return {
@@ -433,12 +438,14 @@ function upsertMonthPlans_(monthKey, plansByCity) {
   });
 }
 
-function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity) {
+function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity, dailyAverageByCity, coefficients) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.daily);
   const existing = readObjects_(CONFIG.sheets.daily);
   const rowById = {};
+  const currentById = {};
   existing.forEach((row, index) => {
     rowById[row.id] = index + 2;
+    currentById[row.id] = row;
   });
 
   for (let day = 1; day <= daysInMonth; day += 1) {
@@ -446,8 +453,11 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
     ['МСК', 'СПБ', 'сообщения'].forEach((city) => {
       ['Лиды', 'Квалы', 'Продажи'].forEach((metric) => {
         const id = date + '-' + city + '-' + metric;
-        if (rowById[id]) return;
-        sheet.appendRow(dailyRow_({
+        const plan = dailyAverageByCity
+          ? Math.round(Number(dailyAverageByCity[city][metric] || 0) * coefficientForCityMetric_(city, metric, date, coefficients))
+          : distributeMonthlyPlan_(plansByCity[city][metric], day, daysInMonth);
+        const current = currentById[id] || {};
+        const values = dailyRow_({
           id: id,
           date: date,
           month: monthKey,
@@ -455,11 +465,16 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
           city: city,
           channel: city === 'сообщения' ? 'Сообщения' : 'Город',
           metric: metric,
-          plan: distributeMonthlyPlan_(plansByCity[city][metric], day, daysInMonth),
-          fact: 0,
-          forecast: 0,
-          comment: '',
-        }));
+          plan: plan,
+          fact: current.fact || 0,
+          forecast: plan,
+          comment: current.comment || '',
+        });
+        if (rowById[id]) {
+          sheet.getRange(rowById[id], 1, 1, values.length).setValues([values]);
+        } else {
+          sheet.appendRow(values);
+        }
       });
     });
   }
@@ -613,6 +628,43 @@ function writeForecastCoefficients_(coefficients) {
     sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
   }
   sheet.autoResizeColumns(1, headers.length);
+}
+
+function buildMonthlyPlansFromDailyAverage_(year, monthIndex, daysInMonth, dailyAverageByCity, coefficients) {
+  const result = normalizePlansByCity_({});
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = Utilities.formatDate(new Date(year, monthIndex, day), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    FORECAST_CITIES.forEach((city) => {
+      FORECAST_METRICS.forEach((metric) => {
+        result[city][metric] += Math.round(Number(dailyAverageByCity[city][metric] || 0) * coefficientForCityMetric_(city, metric, date, coefficients));
+      });
+    });
+  }
+  return result;
+}
+
+function hasAnyPlanValue_(plansByCity) {
+  return FORECAST_CITIES.some((city) => {
+    return FORECAST_METRICS.some((metric) => Number(plansByCity[city][metric] || 0) > 0);
+  });
+}
+
+function coefficientForCityMetric_(city, metric, dateIso, coefficients) {
+  const weekday = weekdayCoefficientKey_(dateIso);
+  return Number(
+    coefficients &&
+    coefficients[city] &&
+    coefficients[city][metric] &&
+    coefficients[city][metric][weekday] !== undefined
+      ? coefficients[city][metric][weekday]
+      : defaultForecastCoefficients_()[city][metric][weekday],
+  );
+}
+
+function weekdayCoefficientKey_(dateIso) {
+  const dayIndex = new Date(dateIso + 'T00:00:00Z').getUTCDay();
+  const weekday = FORECAST_WEEKDAYS.find((item) => item.dayIndex === dayIndex);
+  return weekday ? weekday.key : 'mon';
 }
 
 function reportPlan_(plansByCity) {

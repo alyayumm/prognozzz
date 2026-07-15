@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  buildRecordsForMonth,
   buildSeedRecords,
   combineReportPlan,
   createMonthConfig,
@@ -56,9 +55,11 @@ import type {
   EventGroup,
   EventItem,
   EventType,
+  ForecastCoefficients,
   Metric,
   MonthConfig,
   PlanByCity,
+  WeekdayCoefficientKey,
   WeekSummary,
 } from "./types";
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
@@ -69,8 +70,6 @@ type AdminTab = "day" | "month" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
-type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
-type ForecastCoefficients = Record<City, Record<Metric, Record<WeekdayCoefficientKey, number>>>;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -405,12 +404,17 @@ export default function App() {
   }
 
   function createMonthFromPanel(draft: MonthDraft) {
-    const nextConfig = createMonthConfig(draft.year, draft.monthIndex, combineReportPlan(draft.plansByCity), draft.plansByCity);
+    const dailyAverageByCity = clonePlansByCity(draft.dailyAverageByCity ?? estimateDailyAverageByCity(selectedMonthConfig, forecastCoefficients));
+    const monthlyPlansByCity = buildMonthlyPlansFromDailyAverage(draft.year, draft.monthIndex, dailyAverageByCity, forecastCoefficients);
+    const nextConfig = {
+      ...createMonthConfig(draft.year, draft.monthIndex, combineReportPlan(monthlyPlansByCity), monthlyPlansByCity),
+      dailyAverageByCity,
+    };
     const exists = monthConfigs.some((config) => config.monthKey === nextConfig.monthKey);
 
     if (!exists) {
       setMonthConfigs((current) => [...current, nextConfig].sort((a, b) => a.monthKey.localeCompare(b.monthKey)));
-      setRecords((current) => [...current, ...buildRecordsForMonth(nextConfig, monthConfigs.length)]);
+      setRecords((current) => [...current, ...buildWeightedPlanRecordsForMonth(nextConfig, dailyAverageByCity, forecastCoefficients)]);
     }
 
     setSelectedMonthKey(nextConfig.monthKey);
@@ -426,7 +430,7 @@ export default function App() {
       return;
     }
 
-    callReportApi("createMonth", draft, auth)
+    callReportApi("createMonth", { ...draft, plansByCity: monthlyPlansByCity, dailyAverageByCity }, auth)
       .then(() => setSavedMessage(exists ? `${nextConfig.label} открыт в админке.` : `${nextConfig.label} создан в Google Sheets.`))
       .catch((error) => setSavedMessage(`${nextConfig.label} локально подготовлен, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
@@ -798,8 +802,10 @@ function MonthDashboard({
   records: DailyRecord[];
   forecastCoefficients: ForecastCoefficients;
 }) {
-  const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
   const monthForecast = buildMonthEndForecast(records, monthDates, monthTiming.isClosed, forecastCoefficients);
+  const summaries = metrics.map((metric) =>
+    buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
+  );
   const insights = buildAttentionItems(totals, events);
 
   return (
@@ -1273,7 +1279,7 @@ function MonthEndForecastPanel({
     <section className="month-end-forecast-panel">
       <PanelHead
         title="Прогноз на конец месяца"
-        description="Ориентир считается из уже внесенного FACT и оставшихся дней по дневному плану с коэффициентами."
+        description="FACT пересчитывается в средний базовый день, дальше будущие дни умножаются на свои коэффициенты."
       />
       <div className="forecast-meta-row">
         <span>{projection.isClosed ? "Месяц завершен: показываем итоговый факт" : `FACT внесен до: ${projection.lastFactDate ? formatDay(projection.lastFactDate) : "нет факта"}`}</span>
@@ -1291,6 +1297,7 @@ function MonthEndForecastPanel({
               </div>
               <div>
                 <small>Факт сейчас: {formatNumber(item.fact)}</small>
+                <small>Средний день: {formatNumber(item.baseDaily)}</small>
                 <small>План: {formatNumber(item.plan)}</small>
               </div>
               <em className={item.delta >= 0 ? "positive" : "negative"}>
@@ -1965,6 +1972,7 @@ function AdminDashboard({
           dates={dates}
           records={records}
           selectedMonthConfig={selectedMonthConfig}
+          forecastCoefficients={forecastCoefficients}
           onCreateMonth={onCreateMonth}
         />
       )}
@@ -2077,27 +2085,36 @@ function AdminMonthPanel({
   dates,
   records,
   selectedMonthConfig,
+  forecastCoefficients,
   onCreateMonth,
 }: {
   dates: string[];
   records: DailyRecord[];
   selectedMonthConfig: MonthConfig;
+  forecastCoefficients: ForecastCoefficients;
   onCreateMonth: (draft: MonthDraft) => void;
 }) {
-  const [draft, setDraft] = useState<MonthDraft>(() => nextMonthDraft(selectedMonthConfig));
+  const [draft, setDraft] = useState<MonthDraft>(() => nextMonthDraft(selectedMonthConfig, forecastCoefficients));
   const datesByWeek = groupDatesByWeek(dates);
+  const previewPlansByCity = buildMonthlyPlansFromDailyAverage(
+    draft.year,
+    draft.monthIndex,
+    draft.dailyAverageByCity ?? estimateDailyAverageByCity(selectedMonthConfig, forecastCoefficients),
+    forecastCoefficients,
+  );
+  const previewPlan = combineReportPlan(previewPlansByCity);
 
   useEffect(() => {
-    setDraft(nextMonthDraft(selectedMonthConfig));
-  }, [selectedMonthConfig]);
+    setDraft(nextMonthDraft(selectedMonthConfig, forecastCoefficients));
+  }, [selectedMonthConfig, forecastCoefficients]);
 
-  function setPlan(city: City, metric: Metric, value: number) {
+  function setDailyAverage(city: City, metric: Metric, value: number) {
     setDraft((current) => ({
       ...current,
-      plansByCity: {
-        ...current.plansByCity,
+      dailyAverageByCity: {
+        ...(current.dailyAverageByCity ?? current.plansByCity),
         [city]: {
-          ...current.plansByCity[city],
+          ...(current.dailyAverageByCity ?? current.plansByCity)[city],
           [metric]: Math.max(0, value || 0),
         },
       },
@@ -2112,7 +2129,11 @@ function AdminMonthPanel({
         className="admin-month-create"
         onSubmit={(event) => {
           event.preventDefault();
-          onCreateMonth(draft);
+          onCreateMonth({
+            ...draft,
+            plansByCity: previewPlansByCity,
+            dailyAverageByCity: clonePlansByCity(draft.dailyAverageByCity ?? estimateDailyAverageByCity(selectedMonthConfig, forecastCoefficients)),
+          });
         }}
       >
         <div className="admin-create-top">
@@ -2134,19 +2155,30 @@ function AdminMonthPanel({
           </button>
         </div>
 
+        <div className="admin-plan-preview">
+          {metrics.map((metric) => (
+            <span key={metric}>
+              <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
+              <strong>{formatNumber(previewPlan[metric])}</strong>
+              <em>план месяца по коэффициентам</em>
+            </span>
+          ))}
+        </div>
+
         <div className="admin-plan-grid">
           {adminCities.map((city) => (
             <section key={city}>
               <h3>{cityLabels[city]}</h3>
               {metrics.map((metric) => (
                 <label key={metric}>
-                  {metric === "Квалы" ? "КВАЛ" : metric}
+                  {metric === "Квалы" ? "КВАЛ" : metric} в среднем за день
                   <input
                     type="number"
                     min="0"
-                    value={draft.plansByCity[city][metric]}
-                    onChange={(event) => setPlan(city, metric, Number(event.target.value))}
+                    value={(draft.dailyAverageByCity ?? draft.plansByCity)[city][metric]}
+                    onChange={(event) => setDailyAverage(city, metric, Number(event.target.value))}
                   />
+                  <small>месяц: {formatNumber(previewPlansByCity[city][metric])}</small>
                 </label>
               ))}
             </section>
@@ -2567,8 +2599,9 @@ function buildMetricSummary(
   monthDates: string[],
   todayIso: string,
   isClosedMonth: boolean,
+  projectedForecast?: number,
 ): MetricSummary {
-  const endValue = isClosedMonth ? totals.fact : totals.forecast;
+  const endValue = isClosedMonth ? totals.fact : projectedForecast ?? totals.forecast;
   const remainingDays = isClosedMonth ? 0 : Math.max(monthDates.filter((date) => date >= todayIso).length, 1);
   const baseDaily = Math.ceil(totals.plan / Math.max(monthDates.length, 1));
   const needToPlan = Math.max(totals.plan - totals.fact, 0);
@@ -2578,7 +2611,7 @@ function buildMetricSummary(
     metric,
     plan: totals.plan,
     fact: totals.fact,
-    forecast: isClosedMonth ? null : totals.forecast,
+    forecast: isClosedMonth ? null : endValue,
     completion: percent(totals.fact, totals.plan),
     deltaAbs: totals.fact - totals.plan,
     endValue,
@@ -2601,26 +2634,73 @@ function buildMonthEndForecast(
     isClosed: isClosedMonth,
     lastFactDate,
     remainingDatesCount: remainingDates.length,
-    metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number }>>((acc, metric) => {
+    metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>>((acc, metric) => {
       const metricRecords = records.filter((record) => record.metric === metric);
-      const metricLastFactDate = getLastFactDate(metricRecords);
-      const metricRemainingDates = isClosedMonth ? [] : monthDates.filter((date) => !metricLastFactDate || date > metricLastFactDate);
-      const fact = total(metricRecords.filter((record) => !metricLastFactDate || record.date <= metricLastFactDate), "fact");
+      const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients);
+      const fact = forecastParts.fact;
       const plan = total(metricRecords, "plan");
-      const remainingProjection = metricRemainingDates.reduce((sum, date) => {
-        const dayRecords = metricRecords.filter((record) => record.date === date);
-        return sum + dayRecords.reduce((daySum, record) => daySum + record.plan * coefficientForRecord(record, metric, date, coefficients), 0);
-      }, 0);
-      const projected = isClosedMonth ? total(metricRecords, "fact") : Math.round(fact + remainingProjection);
+      const projected = forecastParts.projected;
       acc[metric] = {
         plan,
         fact,
         projected,
         completion: percent(projected, plan),
         delta: projected - plan,
+        baseDaily: Math.round(forecastParts.baseDaily),
       };
       return acc;
-    }, {} as Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number }>),
+    }, {} as Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>),
+  };
+}
+
+function forecastMetricByFactAverage(
+  metricRecords: DailyRecord[],
+  metric: Metric,
+  monthDates: string[],
+  isClosedMonth: boolean,
+  coefficients: ForecastCoefficients,
+) {
+  const recordsByCity = adminCities.map((city) => ({
+    city,
+    records: metricRecords.filter((record) => record.city === city),
+  })).filter((group) => group.records.length > 0);
+
+  let fact = 0;
+  let projected = 0;
+  let baseDailyTotal = 0;
+
+  recordsByCity.forEach(({ city, records }) => {
+    const factDates = monthDates.filter((date) => total(records.filter((record) => record.date === date), "fact") > 0);
+    const cityFact = total(records.filter((record) => factDates.includes(record.date)), "fact");
+    const cityPlan = total(records, "plan");
+
+    if (isClosedMonth) {
+      fact += total(records, "fact");
+      projected += total(records, "fact");
+      return;
+    }
+
+    if (!factDates.length) {
+      projected += cityPlan;
+      return;
+    }
+
+    const lastFactDate = factDates[factDates.length - 1];
+    const coefficientSum = factDates.reduce((sum, date) => sum + coefficientForCityMetric(city, metric, date, coefficients), 0);
+    const baseDaily = coefficientSum > 0 ? cityFact / coefficientSum : 0;
+    const futureProjection = monthDates
+      .filter((date) => date > lastFactDate)
+      .reduce((sum, date) => sum + baseDaily * coefficientForCityMetric(city, metric, date, coefficients), 0);
+
+    fact += cityFact;
+    projected += cityFact + futureProjection;
+    baseDailyTotal += baseDaily;
+  });
+
+  return {
+    fact: Math.round(fact),
+    projected: Math.round(projected),
+    baseDaily: baseDailyTotal,
   };
 }
 
@@ -2630,11 +2710,15 @@ function getLastFactDate(records: DailyRecord[]): string | null {
 }
 
 function coefficientForRecord(record: DailyRecord, metric: Metric, date: string, coefficients: ForecastCoefficients): number {
-  const weekday = weekdayCoefficientKey(date);
   if (record.city === "МСК" || record.city === "СПБ" || record.city === "сообщения") {
-    return coefficients[record.city][metric][weekday];
+    return coefficientForCityMetric(record.city, metric, date, coefficients);
   }
-  return (coefficients.МСК[metric][weekday] + coefficients.СПБ[metric][weekday]) / 2;
+  return (coefficientForCityMetric("МСК", metric, date, coefficients) + coefficientForCityMetric("СПБ", metric, date, coefficients)) / 2;
+}
+
+function coefficientForCityMetric(city: City, metric: Metric, date: string, coefficients: ForecastCoefficients): number {
+  const weekday = weekdayCoefficientKey(date);
+  return coefficients[city][metric][weekday];
 }
 
 function weekdayCoefficientKey(dateIso: string): WeekdayCoefficientKey {
@@ -2980,13 +3064,77 @@ function getPageCopy(mode: Mode) {
   return copy[mode];
 }
 
-function nextMonthDraft(config: MonthConfig): MonthDraft {
+function nextMonthDraft(config: MonthConfig, coefficients: ForecastCoefficients): MonthDraft {
   const nextMonth = new Date(config.year, config.monthIndex + 1, 1);
+  const dailyAverageByCity = estimateDailyAverageByCity(config, coefficients);
+  const plansByCity = buildMonthlyPlansFromDailyAverage(nextMonth.getFullYear(), nextMonth.getMonth(), dailyAverageByCity, coefficients);
   return {
     year: nextMonth.getFullYear(),
     monthIndex: nextMonth.getMonth(),
-    plansByCity: clonePlansByCity(config.plansByCity ?? splitPlanByCity(config.plan)),
+    plansByCity,
+    dailyAverageByCity,
   };
+}
+
+function buildMonthlyPlansFromDailyAverage(
+  year: number,
+  monthIndex: number,
+  dailyAverageByCity: PlanByCity,
+  coefficients: ForecastCoefficients,
+): PlanByCity {
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const dates = getMonthDates(year, monthIndex, daysInMonth);
+  return adminCities.reduce<PlanByCity>((cityAcc, city) => {
+    cityAcc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
+      metricAcc[metric] = dates.reduce(
+        (sum, date) => sum + Math.round((dailyAverageByCity[city][metric] || 0) * coefficientForCityMetric(city, metric, date, coefficients)),
+        0,
+      );
+      return metricAcc;
+    }, {} as Record<Metric, number>);
+    return cityAcc;
+  }, {} as PlanByCity);
+}
+
+function buildWeightedPlanRecordsForMonth(
+  config: MonthConfig,
+  dailyAverageByCity: PlanByCity,
+  coefficients: ForecastCoefficients,
+): DailyRecord[] {
+  const dates = getMonthDates(config.year, config.monthIndex, config.daysInMonth);
+  return dates.flatMap((date) =>
+    metrics.flatMap((metric) =>
+      adminCities.map((city) => {
+        const plan = Math.round((dailyAverageByCity[city][metric] || 0) * coefficientForCityMetric(city, metric, date, coefficients));
+        return {
+          id: `${date}-${city}-${metric}`,
+          date,
+          city,
+          channel: city === "сообщения" ? "Сообщения" : "Город",
+          metric,
+          plan,
+          fact: 0,
+          forecast: plan,
+          comment: "",
+        };
+      }),
+    ),
+  );
+}
+
+function estimateDailyAverageByCity(config: MonthConfig, coefficients: ForecastCoefficients): PlanByCity {
+  if (config.dailyAverageByCity) return clonePlansByCity(config.dailyAverageByCity);
+
+  const plansByCity = config.plansByCity ?? splitPlanByCity(config.plan);
+  const dates = getMonthDates(config.year, config.monthIndex, config.daysInMonth);
+  return adminCities.reduce<PlanByCity>((cityAcc, city) => {
+    cityAcc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
+      const coefficientSum = dates.reduce((sum, date) => sum + coefficientForCityMetric(city, metric, date, coefficients), 0);
+      metricAcc[metric] = coefficientSum > 0 ? Math.round(plansByCity[city][metric] / coefficientSum) : 0;
+      return metricAcc;
+    }, {} as Record<Metric, number>);
+    return cityAcc;
+  }, {} as PlanByCity);
 }
 
 function groupDatesByWeek(dates: string[]): Record<number, string[]> {
