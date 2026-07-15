@@ -10,6 +10,9 @@ type ApiAction =
   | "upsertDailyValues"
   | "getWeeklySummary"
   | "upsertEvent"
+  | "deleteEvent"
+  | "getForecastCoefficients"
+  | "updateForecastCoefficients"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

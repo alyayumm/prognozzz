@@ -6,6 +6,7 @@ const CONFIG = {
     plans: 'Month_Plans',
     weekly: 'Weekly_Summary',
     events: 'Event_Map',
+    coefficients: 'Forecast_Coefficients',
   },
 };
 
@@ -72,7 +73,26 @@ const HEADERS = {
     'description',
     'updatedAt',
   ],
+  Forecast_Coefficients: [
+    'city',
+    'metric',
+    'weekday',
+    'coefficient',
+    'updatedAt',
+  ],
 };
+
+const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
+const FORECAST_METRICS = ['Лиды', 'Квалы', 'Продажи'];
+const FORECAST_WEEKDAYS = [
+  { key: 'mon', label: 'ПН', defaultValue: 1.121 },
+  { key: 'tue', label: 'ВТ', defaultValue: 1.19 },
+  { key: 'wed', label: 'СР', defaultValue: 1.123 },
+  { key: 'thu', label: 'ЧТ', defaultValue: 1.063 },
+  { key: 'fri', label: 'ПТ', defaultValue: 0.883 },
+  { key: 'sat', label: 'СБ', defaultValue: 0.795 },
+  { key: 'sun', label: 'ВС', defaultValue: 0.825 },
+];
 
 function doPost(e) {
   try {
@@ -93,13 +113,16 @@ function doPost(e) {
       upsertDailyValues: upsertDailyValues_,
       getWeeklySummary: getWeeklySummary_,
       upsertEvent: upsertEvent_,
+      deleteEvent: deleteEvent_,
+      getForecastCoefficients: getForecastCoefficients_,
+      updateForecastCoefficients: updateForecastCoefficients_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -234,6 +257,31 @@ function upsertEvent_(payload) {
     sheet.appendRow(values);
   }
   return { id: event.id };
+}
+
+function deleteEvent_(payload) {
+  const id = String(payload.id || payload.eventId || '');
+  if (!id) {
+    throw new Error('Не передан id события');
+  }
+
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.events);
+  const existing = readObjects_(CONFIG.sheets.events);
+  const rowIndex = existing.findIndex((row) => String(row.id) === id);
+  if (rowIndex >= 0) {
+    sheet.deleteRow(rowIndex + 2);
+  }
+  return { id: id, deleted: rowIndex >= 0 };
+}
+
+function getForecastCoefficients_() {
+  return forecastCoefficientsFromRows_(readObjects_(CONFIG.sheets.coefficients));
+}
+
+function updateForecastCoefficients_(payload) {
+  const coefficients = normalizeForecastCoefficients_(payload.coefficients || payload);
+  writeForecastCoefficients_(coefficients);
+  return coefficients;
 }
 
 function getWeeklySummary_(payload) {
@@ -492,6 +540,79 @@ function plansByCityFromRows_(rows) {
     }
   });
   return result;
+}
+
+function defaultForecastCoefficients_() {
+  const result = {};
+  FORECAST_CITIES.forEach((city) => {
+    result[city] = {};
+    FORECAST_METRICS.forEach((metric) => {
+      result[city][metric] = {};
+      FORECAST_WEEKDAYS.forEach((weekday) => {
+        result[city][metric][weekday.key] = weekday.defaultValue;
+      });
+    });
+  });
+  return result;
+}
+
+function forecastCoefficientsFromRows_(rows) {
+  const result = defaultForecastCoefficients_();
+  rows.forEach((row) => {
+    const city = row.city;
+    const metric = row.metric;
+    const weekday = row.weekday;
+    const value = Number(row.coefficient);
+    if (
+      result[city] &&
+      result[city][metric] &&
+      result[city][metric][weekday] !== undefined &&
+      isFinite(value) &&
+      value >= 0
+    ) {
+      result[city][metric][weekday] = value;
+    }
+  });
+  return result;
+}
+
+function normalizeForecastCoefficients_(value) {
+  const result = defaultForecastCoefficients_();
+  if (!value || typeof value !== 'object') return result;
+
+  FORECAST_CITIES.forEach((city) => {
+    FORECAST_METRICS.forEach((metric) => {
+      FORECAST_WEEKDAYS.forEach((weekday) => {
+        const raw = value[city] && value[city][metric] ? value[city][metric][weekday.key] : undefined;
+        const numeric = Number(raw);
+        if (isFinite(numeric) && numeric >= 0) {
+          result[city][metric][weekday.key] = numeric;
+        }
+      });
+    });
+  });
+  return result;
+}
+
+function writeForecastCoefficients_(coefficients) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.coefficients);
+  const headers = HEADERS.Forecast_Coefficients;
+  const rows = [];
+  FORECAST_CITIES.forEach((city) => {
+    FORECAST_METRICS.forEach((metric) => {
+      FORECAST_WEEKDAYS.forEach((weekday) => {
+        rows.push([city, metric, weekday.key, Number(coefficients[city][metric][weekday.key] || 0), new Date()]);
+      });
+    });
+  });
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.setFrozenRows(1);
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+  sheet.autoResizeColumns(1, headers.length);
 }
 
 function reportPlan_(plansByCity) {

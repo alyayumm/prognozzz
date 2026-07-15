@@ -13,6 +13,7 @@ import {
   Settings,
   Target,
   TrendingUp,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -64,10 +65,12 @@ import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/
 import { buildWeeklySummary } from "./utils/report";
 
 type Mode = "allMonths" | "month" | "monthDaily" | "week" | "messages" | "events" | "admin";
-type AdminTab = "day" | "month" | "events";
+type AdminTab = "day" | "month" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
+type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+type ForecastCoefficients = Record<City, Record<Metric, Record<WeekdayCoefficientKey, number>>>;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -132,12 +135,22 @@ const dailyChartMeta: Array<{ metric: DailyMetricKey; sourceMetric: Metric; titl
   { metric: "qualifiedLeads", sourceMetric: "Квалы", title: "Квалы / целевые лиды" },
   { metric: "sales", sourceMetric: "Продажи", title: "Продажи" },
 ];
+const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; dayIndex: number; defaultValue: number }> = [
+  { key: "mon", label: "ПН", dayIndex: 1, defaultValue: 1.121 },
+  { key: "tue", label: "ВТ", dayIndex: 2, defaultValue: 1.19 },
+  { key: "wed", label: "СР", dayIndex: 3, defaultValue: 1.123 },
+  { key: "thu", label: "ЧТ", dayIndex: 4, defaultValue: 1.063 },
+  { key: "fri", label: "ПТ", dayIndex: 5, defaultValue: 0.883 },
+  { key: "sat", label: "СБ", dayIndex: 6, defaultValue: 0.795 },
+  { key: "sun", label: "ВС", dayIndex: 0, defaultValue: 0.825 },
+];
 
 export default function App() {
   const [initialState] = useState(loadInitialState);
   const [monthConfigs, setMonthConfigs] = useState<MonthConfig[]>(initialState.monthConfigs);
   const [records, setRecords] = useState<DailyRecord[]>(initialState.records);
   const [events, setEvents] = useState<EventItem[]>(initialState.events);
+  const [forecastCoefficients, setForecastCoefficients] = useState<ForecastCoefficients>(initialState.forecastCoefficients);
   const [mode, setMode] = useState<Mode>("allMonths");
   const [selectedMetric, setSelectedMetric] = useState<Metric>("Лиды");
   const [selectedMonthKey, setSelectedMonthKey] = useState(initialState.selectedMonthKey);
@@ -199,8 +212,8 @@ export default function App() {
   const pageCopy = getPageCopy(mode);
 
   useEffect(() => {
-    saveLocalState({ monthConfigs, records, events, selectedMonthKey });
-  }, [monthConfigs, records, events, selectedMonthKey]);
+    saveLocalState({ monthConfigs, records, events, selectedMonthKey, forecastCoefficients });
+  }, [monthConfigs, records, events, selectedMonthKey, forecastCoefficients]);
 
   useEffect(() => {
     if (!apiConfigured) return;
@@ -218,6 +231,14 @@ export default function App() {
 
         const normalizedMonths = remoteMonths.map(normalizeMonthConfig);
         setMonthConfigs(normalizedMonths);
+        try {
+          const remoteCoefficients = await callReportApi<unknown>("getForecastCoefficients");
+          if (!cancelled) {
+            setForecastCoefficients(normalizeForecastCoefficients(remoteCoefficients));
+          }
+        } catch {
+          // Старый Apps Script без листа коэффициентов не должен ломать загрузку отчета.
+        }
         const remoteMonthKey = normalizedMonths.some((config) => config.monthKey === selectedMonthKey)
           ? selectedMonthKey
           : normalizedMonths[normalizedMonths.length - 1].monthKey;
@@ -334,6 +355,55 @@ export default function App() {
       .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
 
+  function deleteEvent(eventId: string) {
+    const event = events.find((item) => item.id === eventId);
+    if (!event || event.source === "system") return;
+
+    setEvents((current) => current.filter((item) => item.id !== eventId));
+    if (!apiConfigured) {
+      setSavedMessage("Событие удалено локально.");
+      return;
+    }
+    if (!auth.trim()) {
+      setSavedMessage("Событие удалено локально. Для удаления в Google Sheets введите пароль админки.");
+      return;
+    }
+    callReportApi("deleteEvent", { id: eventId }, auth)
+      .then(() => setSavedMessage("Событие удалено из Google Sheets."))
+      .catch((error) => setSavedMessage(`Событие удалено локально, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
+  }
+
+  function updateForecastCoefficient(city: City, metric: Metric, weekday: WeekdayCoefficientKey, value: number) {
+    setForecastCoefficients((current) => ({
+      ...current,
+      [city]: {
+        ...current[city],
+        [metric]: {
+          ...current[city][metric],
+          [weekday]: Math.max(0, Number(value) || 0),
+        },
+      },
+    }));
+  }
+
+  async function persistForecastCoefficients() {
+    if (!apiConfigured) {
+      setSavedMessage("Коэффициенты прогноза сохранены локально.");
+      return;
+    }
+    if (!auth.trim()) {
+      setSavedMessage("Коэффициенты изменены локально. Для записи в Google Sheets введите пароль админки.");
+      return;
+    }
+
+    try {
+      await callReportApi("updateForecastCoefficients", { coefficients: forecastCoefficients }, auth);
+      setSavedMessage("Коэффициенты прогноза сохранены в Google Sheets.");
+    } catch (error) {
+      setSavedMessage(`Коэффициенты изменены локально, но Sheets вернул ошибку: ${getErrorMessage(error)}.`);
+    }
+  }
+
   function createMonthFromPanel(draft: MonthDraft) {
     const nextConfig = createMonthConfig(draft.year, draft.monthIndex, combineReportPlan(draft.plansByCity), draft.plansByCity);
     const exists = monthConfigs.some((config) => config.monthKey === nextConfig.monthKey);
@@ -413,6 +483,7 @@ export default function App() {
                 selectMonth={selectMonth}
                 onCreateMonth={createMonthFromPanel}
                 records={currentMonthRecords}
+                forecastCoefficients={forecastCoefficients}
               />
             )}
             {mode === "monthDaily" && (
@@ -453,6 +524,7 @@ export default function App() {
                 categoryFilter={eventCategoryFilter}
                 setCategoryFilter={setEventCategoryFilter}
                 onAdd={addEvent}
+                onDelete={deleteEvent}
               />
             )}
             {mode === "admin" && (
@@ -468,6 +540,10 @@ export default function App() {
                 onCreateMonth={createMonthFromPanel}
                 onSaveDailyValues={updateDailyValues}
                 onAddEvent={addEvent}
+                onDeleteEvent={deleteEvent}
+                forecastCoefficients={forecastCoefficients}
+                onUpdateForecastCoefficient={updateForecastCoefficient}
+                onSaveForecastCoefficients={persistForecastCoefficients}
                 tab={adminTab}
                 setTab={setAdminTab}
               />
@@ -486,6 +562,7 @@ export default function App() {
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
+              onDelete={deleteEvent}
             />
           )}
         </div>
@@ -702,6 +779,7 @@ function MonthDashboard({
   selectMonth,
   onCreateMonth,
   records,
+  forecastCoefficients,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -718,8 +796,10 @@ function MonthDashboard({
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
   records: DailyRecord[];
+  forecastCoefficients: ForecastCoefficients;
 }) {
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
+  const monthForecast = buildMonthEndForecast(records, monthDates, monthTiming.isClosed, forecastCoefficients);
   const insights = buildAttentionItems(totals, events);
 
   return (
@@ -737,12 +817,10 @@ function MonthDashboard({
       />
 
       <MetricKpiStrip totals={totals} isClosedMonth={monthTiming.isClosed} summaries={summaries} />
+      <MonthEndForecastPanel projection={monthForecast} />
       <PlanCompletionWidget totals={totals} periodLabel="План месяца" />
 
-      <div className="dashboard-two-cols">
-        <FunnelOverview totals={totals} conversions={conversions} />
-        <ConversionCards conversions={conversions} />
-      </div>
+      <ConversionCards conversions={conversions} />
 
       <section className="analytics-panel">
         <PanelHead
@@ -1052,6 +1130,7 @@ function EventsDashboard({
   categoryFilter,
   setCategoryFilter,
   onAdd,
+  onDelete,
 }: {
   dates: string[];
   events: EventItem[];
@@ -1061,13 +1140,21 @@ function EventsDashboard({
   categoryFilter: EventCategoryFilter;
   setCategoryFilter: (value: EventCategoryFilter) => void;
   onAdd: (event: EventItem) => void;
+  onDelete: (eventId: string) => void;
 }) {
+  const [selectedDate, setSelectedDate] = useState(dates[0] ?? getTodayIso());
   const scopedEvents = filterEventsByScope(events, selectedScope);
   const filteredEvents = scopedEvents.filter((event) => {
     const groupMatch = groupFilter === "all" || event.group === groupFilter;
     const categoryMatch = categoryFilter === "all" || event.type === categoryFilter;
     return groupMatch && categoryMatch;
   });
+  const selectedDayEvents = filteredEvents.filter((event) => event.startDate <= selectedDate && selectedDate <= event.endDate);
+
+  useEffect(() => {
+    if (!dates.length || dates.includes(selectedDate)) return;
+    setSelectedDate(dates[0]);
+  }, [dates, selectedDate]);
 
   return (
     <div className="page-stack">
@@ -1077,7 +1164,7 @@ function EventsDashboard({
         title="Карта событий"
         facts={[
           `Всего событий: ${filteredEvents.length}`,
-          `Город: ${selectedScope === "Все" ? "all + msk + spb" : selectedScope}`,
+          `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
           "Дата или период",
           "Внутренние и внешние факторы",
         ]}
@@ -1102,8 +1189,11 @@ function EventsDashboard({
       </section>
 
       <div className="events-layout">
-        <EventCalendar dates={dates} events={filteredEvents} />
-        <EventForm dates={dates} onAdd={onAdd} />
+        <div className="event-calendar-column">
+          <EventCalendar dates={dates} events={filteredEvents} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDelete} />
+        </div>
+        <EventForm dates={dates} selectedDate={selectedDate} onAdd={onAdd} />
       </div>
     </div>
   );
@@ -1170,6 +1260,46 @@ function MetricKpiStrip({
           </article>
         );
       })}
+    </section>
+  );
+}
+
+function MonthEndForecastPanel({
+  projection,
+}: {
+  projection: ReturnType<typeof buildMonthEndForecast>;
+}) {
+  return (
+    <section className="month-end-forecast-panel">
+      <PanelHead
+        title="Прогноз на конец месяца"
+        description="Ориентир считается из уже внесенного FACT и оставшихся дней по дневному плану с коэффициентами."
+      />
+      <div className="forecast-meta-row">
+        <span>{projection.isClosed ? "Месяц завершен: показываем итоговый факт" : `FACT внесен до: ${projection.lastFactDate ? formatDay(projection.lastFactDate) : "нет факта"}`}</span>
+        <span>{projection.isClosed ? "Оставшихся дней нет" : `Осталось дней в расчете: ${projection.remainingDatesCount}`}</span>
+      </div>
+      <div className="month-end-forecast-grid">
+        {metrics.map((metric) => {
+          const item = projection.metrics[metric];
+          return (
+            <article key={metric}>
+              <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+              <strong>{formatNumber(item.projected)}</strong>
+              <div className="forecast-progress">
+                <i style={{ width: `${Math.min(item.completion, 130)}%` }} />
+              </div>
+              <div>
+                <small>Факт сейчас: {formatNumber(item.fact)}</small>
+                <small>План: {formatNumber(item.plan)}</small>
+              </div>
+              <em className={item.delta >= 0 ? "positive" : "negative"}>
+                {item.completion}% · {item.delta >= 0 ? "+" : ""}{formatNumber(item.delta)} к плану
+              </em>
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -1382,7 +1512,7 @@ function ContinuousDashboardChart({
               const deltaLabel = item.isFutureEmpty ? "нет FACT" : formatPercentDelta(item.delta, item.trend);
               return (
               <div
-                className="continuous-week"
+                className={`continuous-week ${tooltipEdgeClass(index, values.length)}`}
                 key={`${item.monthKey}-${item.week.week}`}
                 data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
               >
@@ -1496,13 +1626,13 @@ function MonthlyTrendChart({
         <span><i className="legend-dot fact" /> Факт</span>
         <span><i className="legend-line plan" /> Прогноз Optima</span>
       </div>
-      {values.map((item) => {
+      {values.map((item, index) => {
         const barTone = item.fact <= 0 ? "inactive" : item.trend;
         const deltaLabel = formatPercentDelta(item.delta, item.trend);
         return (
           <div
             key={item.month.config.monthKey}
-            className="trend-week month-trend-item"
+            className={`trend-week month-trend-item ${tooltipEdgeClass(index, values.length)}`}
             data-tooltip={`${item.label}\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
           >
             <div className="trend-plot" style={{ height: chartHeight }}>
@@ -1566,7 +1696,7 @@ function WeeklyTrendChart({
         return (
         <div
           key={item.week.week}
-          className="trend-week"
+          className={`trend-week ${tooltipEdgeClass(index, values.length)}`}
           data-tooltip={`${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
         >
           <div className="trend-plot" style={{ height: chartHeight }}>
@@ -1692,6 +1822,10 @@ function MatrixTrendArrow({ trend }: { trend: "up" | "down" | "flat" }) {
 function PlanNeedGrid({ summaries }: { summaries: MetricSummary[] }) {
   return (
     <section className="plan-need-grid">
+      <div className="plan-need-heading">
+        <span>Средний дневной темп для выполнения плана</span>
+        <p>Сколько нужно давать в день, чтобы закрыться в 100%.</p>
+      </div>
       {summaries.map((summary) => (
         <article key={summary.metric}>
           <span>{summary.metric.toLowerCase()}</span>
@@ -1711,7 +1845,7 @@ function InsightPanel({ items }: { items: string[] }) {
         <h2>На что обратить внимание</h2>
       </div>
       <div className="attention-list">
-        {(items.length ? items : ["Критичных отклонений по текущим данным нет. Продолжайте сверять план, воронку и события."]).map((item) => (
+        {(items.length ? items : ["Критичных отклонений по текущим данным нет. Продолжайте сверять план, прогноз и события."]).map((item) => (
           <p key={item}>{item}</p>
         ))}
       </div>
@@ -1731,6 +1865,10 @@ function AdminDashboard({
   onCreateMonth,
   onSaveDailyValues,
   onAddEvent,
+  onDeleteEvent,
+  forecastCoefficients,
+  onUpdateForecastCoefficient,
+  onSaveForecastCoefficients,
   tab,
   setTab,
 }: {
@@ -1745,6 +1883,10 @@ function AdminDashboard({
   onCreateMonth: (draft: MonthDraft) => void;
   onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
   onAddEvent: (event: EventItem) => void;
+  onDeleteEvent: (eventId: string) => void;
+  forecastCoefficients: ForecastCoefficients;
+  onUpdateForecastCoefficient: (city: City, metric: Metric, weekday: WeekdayCoefficientKey, value: number) => void;
+  onSaveForecastCoefficients: () => void;
   tab: AdminTab;
   setTab: (tab: AdminTab) => void;
 }) {
@@ -1769,6 +1911,7 @@ function AdminDashboard({
           "МСК, СПБ и сообщения отдельно",
           "План по каждому направлению",
           "День сохраняется пачкой",
+          "Коэффициенты прогноза редактируются",
           `Событий месяца: ${events.length}`,
         ]}
       />
@@ -1789,6 +1932,7 @@ function AdminDashboard({
           <button className={tab === "day" ? "active" : ""} type="button" onClick={() => setTab("day")}>День</button>
           <button className={tab === "month" ? "active" : ""} type="button" onClick={() => setTab("month")}>Месяц</button>
           <button className={tab === "events" ? "active" : ""} type="button" onClick={() => setTab("events")}>События</button>
+          <button className={tab === "coefficients" ? "active" : ""} type="button" onClick={() => setTab("coefficients")}>Коэф.</button>
         </div>
       </section>
 
@@ -1825,7 +1969,14 @@ function AdminDashboard({
         />
       )}
       {tab === "events" && (
-        <AdminEventsPanel dates={dates} events={events} onAddEvent={onAddEvent} />
+        <AdminEventsPanel dates={dates} events={events} onAddEvent={onAddEvent} onDeleteEvent={onDeleteEvent} />
+      )}
+      {tab === "coefficients" && (
+        <AdminForecastCoefficientsPanel
+          coefficients={forecastCoefficients}
+          onUpdate={onUpdateForecastCoefficient}
+          onSave={onSaveForecastCoefficients}
+        />
       )}
     </div>
   );
@@ -2041,14 +2192,91 @@ function AdminMonthPanel({
   );
 }
 
-function AdminEventsPanel({ dates, events, onAddEvent }: { dates: string[]; events: EventItem[]; onAddEvent: (event: EventItem) => void }) {
+function AdminEventsPanel({
+  dates,
+  events,
+  onAddEvent,
+  onDeleteEvent,
+}: {
+  dates: string[];
+  events: EventItem[];
+  onAddEvent: (event: EventItem) => void;
+  onDeleteEvent: (eventId: string) => void;
+}) {
+  const [selectedDate, setSelectedDate] = useState(dates[0] ?? getTodayIso());
+  const selectedDayEvents = events.filter((event) => event.startDate <= selectedDate && selectedDate <= event.endDate);
+
+  useEffect(() => {
+    if (!dates.length || dates.includes(selectedDate)) return;
+    setSelectedDate(dates[0]);
+  }, [dates, selectedDate]);
+
   return (
     <section className="admin-entry-panel">
       <PanelHead title="События" description="Факторы можно привязать ко всему отчету, конкретному городу, сообщениям или метрике." />
       <div className="events-layout">
-        <EventCalendar dates={dates} events={events} />
-        <EventForm dates={dates} onAdd={onAddEvent} />
+        <div className="event-calendar-column">
+          <EventCalendar dates={dates} events={events} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDeleteEvent} />
+        </div>
+        <EventForm dates={dates} selectedDate={selectedDate} onAdd={onAddEvent} />
       </div>
+    </section>
+  );
+}
+
+function AdminForecastCoefficientsPanel({
+  coefficients,
+  onUpdate,
+  onSave,
+}: {
+  coefficients: ForecastCoefficients;
+  onUpdate: (city: City, metric: Metric, weekday: WeekdayCoefficientKey, value: number) => void;
+  onSave: () => void;
+}) {
+  const [city, setCity] = useState<City>("МСК");
+  const [metric, setMetric] = useState<Metric>("Лиды");
+
+  return (
+    <section className="admin-entry-panel forecast-coefficients-panel">
+      <PanelHead
+        title="Коэффициенты прогноза"
+        description="Прогноз на конец месяца: FACT + оставшиеся дни по плану, умноженные на коэффициент дня недели."
+      />
+      <div className="coefficient-toolbar">
+        <label>
+          Направление
+          <select value={city} onChange={(event) => setCity(event.target.value as City)}>
+            {adminCities.map((item) => <option key={item} value={item}>{cityLabels[item]}</option>)}
+          </select>
+        </label>
+        <label>
+          Метрика
+          <select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>
+            {metrics.map((item) => <option key={item} value={item}>{item === "Квалы" ? "КВАЛ" : item}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="coefficient-grid">
+        {coefficientWeekdays.map((weekday) => (
+          <label key={weekday.key}>
+            <span>{weekday.label}</span>
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              value={coefficients[city][metric][weekday.key]}
+              onChange={(event) => onUpdate(city, metric, weekday.key, Number(event.target.value))}
+            />
+          </label>
+        ))}
+      </div>
+      <p className="coefficient-note">
+        1.000 = день идет ровно по дневному плану. 1.190 = ожидаем на 19% выше дневного плана, 0.825 = на 17.5% ниже.
+      </p>
+      <button className="primary-button coefficient-save-button" type="button" onClick={onSave}>
+        <Save size={16} /> Сохранить коэффициенты
+      </button>
     </section>
   );
 }
@@ -2063,36 +2291,66 @@ function DailyWeekEditor({
   return (
     <section className="daily-editor-panel">
       <PanelHead title="Дни недели" description="Факт рассчитан из сохраненных дневных значений. Чтобы изменить неделю, отредактируйте день в админке." />
-      <div className="week-table day-table">
-        <div className="table-row header">
-          <span>День</span>
-          {metrics.map((metric) => <span key={metric}>{metric}</span>)}
-        </div>
-        {dates.map((date) => (
-          <div className="table-row" key={date}>
-            <span className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></span>
-            {metrics.map((metric) => {
-              const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
-              return (
-                <label key={metric} className="compact-input">
-                  <input type="number" value={value} readOnly title="Чтобы изменить неделю, отредактируйте значения конкретных дней." />
-                </label>
-              );
-            })}
+      <div className="week-table-wrapper">
+        <div className="week-table day-table">
+          <div className="table-row header">
+            <span>День</span>
+            {metrics.map((metric) => <span key={metric}>{metric}</span>)}
           </div>
+          {dates.map((date) => (
+            <div className="table-row" key={date}>
+              <span className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></span>
+              {metrics.map((metric) => {
+                const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
+                return (
+                  <label key={metric} className="compact-input">
+                    <input type="number" value={value} readOnly title="Чтобы изменить неделю, отредактируйте значения конкретных дней." />
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="week-day-cards">
+        {dates.map((date) => (
+          <article key={date}>
+            <div className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></div>
+            <div>
+              {metrics.map((metric) => {
+                const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
+                return (
+                  <span key={metric}>
+                    <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
+                    <strong>{formatNumber(value)}</strong>
+                  </span>
+                );
+              })}
+            </div>
+          </article>
         ))}
       </div>
     </section>
   );
 }
 
-function EventCalendar({ dates, events }: { dates: string[]; events: EventItem[] }) {
+function EventCalendar({
+  dates,
+  events,
+  selectedDate,
+  onSelectDate,
+}: {
+  dates: string[];
+  events: EventItem[];
+  selectedDate: string;
+  onSelectDate: (date: string) => void;
+}) {
   return (
     <div className="calendar-grid">
       {dates.map((date) => {
         const dayEvents = events.filter((event) => event.startDate <= date && date <= event.endDate);
         return (
-          <button className="calendar-day" key={date} type="button">
+          <button className={date === selectedDate ? "calendar-day active" : "calendar-day"} key={date} type="button" onClick={() => onSelectDate(date)}>
             <strong>{formatDay(date)}</strong>
             <small>{weekdayLabel(date)}</small>
             <span className="day-dots">
@@ -2106,8 +2364,28 @@ function EventCalendar({ dates, events }: { dates: string[]; events: EventItem[]
   );
 }
 
-function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem) => void }) {
-  const fallbackDate = dates[0] ?? getTodayIso();
+function SelectedDayEvents({
+  selectedDate,
+  events,
+  onDelete,
+}: {
+  selectedDate: string;
+  events: EventItem[];
+  onDelete: (eventId: string) => void;
+}) {
+  return (
+    <section className="selected-day-events">
+      <h3>{formatDay(selectedDate)} · события дня</h3>
+      {events.length === 0 && <p>На этот день событий нет. Кликни день и добавь фактор справа.</p>}
+      {events.map((event) => (
+        <EventCard key={event.id} event={event} onDelete={onDelete} compact />
+      ))}
+    </section>
+  );
+}
+
+function EventForm({ dates, selectedDate, onAdd }: { dates: string[]; selectedDate: string; onAdd: (event: EventItem) => void }) {
+  const fallbackDate = selectedDate || dates[0] || getTodayIso();
   const [draft, setDraft] = useState({
     title: "",
     startDate: fallbackDate,
@@ -2126,6 +2404,11 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
     if (!dates.length || dates.includes(draft.startDate)) return;
     setDraft((current) => ({ ...current, startDate: dates[0], endDate: dates[0] }));
   }, [dates, draft.startDate]);
+
+  useEffect(() => {
+    if (!selectedDate || !dates.includes(selectedDate)) return;
+    setDraft((current) => ({ ...current, startDate: selectedDate, endDate: selectedDate }));
+  }, [dates, selectedDate]);
 
   function setType(type: EventType) {
     setDraft((current) => ({
@@ -2150,6 +2433,7 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
       }}
     >
       <h2>Добавить фактор</h2>
+      <p className="event-form-note">Выбранный день: {formatDay(draft.startDate)}</p>
       <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Название события" />
       <div className="form-pair">
         <label>Начало <input type="date" value={draft.startDate} onChange={(event) => setDraft({ ...draft, startDate: event.target.value })} /></label>
@@ -2187,7 +2471,7 @@ function EventForm({ dates, onAdd }: { dates: string[]; onAdd: (event: EventItem
   );
 }
 
-function EventsPanel({ title, events }: { title: string; events: EventItem[] }) {
+function EventsPanel({ title, events, onDelete }: { title: string; events: EventItem[]; onDelete: (eventId: string) => void }) {
   const groupedEvents = groupEventsByMonth(events);
   const showMonthGroups = title.toLowerCase().includes("период");
 
@@ -2199,7 +2483,7 @@ function EventsPanel({ title, events }: { title: string; events: EventItem[] }) 
         {groupedEvents.map((group) => (
           <section className="event-month-group" key={group.monthKey}>
             {showMonthGroups && <h3>{group.label}</h3>}
-            {group.events.map((event) => <EventCard key={event.id} event={event} />)}
+            {group.events.map((event) => <EventCard key={event.id} event={event} onDelete={onDelete} />)}
           </section>
         ))}
       </div>
@@ -2248,15 +2532,31 @@ function MonthDailyEventsPanel({
   );
 }
 
-function EventCard({ event }: { event: EventItem }) {
+function EventCard({
+  event,
+  onDelete,
+  compact = false,
+}: {
+  event: EventItem;
+  onDelete?: (eventId: string) => void;
+  compact?: boolean;
+}) {
   return (
-    <article className={`event-card ${event.group} ${effectClass(event.actualEffect)}`}>
+    <article className={`event-card ${event.group} ${effectClass(event.actualEffect)} ${compact ? "compact" : ""}`}>
       <div className="event-card-head">
         <strong>{event.title}</strong>
         <span>{event.group === "internal" ? "внутреннее" : "внешнее"}</span>
       </div>
       <p>{event.description}</p>
-      <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
+      <div className="event-card-bottom">
+        <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
+        {onDelete && event.source !== "system" && (
+          <button className="event-delete-button" type="button" onClick={() => onDelete(event.id)} aria-label={`Удалить событие ${event.title}`}>
+            <Trash2 size={14} />
+            Удалить
+          </button>
+        )}
+      </div>
     </article>
   );
 }
@@ -2286,6 +2586,60 @@ function buildMetricSummary(
     dailyTarget,
     dailyLabel: endValue >= totals.plan || isClosedMonth ? "среднее для 100%" : "нужно в день для 100%",
   };
+}
+
+function buildMonthEndForecast(
+  records: DailyRecord[],
+  monthDates: string[],
+  isClosedMonth: boolean,
+  coefficients: ForecastCoefficients,
+) {
+  const lastFactDate = getLastFactDate(records);
+  const remainingDates = isClosedMonth ? [] : monthDates.filter((date) => !lastFactDate || date > lastFactDate);
+
+  return {
+    isClosed: isClosedMonth,
+    lastFactDate,
+    remainingDatesCount: remainingDates.length,
+    metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number }>>((acc, metric) => {
+      const metricRecords = records.filter((record) => record.metric === metric);
+      const metricLastFactDate = getLastFactDate(metricRecords);
+      const metricRemainingDates = isClosedMonth ? [] : monthDates.filter((date) => !metricLastFactDate || date > metricLastFactDate);
+      const fact = total(metricRecords.filter((record) => !metricLastFactDate || record.date <= metricLastFactDate), "fact");
+      const plan = total(metricRecords, "plan");
+      const remainingProjection = metricRemainingDates.reduce((sum, date) => {
+        const dayRecords = metricRecords.filter((record) => record.date === date);
+        return sum + dayRecords.reduce((daySum, record) => daySum + record.plan * coefficientForRecord(record, metric, date, coefficients), 0);
+      }, 0);
+      const projected = isClosedMonth ? total(metricRecords, "fact") : Math.round(fact + remainingProjection);
+      acc[metric] = {
+        plan,
+        fact,
+        projected,
+        completion: percent(projected, plan),
+        delta: projected - plan,
+      };
+      return acc;
+    }, {} as Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number }>),
+  };
+}
+
+function getLastFactDate(records: DailyRecord[]): string | null {
+  const factDates = records.filter((record) => record.fact > 0).map((record) => record.date).sort();
+  return factDates[factDates.length - 1] ?? null;
+}
+
+function coefficientForRecord(record: DailyRecord, metric: Metric, date: string, coefficients: ForecastCoefficients): number {
+  const weekday = weekdayCoefficientKey(date);
+  if (record.city === "МСК" || record.city === "СПБ" || record.city === "сообщения") {
+    return coefficients[record.city][metric][weekday];
+  }
+  return (coefficients.МСК[metric][weekday] + coefficients.СПБ[metric][weekday]) / 2;
+}
+
+function weekdayCoefficientKey(dateIso: string): WeekdayCoefficientKey {
+  const dayIndex = new Date(`${dateIso}T00:00:00Z`).getUTCDay();
+  return coefficientWeekdays.find((weekday) => weekday.dayIndex === dayIndex)?.key ?? "mon";
 }
 
 function mergeTotals(weeks: WeekSummary[]): MetricTotals {
@@ -2527,6 +2881,12 @@ function formatPercentDelta(delta: number, trend: "positive" | "negative" | "war
   return "0%";
 }
 
+function tooltipEdgeClass(index: number, length: number): string {
+  if (index === 0) return "tooltip-left-edge";
+  if (index === length - 1) return "tooltip-right-edge";
+  return "";
+}
+
 function getNiceAxisMax(value: number): number {
   const safeValue = Math.max(value, 1);
   const power = 10 ** Math.floor(Math.log10(safeValue));
@@ -2590,11 +2950,11 @@ function getPageCopy(mode: Mode) {
   const copy: Record<Mode, { title: string; subtitle: string }> = {
     allMonths: {
       title: "Все месяцы",
-      subtitle: "Сравнение месяцев, недельная разбивка, воронка и события в одном управленческом маршруте.",
+      subtitle: "Сравнение месяцев, недельная разбивка, прогноз и события в одном управленческом маршруте.",
     },
     month: {
       title: "Обзор месяца",
-      subtitle: "Статус выбранного месяца, KPI, воронка, недельная динамика и события периода.",
+      subtitle: "Статус выбранного месяца, KPI, прогноз на конец, недельная динамика и события периода.",
     },
     monthDaily: {
       title: "Месяц по дням",
@@ -2827,6 +3187,7 @@ function loadInitialState() {
     records: buildSeedRecords(),
     events: seedEvents,
     selectedMonthKey: monthConfig.monthKey,
+    forecastCoefficients: createDefaultForecastCoefficients(),
   };
 
   if (typeof window === "undefined") return fallback;
@@ -2841,20 +3202,50 @@ function loadInitialState() {
     }
 
     const monthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
-    const events = mergeEventLists(
-      parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id)),
-      seedEvents,
-    );
+    const events = parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id));
 
     return {
       monthConfigs,
       records: sanitizeStoredRecords(parsed.records, getTodayIso()),
       events,
       selectedMonthKey: parsed.selectedMonthKey || monthConfigs[monthConfigs.length - 1]?.monthKey || fallback.selectedMonthKey,
+      forecastCoefficients: normalizeForecastCoefficients(parsed.forecastCoefficients),
     };
   } catch {
     return fallback;
   }
+}
+
+function createDefaultForecastCoefficients(): ForecastCoefficients {
+  return adminCities.reduce<ForecastCoefficients>((cityAcc, city) => {
+    cityAcc[city] = metrics.reduce<Record<Metric, Record<WeekdayCoefficientKey, number>>>((metricAcc, metric) => {
+      metricAcc[metric] = coefficientWeekdays.reduce<Record<WeekdayCoefficientKey, number>>((weekdayAcc, weekday) => {
+        weekdayAcc[weekday.key] = weekday.defaultValue;
+        return weekdayAcc;
+      }, {} as Record<WeekdayCoefficientKey, number>);
+      return metricAcc;
+    }, {} as Record<Metric, Record<WeekdayCoefficientKey, number>>);
+    return cityAcc;
+  }, {} as ForecastCoefficients);
+}
+
+function normalizeForecastCoefficients(value: unknown): ForecastCoefficients {
+  const defaults = createDefaultForecastCoefficients();
+  if (!value || typeof value !== "object") return defaults;
+
+  const source = value as Partial<ForecastCoefficients>;
+  return adminCities.reduce<ForecastCoefficients>((cityAcc, city) => {
+    cityAcc[city] = metrics.reduce<Record<Metric, Record<WeekdayCoefficientKey, number>>>((metricAcc, metric) => {
+      metricAcc[metric] = coefficientWeekdays.reduce<Record<WeekdayCoefficientKey, number>>((weekdayAcc, weekday) => {
+        const rawValue = source[city]?.[metric]?.[weekday.key];
+        const numericValue = Number(rawValue);
+        weekdayAcc[weekday.key] = Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : defaults[city][metric][weekday.key];
+        return weekdayAcc;
+      }, {} as Record<WeekdayCoefficientKey, number>);
+      return metricAcc;
+    }, {} as Record<Metric, Record<WeekdayCoefficientKey, number>>);
+    return cityAcc;
+  }, {} as ForecastCoefficients);
 }
 
 function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyRecord[] {
