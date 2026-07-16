@@ -37,7 +37,9 @@ import {
   filterRecordsByScope,
   getMonthTiming,
   getPeriodStatus,
+  netFact,
   percent,
+  recommendationValue,
   reportScopes,
   shouldShowForecastForWeek,
   total,
@@ -70,6 +72,8 @@ type AdminTab = "day" | "month" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
+type DailyAdminMetricDraft = { fact: number; recommendations: number };
+type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -340,17 +344,18 @@ export default function App() {
   }
 
   function addEvent(event: EventItem) {
-    setEvents((current) => [event, ...current]);
+    const isUpdate = events.some((item) => item.id === event.id);
+    setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)].sort(sortEvents));
     if (!apiConfigured) {
-      setSavedMessage("Событие добавлено локально в карту факторов.");
+      setSavedMessage(isUpdate ? "Событие обновлено локально." : "Событие добавлено локально в карту факторов.");
       return;
     }
     if (!auth.trim()) {
-      setSavedMessage("Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
+      setSavedMessage(isUpdate ? "Событие обновлено локально. Для записи в Google Sheets введите пароль админки." : "Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
       return;
     }
     callReportApi("upsertEvent", { event }, auth)
-      .then(() => setSavedMessage("Событие добавлено и сохранено в Google Sheets."))
+      .then(() => setSavedMessage(isUpdate ? "Событие обновлено в Google Sheets." : "Событие добавлено и сохранено в Google Sheets."))
       .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
 
@@ -845,6 +850,7 @@ function MonthDashboard({
         </div>
       </section>
 
+      <RecommendationWeekPanel weeks={weeks} />
       <PlanNeedGrid summaries={summaries} />
       <InsightPanel items={insights} />
     </div>
@@ -1149,6 +1155,7 @@ function EventsDashboard({
   onDelete: (eventId: string) => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(dates[0] ?? getTodayIso());
+  const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
   const scopedEvents = filterEventsByScope(events, selectedScope);
   const filteredEvents = scopedEvents.filter((event) => {
     const groupMatch = groupFilter === "all" || event.group === groupFilter;
@@ -1197,9 +1204,18 @@ function EventsDashboard({
       <div className="events-layout">
         <div className="event-calendar-column">
           <EventCalendar dates={dates} events={filteredEvents} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
-          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDelete} />
+          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDelete} onEdit={setEditingEvent} />
         </div>
-        <EventForm dates={dates} selectedDate={selectedDate} onAdd={onAdd} />
+        <EventForm
+          dates={dates}
+          selectedDate={selectedDate}
+          editingEvent={editingEvent}
+          onCancelEdit={() => setEditingEvent(null)}
+          onSave={(event) => {
+            onAdd(event);
+            setEditingEvent(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1569,6 +1585,58 @@ function MetricWeekCard({
         </div>
       </div>
       <WeeklyTrendChart weeks={weeks} metric={metric} todayIso={todayIso} />
+    </article>
+  );
+}
+
+function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
+  const totalRecommendations = metrics.reduce(
+    (sum, metric) => sum + weeks.reduce((metricSum, week) => metricSum + week.totals[metric].recommendations, 0),
+    0,
+  );
+
+  return (
+    <section className="analytics-panel recommendation-panel">
+      <PanelHead
+        title="Рекомендации по неделям"
+        description="Отдельно показывает значения, которые вычитаются из FACT перед расчетом отчетов."
+      />
+      <div className="recommendation-grid">
+        {metrics.map((metric) => (
+          <RecommendationMetricCard key={metric} metric={metric} weeks={weeks} />
+        ))}
+      </div>
+      {totalRecommendations === 0 && <p className="recommendation-empty">Рекомендации пока не внесены.</p>}
+    </section>
+  );
+}
+
+function RecommendationMetricCard({ metric, weeks }: { metric: Metric; weeks: WeekSummary[] }) {
+  const values = weeks.map((week) => ({
+    week: week.week,
+    value: week.totals[metric].recommendations,
+  }));
+  const max = Math.max(...values.map((item) => item.value), 1);
+  const totalValue = values.reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <article className="recommendation-card">
+      <div className="recommendation-card-head">
+        <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+        <strong>{formatNumber(totalValue)}</strong>
+      </div>
+      <div className="recommendation-chart" style={{ gridTemplateColumns: `repeat(${Math.max(values.length, 1)}, minmax(0, 1fr))` }}>
+        {values.map((item) => (
+          <div className="recommendation-week" key={item.week}>
+            <span
+              className={item.value > 0 ? "recommendation-bar" : "recommendation-bar empty"}
+              style={{ height: `${item.value > 0 ? Math.max((item.value / max) * 96, 8) : 4}px` }}
+            />
+            <b>{formatNumber(item.value)}</b>
+            <small>{item.week} нед.</small>
+          </div>
+        ))}
+      </div>
     </article>
   );
 }
@@ -2014,7 +2082,23 @@ function AdminDayPanel({
       ...current,
       [city]: {
         ...current[city],
-        [metric]: Math.max(0, value || 0),
+        [metric]: {
+          ...current[city][metric],
+          fact: Math.max(0, value || 0),
+        },
+      },
+    }));
+  }
+
+  function setRecommendations(city: City, metric: Metric, value: number) {
+    setDraft((current) => ({
+      ...current,
+      [city]: {
+        ...current[city],
+        [metric]: {
+          ...current[city][metric],
+          recommendations: Math.max(0, value || 0),
+        },
       },
     }));
   }
@@ -2025,7 +2109,8 @@ function AdminDayPanel({
         date: selectedDate,
         city,
         metric,
-        fact: draft[city][metric],
+        fact: draft[city][metric].fact,
+        recommendations: draft[city][metric].recommendations,
       })),
     );
     onSaveDailyValues(values, `${formatDay(selectedDate)} сохранен.`);
@@ -2033,7 +2118,7 @@ function AdminDayPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="День" description="Одна форма сохраняет все 9 значений: МСК, СПБ и сообщения по лидам, КВАЛ и продажам.">
+      <PanelHead title="День" description="Одна форма сохраняет факт и рекомендации. Рекомендации вычитаются из факта в отчетах и графиках.">
         <label className="admin-date-select">
           <span>Дата</span>
           <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
@@ -2053,16 +2138,29 @@ function AdminDayPanel({
           <div className="admin-day-row" key={city}>
             <strong>{cityLabels[city]}</strong>
             {metrics.map((metric) => {
-              const plan = findDailyRecord(records, selectedDate, city, metric)?.plan ?? 0;
+              const record = findDailyRecord(records, selectedDate, city, metric);
+              const plan = record?.plan ?? 0;
+              const cleanFact = Math.max(0, draft[city][metric].fact - draft[city][metric].recommendations);
               return (
                 <label className="admin-fact-input" key={metric}>
-                  <input
-                    type="number"
-                    min="0"
-                    value={draft[city][metric]}
-                    onChange={(event) => setFact(city, metric, Number(event.target.value))}
-                  />
-                  <small>план {formatNumber(plan)}</small>
+                  <span className="admin-input-labels"><b>FACT</b><b>Рек.</b></span>
+                  <span className="admin-metric-inputs">
+                    <input
+                      type="number"
+                      min="0"
+                      value={draft[city][metric].fact}
+                      onChange={(event) => setFact(city, metric, Number(event.target.value))}
+                      aria-label={`${cityLabels[city]} ${metric} факт`}
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      value={draft[city][metric].recommendations}
+                      onChange={(event) => setRecommendations(city, metric, Number(event.target.value))}
+                      aria-label={`${cityLabels[city]} ${metric} рекомендации`}
+                    />
+                  </span>
+                  <small>план {formatNumber(plan)} · чистый факт <b>{formatNumber(cleanFact)}</b></small>
                 </label>
               );
             })}
@@ -2206,7 +2304,7 @@ function AdminMonthPanel({
                           <input
                             type="number"
                             min="0"
-                            value={findDailyRecord(records, date, city, metric)?.fact ?? 0}
+                            value={dailyRecordNetFact(findDailyRecord(records, date, city, metric))}
                             readOnly
                             title="Чтобы изменить значение, откройте вкладку День и нажмите Сохранить."
                           />
@@ -2236,6 +2334,7 @@ function AdminEventsPanel({
   onDeleteEvent: (eventId: string) => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(dates[0] ?? getTodayIso());
+  const [editingEvent, setEditingEvent] = useState<EventItem | null>(null);
   const selectedDayEvents = events.filter((event) => event.startDate <= selectedDate && selectedDate <= event.endDate);
 
   useEffect(() => {
@@ -2249,9 +2348,18 @@ function AdminEventsPanel({
       <div className="events-layout">
         <div className="event-calendar-column">
           <EventCalendar dates={dates} events={events} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
-          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDeleteEvent} />
+          <SelectedDayEvents selectedDate={selectedDate} events={selectedDayEvents} onDelete={onDeleteEvent} onEdit={setEditingEvent} />
         </div>
-        <EventForm dates={dates} selectedDate={selectedDate} onAdd={onAddEvent} />
+        <EventForm
+          dates={dates}
+          selectedDate={selectedDate}
+          editingEvent={editingEvent}
+          onCancelEdit={() => setEditingEvent(null)}
+          onSave={(event) => {
+            onAddEvent(event);
+            setEditingEvent(null);
+          }}
+        />
       </div>
     </section>
   );
@@ -2400,28 +2508,29 @@ function SelectedDayEvents({
   selectedDate,
   events,
   onDelete,
+  onEdit,
 }: {
   selectedDate: string;
   events: EventItem[];
   onDelete: (eventId: string) => void;
+  onEdit?: (event: EventItem) => void;
 }) {
   return (
     <section className="selected-day-events">
       <h3>{formatDay(selectedDate)} · события дня</h3>
       {events.length === 0 && <p>На этот день событий нет. Кликни день и добавь фактор справа.</p>}
       {events.map((event) => (
-        <EventCard key={event.id} event={event} onDelete={onDelete} compact />
+        <EventCard key={event.id} event={event} onDelete={onDelete} onEdit={onEdit} compact />
       ))}
     </section>
   );
 }
 
-function EventForm({ dates, selectedDate, onAdd }: { dates: string[]; selectedDate: string; onAdd: (event: EventItem) => void }) {
-  const fallbackDate = selectedDate || dates[0] || getTodayIso();
-  const [draft, setDraft] = useState({
+function createEventDraft(date: string) {
+  return {
     title: "",
-    startDate: fallbackDate,
-    endDate: fallbackDate,
+    startDate: date,
+    endDate: date,
     type: "рекламные изменения" as EventType,
     group: "internal" as EventGroup,
     expectedEffect: "неизвестно" as Effect,
@@ -2430,17 +2539,49 @@ function EventForm({ dates, selectedDate, onAdd }: { dates: string[]; selectedDa
     metric: "все" as Metric | "все",
     importance: 2 as 1 | 2 | 3,
     description: "",
-  });
+  };
+}
+
+function eventToDraft(event: EventItem) {
+  return {
+    title: event.title,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    type: event.type,
+    group: event.group,
+    expectedEffect: event.expectedEffect,
+    actualEffect: event.actualEffect,
+    city: event.city,
+    metric: event.metric,
+    importance: event.importance,
+    description: event.description,
+  };
+}
+
+function EventForm({
+  dates,
+  selectedDate,
+  editingEvent,
+  onCancelEdit,
+  onSave,
+}: {
+  dates: string[];
+  selectedDate: string;
+  editingEvent: EventItem | null;
+  onCancelEdit: () => void;
+  onSave: (event: EventItem) => void;
+}) {
+  const fallbackDate = selectedDate || dates[0] || getTodayIso();
+  const [draft, setDraft] = useState(() => createEventDraft(fallbackDate));
 
   useEffect(() => {
-    if (!dates.length || dates.includes(draft.startDate)) return;
-    setDraft((current) => ({ ...current, startDate: dates[0], endDate: dates[0] }));
-  }, [dates, draft.startDate]);
-
-  useEffect(() => {
-    if (!selectedDate || !dates.includes(selectedDate)) return;
+    if (editingEvent) {
+      setDraft(eventToDraft(editingEvent));
+      return;
+    }
+    if (!selectedDate) return;
     setDraft((current) => ({ ...current, startDate: selectedDate, endDate: selectedDate }));
-  }, [dates, selectedDate]);
+  }, [editingEvent, selectedDate]);
 
   function setType(type: EventType) {
     setDraft((current) => ({
@@ -2450,25 +2591,42 @@ function EventForm({ dates, selectedDate, onAdd }: { dates: string[]; selectedDa
     }));
   }
 
+  function setStartDate(startDate: string) {
+    setDraft((current) => ({
+      ...current,
+      startDate,
+      endDate: current.endDate < startDate ? startDate : current.endDate,
+    }));
+  }
+
+  function resetForm() {
+    setDraft(createEventDraft(selectedDate || dates[0] || getTodayIso()));
+    onCancelEdit();
+  }
+
   return (
     <form
       className="event-form"
       onSubmit={(event) => {
         event.preventDefault();
         if (!draft.title.trim()) return;
-        onAdd({
-          id: `evt-${Date.now()}`,
+        const startDate = draft.startDate <= draft.endDate ? draft.startDate : draft.endDate;
+        const endDate = draft.startDate <= draft.endDate ? draft.endDate : draft.startDate;
+        onSave({
+          id: editingEvent?.id ?? `evt-${Date.now()}`,
           ...draft,
+          startDate,
+          endDate,
           source: "manual",
         });
-        setDraft((current) => ({ ...current, title: "", description: "" }));
+        setDraft(createEventDraft(selectedDate || dates[0] || getTodayIso()));
       }}
     >
-      <h2>Добавить фактор</h2>
+      <h2>{editingEvent ? "Редактировать фактор" : "Добавить фактор"}</h2>
       <p className="event-form-note">Выбранный день: {formatDay(draft.startDate)}</p>
       <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Название события" />
       <div className="form-pair">
-        <label>Начало <input type="date" value={draft.startDate} onChange={(event) => setDraft({ ...draft, startDate: event.target.value })} /></label>
+        <label>Начало <input type="date" value={draft.startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
         <label>Конец <input type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} /></label>
       </div>
       <label>Категория <select value={draft.type} onChange={(event) => setType(event.target.value as EventType)}>{eventTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
@@ -2498,7 +2656,17 @@ function EventForm({ dates, selectedDate, onAdd }: { dates: string[]; selectedDa
       <label>Ожидаемый эффект <select value={draft.expectedEffect} onChange={(event) => setDraft({ ...draft, expectedEffect: event.target.value as Effect })}>{effectLabels.map((effect) => <option key={effect}>{effect}</option>)}</select></label>
       <label>Фактический эффект <select value={draft.actualEffect} onChange={(event) => setDraft({ ...draft, actualEffect: event.target.value as Effect })}>{effectLabels.map((effect) => <option key={effect}>{effect}</option>)}</select></label>
       <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Описание без категоричных причинных выводов" />
-      <button className="primary-button" type="submit"><Plus size={16} /> Добавить событие</button>
+      <div className="event-form-actions">
+        <button className="primary-button" type="submit">
+          {editingEvent ? <Save size={16} /> : <Plus size={16} />}
+          {editingEvent ? "Сохранить событие" : "Добавить событие"}
+        </button>
+        {editingEvent && (
+          <button className="event-cancel-button" type="button" onClick={resetForm}>
+            Отмена
+          </button>
+        )}
+      </div>
     </form>
   );
 }
@@ -2567,10 +2735,12 @@ function MonthDailyEventsPanel({
 function EventCard({
   event,
   onDelete,
+  onEdit,
   compact = false,
 }: {
   event: EventItem;
   onDelete?: (eventId: string) => void;
+  onEdit?: (event: EventItem) => void;
   compact?: boolean;
 }) {
   return (
@@ -2582,11 +2752,20 @@ function EventCard({
       <p>{event.description}</p>
       <div className="event-card-bottom">
         <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
-        {onDelete && event.source !== "system" && (
-          <button className="event-delete-button" type="button" onClick={() => onDelete(event.id)} aria-label={`Удалить событие ${event.title}`}>
-            <Trash2 size={14} />
-            Удалить
-          </button>
+        {(onEdit || onDelete) && event.source !== "system" && (
+          <span className="event-card-actions">
+            {onEdit && (
+              <button className="event-edit-button" type="button" onClick={() => onEdit(event)} aria-label={`Редактировать событие ${event.title}`}>
+                Редактировать
+              </button>
+            )}
+            {onDelete && (
+              <button className="event-delete-button" type="button" onClick={() => onDelete(event.id)} aria-label={`Удалить событие ${event.title}`}>
+                <Trash2 size={14} />
+                Удалить
+              </button>
+            )}
+          </span>
         )}
       </div>
     </article>
@@ -2670,7 +2849,10 @@ function forecastMetricByFactAverage(
   let baseDailyTotal = 0;
 
   recordsByCity.forEach(({ city, records }) => {
-    const factDates = monthDates.filter((date) => total(records.filter((record) => record.date === date), "fact") > 0);
+    const factDates = monthDates.filter((date) => {
+      const dayRecords = records.filter((record) => record.date === date);
+      return dayRecords.some((record) => record.fact > 0 || recommendationValue(record) > 0);
+    });
     const cityFact = total(records.filter((record) => factDates.includes(record.date)), "fact");
     const cityPlan = total(records, "plan");
 
@@ -2705,7 +2887,7 @@ function forecastMetricByFactAverage(
 }
 
 function getLastFactDate(records: DailyRecord[]): string | null {
-  const factDates = records.filter((record) => record.fact > 0).map((record) => record.date).sort();
+  const factDates = records.filter((record) => record.fact > 0 || recommendationValue(record) > 0).map((record) => record.date).sort();
   return factDates[factDates.length - 1] ?? null;
 }
 
@@ -2733,8 +2915,9 @@ function mergeTotals(weeks: WeekSummary[]): MetricTotals {
         plan: sum.plan + week.totals[metric].plan,
         fact: sum.fact + week.totals[metric].fact,
         forecast: sum.forecast + week.totals[metric].forecast,
+        recommendations: sum.recommendations + week.totals[metric].recommendations,
       }),
-      { plan: 0, fact: 0, forecast: 0 },
+      { plan: 0, fact: 0, forecast: 0, recommendations: 0 },
     );
     return acc;
   }, {} as MetricTotals);
@@ -2783,7 +2966,7 @@ function buildMetricDailyChartData(
   todayIso: string,
 ): MetricDailyChartData {
   const metricRecords = records.filter((record) => record.metric === meta.sourceMetric);
-  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && record.fact > 0);
+  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && (record.fact > 0 || recommendationValue(record) > 0));
 
   return {
     ...meta,
@@ -2816,9 +2999,11 @@ function buildMetricDailyChartData(
   };
 }
 
-function sumNullable(records: DailyRecord[], key: "plan" | "fact" | "forecast"): number | null {
+function sumNullable(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations"): number | null {
   if (!records.length) return null;
   return records.reduce((sum, record) => {
+    if (key === "fact") return sum + netFact(record);
+    if (key === "recommendations") return sum + recommendationValue(record);
     const value = Number(record[key]);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
@@ -3115,6 +3300,7 @@ function buildWeightedPlanRecordsForMonth(
           plan,
           fact: 0,
           forecast: plan,
+          recommendations: 0,
           comment: "",
         };
       }),
@@ -3170,9 +3356,11 @@ function buildAutomaticWeekEvents(months: MonthConfig[]): EventItem[] {
 
 function mergeEventLists(manualEvents: EventItem[], automaticEvents: EventItem[]): EventItem[] {
   const manualIds = new Set(manualEvents.map((event) => event.id));
-  return [...manualEvents, ...automaticEvents.filter((event) => !manualIds.has(event.id))].sort((a, b) =>
-    a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title),
-  );
+  return [...manualEvents, ...automaticEvents.filter((event) => !manualIds.has(event.id))].sort(sortEvents);
+}
+
+function sortEvents(a: EventItem, b: EventItem): number {
+  return a.startDate.localeCompare(b.startDate) || a.endDate.localeCompare(b.endDate) || a.title.localeCompare(b.title);
 }
 
 function groupEventsByMonth(events: EventItem[]): Array<{ monthKey: string; label: string; events: EventItem[] }> {
@@ -3201,23 +3389,31 @@ function eventCityLabel(city: EventCity): string {
   return cityLabels[city as City] ?? city;
 }
 
-function createDailyFactDraft(records: DailyRecord[], date: string): PlanByCity {
-  return adminCities.reduce<PlanByCity>((acc, city) => {
-    acc[city] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
-      metricAcc[metric] = findDailyRecord(records, date, city, metric)?.fact ?? 0;
+function createDailyFactDraft(records: DailyRecord[], date: string): DailyAdminDraft {
+  return adminCities.reduce<DailyAdminDraft>((acc, city) => {
+    acc[city] = metrics.reduce<Record<Metric, DailyAdminMetricDraft>>((metricAcc, metric) => {
+      const record = findDailyRecord(records, date, city, metric);
+      metricAcc[metric] = {
+        fact: record?.fact ?? 0,
+        recommendations: record?.recommendations ?? 0,
+      };
       return metricAcc;
-    }, {} as Record<Metric, number>);
+    }, {} as Record<Metric, DailyAdminMetricDraft>);
     return acc;
-  }, {} as PlanByCity);
+  }, {} as DailyAdminDraft);
 }
 
 function findDailyRecord(records: DailyRecord[], date: string, city: City, metric: Metric): DailyRecord | undefined {
   return records.find((record) => record.date === date && record.city === city && record.metric === metric);
 }
 
+function dailyRecordNetFact(record: DailyRecord | undefined): number {
+  return record ? netFact(record) : 0;
+}
+
 function validateDailyValueUpdates(values: DailyValueUpdate[]): boolean {
   return values.some((value) => {
-    const checkedValues = [value.plan, value.fact, value.forecast].filter((item) => item !== undefined);
+    const checkedValues = [value.plan, value.fact, value.forecast, value.recommendations].filter((item) => item !== undefined);
     return checkedValues.some((item) => {
       const numericValue = Number(item);
       return !Number.isFinite(numericValue) || numericValue < 0;
@@ -3231,6 +3427,7 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
     plan: value.plan === undefined ? undefined : Math.max(0, Number(value.plan) || 0),
     fact: value.fact === undefined ? undefined : Math.max(0, Number(value.fact) || 0),
     forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
+    recommendations: value.recommendations === undefined ? undefined : Math.max(0, Number(value.recommendations) || 0),
   };
 }
 
@@ -3256,6 +3453,7 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     plan: value.plan ?? previous?.plan ?? 0,
     fact: value.fact ?? previous?.fact ?? 0,
     forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
+    recommendations: value.recommendations ?? previous?.recommendations ?? 0,
     comment: value.comment ?? previous?.comment ?? "",
   };
 }
@@ -3266,6 +3464,7 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
     plan: Number(record.plan || 0),
     fact: Number(record.fact || 0),
     forecast: Number(record.forecast || 0),
+    recommendations: Number(record.recommendations || 0),
     comment: record.comment ?? "",
   };
 }
@@ -3399,8 +3598,8 @@ function normalizeForecastCoefficients(value: unknown): ForecastCoefficients {
 function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyRecord[] {
   return records.map((record) => {
     const normalized = normalizeDailyRecord(record);
-    if (normalized.date > todayIso && normalized.fact > 0) {
-      return { ...normalized, fact: 0 };
+    if (normalized.date > todayIso && (normalized.fact > 0 || normalized.recommendations > 0)) {
+      return { ...normalized, fact: 0, recommendations: 0 };
     }
     return normalized;
   });

@@ -3,7 +3,7 @@ import { getMonthDates } from "../utils/date";
 import { buildWeeklySummary } from "../utils/report";
 
 export type ReportScope = "Все" | "МСК" | "СПБ";
-export type MetricTotals = Record<Metric, { plan: number; fact: number; forecast: number }>;
+export type MetricTotals = Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number }>;
 export type ConversionKey = "leadToQualified" | "qualifiedToSale" | "leadToSale";
 
 export const reportCities: City[] = ["МСК", "СПБ"];
@@ -40,6 +40,7 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
       plan: total(metricRecords, "plan"),
       fact: total(metricRecords, "fact"),
       forecast: total(metricRecords, "forecast"),
+      recommendations: total(metricRecords, "recommendations"),
     };
     return acc;
   }, {} as MetricTotals);
@@ -122,8 +123,22 @@ export function percent(value: number, base: number): number {
   return Math.round((value / base) * 100);
 }
 
-export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast"): number {
-  return records.reduce((sum, record) => sum + record[key], 0);
+export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations"): number {
+  return records.reduce((sum, record) => sum + recordMetricValue(record, key), 0);
+}
+
+export function netFact(record: DailyRecord): number {
+  return Math.max(0, Number(record.fact || 0) - recommendationValue(record));
+}
+
+export function recommendationValue(record: DailyRecord): number {
+  return Math.max(0, Number(record.recommendations || 0));
+}
+
+function recordMetricValue(record: DailyRecord, key: "plan" | "fact" | "forecast" | "recommendations"): number {
+  if (key === "fact") return netFact(record);
+  if (key === "recommendations") return recommendationValue(record);
+  return Number(record[key] || 0);
 }
 
 export function dateRangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {

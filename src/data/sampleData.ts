@@ -121,6 +121,7 @@ export function buildRecordsForMonth(config: MonthConfig, _monthOffset = 0, _fac
           plan,
           fact,
           forecast,
+          recommendations: 0,
           comment: "",
         });
       });

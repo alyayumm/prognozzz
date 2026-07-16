@@ -24,6 +24,7 @@ const HEADERS = {
     'forecast',
     'comment',
     'updatedAt',
+    'recommendations',
   ],
   Month_Config: [
     'monthKey',
@@ -379,6 +380,7 @@ function dailyRow_(record) {
     Number(record.forecast || 0),
     record.comment || '',
     new Date(),
+    Number(record.recommendations || 0),
   ];
 }
 
@@ -469,6 +471,7 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
           fact: current.fact || 0,
           forecast: plan,
           comment: current.comment || '',
+          recommendations: current.recommendations || 0,
         });
         if (rowById[id]) {
           sheet.getRange(rowById[id], 1, 1, values.length).setValues([values]);
@@ -497,6 +500,7 @@ function normalizeDailyUpdate_(record) {
     fact: record.fact !== undefined ? record.fact : (current ? current.fact : 0),
     forecast: record.forecast !== undefined ? record.forecast : (current ? current.forecast : 0),
     comment: record.comment !== undefined ? record.comment : (current ? current.comment : ''),
+    recommendations: record.recommendations !== undefined ? record.recommendations : (current ? current.recommendations : 0),
   };
 }
 
@@ -514,6 +518,7 @@ function normalizeDailyForClient_(record) {
     plan: Number(record.plan || 0),
     fact: Number(record.fact || 0),
     forecast: Number(record.forecast || 0),
+    recommendations: Number(record.recommendations || 0),
     comment: record.comment || '',
   };
 }
@@ -702,7 +707,7 @@ function validateDailyRecord_(record) {
   ['id', 'date', 'city', 'metric'].forEach((field) => {
     if (!record[field]) throw new Error('Нет поля дневной записи: ' + field);
   });
-  ['plan', 'fact', 'forecast'].forEach((field) => {
+  ['plan', 'fact', 'forecast', 'recommendations'].forEach((field) => {
     if (Number(record[field] || 0) < 0) throw new Error('Метрика не может быть отрицательной: ' + field);
   });
 }
@@ -722,6 +727,12 @@ function weekOfMonth_(dateIso) {
 }
 
 function sum_(rows, field) {
+  if (field === 'fact') {
+    return rows.reduce((total, row) => total + Math.max(0, Number(row.fact || 0) - Number(row.recommendations || 0)), 0);
+  }
+  if (field === 'recommendations') {
+    return rows.reduce((total, row) => total + Number(row.recommendations || 0), 0);
+  }
   return rows.reduce((total, row) => total + Number(row[field] || 0), 0);
 }
 

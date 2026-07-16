@@ -1,4 +1,5 @@
 import type { DailyRecord, EventItem, Metric, WeekSummary } from "../types";
+import { netFact, recommendationValue } from "../lib/metrics";
 import { getWeekOfMonth } from "./date";
 
 const metrics: Metric[] = ["Лиды", "Квалы", "Продажи"];
@@ -20,6 +21,7 @@ export function buildWeeklySummary(records: DailyRecord[], events: EventItem[]):
           plan: sum(metricRecords, "plan"),
           fact: sum(metricRecords, "fact"),
           forecast: sum(metricRecords, "forecast"),
+          recommendations: sum(metricRecords, "recommendations"),
         };
         return acc;
       }, {} as WeekSummary["totals"]);
@@ -45,8 +47,12 @@ export function buildWeeklySummary(records: DailyRecord[], events: EventItem[]):
     });
 }
 
-function sum(records: DailyRecord[], key: "plan" | "fact" | "forecast"): number {
-  return records.reduce((total, record) => total + record[key], 0);
+function sum(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations"): number {
+  return records.reduce((total, record) => {
+    if (key === "fact") return total + netFact(record);
+    if (key === "recommendations") return total + recommendationValue(record);
+    return total + Number(record[key] || 0);
+  }, 0);
 }
 
 function dateRangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
