@@ -830,6 +830,7 @@ function MonthDashboard({
       <MetricKpiStrip totals={totals} isClosedMonth={monthTiming.isClosed} summaries={summaries} />
       <MonthEndForecastPanel projection={monthForecast} />
       <PlanCompletionWidget totals={totals} periodLabel="План месяца" />
+      <RecommendationWeekPanel weeks={weeks} />
 
       <ConversionCards conversions={conversions} />
 
@@ -850,7 +851,6 @@ function MonthDashboard({
         </div>
       </section>
 
-      <RecommendationWeekPanel weeks={weeks} />
       <PlanNeedGrid summaries={summaries} />
       <InsightPanel items={insights} />
     </div>
@@ -1598,8 +1598,8 @@ function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
   return (
     <section className="analytics-panel recommendation-panel">
       <PanelHead
-        title="Рекомендации по неделям"
-        description="Отдельно показывает значения, которые вычитаются из FACT перед расчетом отчетов."
+        title="График по рекомендациям"
+        description="Отдельно показывает рекомендации по лидам, КВАЛ и продажам. Эти значения вычитаются из FACT перед расчетом отчетов."
       />
       <div className="recommendation-grid">
         {metrics.map((metric) => (
@@ -2016,7 +2016,8 @@ function AdminDashboard({
           <article key={metric}>
             <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
             <strong>{formatNumber(totals[metric].fact)}</strong>
-            <small>общий факт МСК + СПБ + сообщения</small>
+            <small>чистый факт после вычета рекомендаций</small>
+            <em>рекомендации: {formatNumber(totals[metric].recommendations)}</em>
           </article>
         ))}
         <article className="messages-total-card">
@@ -2118,7 +2119,7 @@ function AdminDayPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="День" description="Одна форма сохраняет факт и рекомендации. Рекомендации вычитаются из факта в отчетах и графиках.">
+      <PanelHead title="День" description="В каждой метрике две колонки: FACT и Рекомендации. Отчет считает чистый факт = FACT минус рекомендации.">
         <label className="admin-date-select">
           <span>Дата</span>
           <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
@@ -2143,7 +2144,7 @@ function AdminDayPanel({
               const cleanFact = Math.max(0, draft[city][metric].fact - draft[city][metric].recommendations);
               return (
                 <label className="admin-fact-input" key={metric}>
-                  <span className="admin-input-labels"><b>FACT</b><b>Рек.</b></span>
+                  <span className="admin-input-labels"><b>FACT</b><b>Рекомендации</b></span>
                   <span className="admin-metric-inputs">
                     <input
                       type="number"
