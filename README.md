@@ -54,6 +54,8 @@ VITE_APPS_SCRIPT_URL=https://script.google.com/macros/s/.../exec
 VITE_ADMIN_PASSWORD=ваш-пароль
 ```
 
+Для GitHub Pages добавьте `VITE_APPS_SCRIPT_URL` в GitHub: Settings -> Secrets and variables -> Actions -> Variables или Secrets. Пароль админки в GitHub Pages не добавляйте: его нужно вводить в панели, иначе он попадет в публичный JS.
+
 Если `VITE_APPS_SCRIPT_URL` не задан, панель работает в локальном fallback на демо-данных.
 
 ## Локальный запуск

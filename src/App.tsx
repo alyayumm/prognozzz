@@ -149,6 +149,7 @@ const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; da
 ];
 
 export default function App() {
+  const apiConfigured = isReportApiConfigured();
   const [initialState] = useState(loadInitialState);
   const [monthConfigs, setMonthConfigs] = useState<MonthConfig[]>(initialState.monthConfigs);
   const [records, setRecords] = useState<DailyRecord[]>(initialState.records);
@@ -164,8 +165,11 @@ export default function App() {
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
   const [auth, setAuth] = useState("");
-  const [savedMessage, setSavedMessage] = useState("Локальный режим: факты, месяцы и события сохраняются в этой панели.");
-  const apiConfigured = isReportApiConfigured();
+  const [savedMessage, setSavedMessage] = useState(
+    apiConfigured
+      ? "Подключаю Google Sheets..."
+      : "Локальный режим: изменения видны только в этом браузере и не обновляют общий сайт.",
+  );
   const todayIso = useMemo(getTodayIso, []);
 
   const selectedMonthConfig = useMemo(
@@ -248,12 +252,23 @@ export default function App() {
 
         if (remoteMonthKey !== selectedMonthKey) {
           setSelectedMonthKey(remoteMonthKey);
-          return;
         }
 
-        const payload = await callReportApi<MonthPayload>("getMonthData", { monthKey: remoteMonthKey });
+        const monthPayloads = await Promise.all(
+          normalizedMonths.map((config) => callReportApi<MonthPayload>("getMonthData", { monthKey: config.monthKey })),
+        );
         if (cancelled) return;
-        applyRemotePayload(payload, remoteMonthKey);
+
+        const remoteRecords = monthPayloads.flatMap((payload) => payload.records.map(normalizeDailyRecord));
+        const remoteEvents = uniqueEvents(
+          monthPayloads
+            .flatMap((payload) => payload.events)
+            .map(normalizeEvent)
+            .filter((event) => !legacySeedEventIds.has(event.id)),
+        );
+
+        setRecords(remoteRecords);
+        setEvents(remoteEvents);
         setSavedMessage("Данные загружены из Google Sheets. Запись доступна после ввода пароля.");
       } catch (error) {
         if (!cancelled) {
@@ -315,7 +330,7 @@ export default function App() {
     if (!apiConfigured) {
       const nextRecords = mergeDailyValues(sanitized);
       const aggregateIssue = validateAggregates(nextRecords);
-      setSavedMessage(aggregateIssue ?? "Сохранено. Итоги и графики обновлены.");
+      setSavedMessage(aggregateIssue ?? "Сохранено только в этом браузере. У других людей не обновится, пока не подключен Apps Script.");
       return;
     }
 
@@ -347,7 +362,7 @@ export default function App() {
     const isUpdate = events.some((item) => item.id === event.id);
     setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)].sort(sortEvents));
     if (!apiConfigured) {
-      setSavedMessage(isUpdate ? "Событие обновлено локально." : "Событие добавлено локально в карту факторов.");
+      setSavedMessage(isUpdate ? "Событие обновлено только в этом браузере." : "Событие добавлено только в этом браузере. Общий сайт не обновится без Apps Script.");
       return;
     }
     if (!auth.trim()) {
@@ -365,7 +380,7 @@ export default function App() {
 
     setEvents((current) => current.filter((item) => item.id !== eventId));
     if (!apiConfigured) {
-      setSavedMessage("Событие удалено локально.");
+      setSavedMessage("Событие удалено только в этом браузере.");
       return;
     }
     if (!auth.trim()) {
@@ -392,7 +407,7 @@ export default function App() {
 
   async function persistForecastCoefficients() {
     if (!apiConfigured) {
-      setSavedMessage("Коэффициенты прогноза сохранены локально.");
+      setSavedMessage("Коэффициенты сохранены только в этом браузере. Общий сайт не обновится без Apps Script.");
       return;
     }
     if (!auth.trim()) {
@@ -427,7 +442,7 @@ export default function App() {
     setMode("admin");
 
     if (!apiConfigured) {
-      setSavedMessage(exists ? `${nextConfig.label} уже есть, месяц открыт в панели.` : `${nextConfig.label} добавлен локально, можно вносить факт.`);
+      setSavedMessage(exists ? `${nextConfig.label} уже есть, месяц открыт в панели.` : `${nextConfig.label} добавлен только в этом браузере. Общий сайт не обновится без Apps Script.`);
       return;
     }
     if (!auth.trim()) {
@@ -442,7 +457,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar mode={mode} setMode={setMode} auth={auth} setAuth={setAuth} />
+      <Sidebar mode={mode} setMode={setMode} auth={auth} setAuth={setAuth} apiConfigured={apiConfigured} />
 
       <main className="workspace">
         <Topbar
@@ -585,11 +600,13 @@ function Sidebar({
   setMode,
   auth,
   setAuth,
+  apiConfigured,
 }: {
   mode: Mode;
   setMode: (mode: Mode) => void;
   auth: string;
   setAuth: (value: string) => void;
+  apiConfigured: boolean;
 }) {
   const items: Array<{ mode: Mode; label: string; icon: React.ReactNode }> = [
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
@@ -634,8 +651,12 @@ function Sidebar({
           type="password"
           placeholder="Пароль админки"
         />
-        <span className={auth ? "status good" : "status muted"}>
-          {auth ? "Готово к записи через Apps Script" : "Локальный просмотр"}
+        <span className={apiConfigured ? (auth ? "status good" : "status muted") : "status warning"}>
+          {!apiConfigured
+            ? "Только этот браузер: общий сайт не обновится"
+            : auth
+              ? "Готово к записи через Apps Script"
+              : "Google Sheets подключен, нужен пароль"}
         </span>
       </div>
 

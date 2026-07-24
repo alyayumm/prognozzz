@@ -178,6 +178,7 @@ input:focus, select:focus, textarea:focus {
 .status { font-size: 12px; line-height: 1.35; }
 .status.good { color: #447a00; }
 .status.muted { color: var(--muted); }
+.status.warning { color: var(--negative); font-weight: 900; }
 
 .workspace {
   min-width: 0;
