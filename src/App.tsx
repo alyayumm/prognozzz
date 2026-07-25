@@ -16,7 +16,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildSeedRecords,
   combineReportPlan,
@@ -27,6 +27,7 @@ import {
   seedEvents,
 } from "./data/dashboardMock";
 import { callReportApi, isReportApiConfigured, type MonthPayload } from "./api/reportApi";
+import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { buildAttentionItems } from "./lib/insights";
 import {
   buildConversions,
@@ -152,6 +153,7 @@ const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; da
 export default function App() {
   const apiConfigured = isReportApiConfigured();
   const [initialState] = useState(loadInitialState);
+  const latestRecordDateRef = useRef(getLatestActualRecordDate(initialState.records));
   const [monthConfigs, setMonthConfigs] = useState<MonthConfig[]>(initialState.monthConfigs);
   const [records, setRecords] = useState<DailyRecord[]>(initialState.records);
   const [events, setEvents] = useState<EventItem[]>(initialState.events);
@@ -222,6 +224,48 @@ export default function App() {
   useEffect(() => {
     saveLocalState({ monthConfigs, records, events, selectedMonthKey, forecastCoefficients });
   }, [monthConfigs, records, events, selectedMonthKey, forecastCoefficients]);
+
+  useEffect(() => {
+    latestRecordDateRef.current = getLatestActualRecordDate(records);
+  }, [records]);
+
+  useEffect(() => {
+    if (apiConfigured) return;
+
+    let cancelled = false;
+
+    async function loadFromPublicSheet() {
+      try {
+        const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
+        if (cancelled || !snapshot.latestActualDate) return;
+
+        const currentLatestDate = latestRecordDateRef.current;
+        if (currentLatestDate && snapshot.latestActualDate < currentLatestDate) {
+          setSavedMessage(
+            `Опубликованный снимок свежее Google-таблицы: в таблице последний FACT ${formatDay(snapshot.latestActualDate)}, на сайте ${formatDay(currentLatestDate)}. Обновлю автоматически, когда таблица догонит сайт.`,
+          );
+          return;
+        }
+
+        setMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig));
+        setRecords((current) => mergePublicSheetRecords(current, snapshot.records));
+        latestRecordDateRef.current = snapshot.latestActualDate;
+        setSavedMessage(`Данные автоматически загружены из Google-таблицы. Последний FACT: ${formatDay(snapshot.latestActualDate)}.`);
+      } catch (error) {
+        if (!cancelled) {
+          setSavedMessage(`Google-таблица пока не загрузилась автоматически: ${getErrorMessage(error)}. Показываю опубликованный снимок.`);
+        }
+      }
+    }
+
+    loadFromPublicSheet();
+    const timer = window.setInterval(loadFromPublicSheet, 5 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [apiConfigured]);
 
   useEffect(() => {
     if (!apiConfigured) return;
@@ -3549,6 +3593,21 @@ function upsertMonthConfig(configs: MonthConfig[], config: MonthConfig): MonthCo
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function mergePublicSheetRecords(currentRecords: DailyRecord[], publicRecords: DailyRecord[]): DailyRecord[] {
+  const recordMap = new Map(currentRecords.map((record) => [record.id, record]));
+
+  publicRecords.forEach((record) => {
+    const current = recordMap.get(record.id);
+    recordMap.set(record.id, {
+      ...record,
+      recommendations: current?.recommendations ?? record.recommendations,
+      comment: current?.comment ?? record.comment,
+    });
+  });
+
+  return [...recordMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
 }
 
 function loadInitialState() {
