@@ -1,5 +1,5 @@
 import type { City, DailyRecord, EventItem, Metric, MonthConfig, PlanByCity } from "../types";
-import { getImportedDailyPoint } from "./importedDailySeries";
+import { getImportedDailyPoint, importedEvents, importedMonthConfigs } from "./importedDailySeries";
 
 export const cities: City[] = ["МСК", "СПБ", "сообщения"];
 export const metrics: Metric[] = ["Лиды", "Квалы", "Продажи"];
@@ -10,7 +10,7 @@ const planSplitShare = {
   [cities[2]]: 0.1,
 } as Record<City, number>;
 
-export const monthConfigs: MonthConfig[] = [
+const fallbackMonthConfigs: MonthConfig[] = [
   {
     monthKey: "2026-04",
     label: "Апрель 2026",
@@ -69,6 +69,8 @@ export const monthConfigs: MonthConfig[] = [
   },
 ];
 
+export const monthConfigs: MonthConfig[] = importedMonthConfigs.length ? importedMonthConfigs : fallbackMonthConfigs;
+
 export const monthConfig: MonthConfig = monthConfigs[monthConfigs.length - 1];
 
 export function createMonthConfig(
@@ -121,7 +123,7 @@ export function buildRecordsForMonth(config: MonthConfig, _monthOffset = 0, _fac
           plan,
           fact,
           forecast,
-          recommendations: 0,
+          recommendations: imported?.recommendations ?? 0,
           comment: "",
         });
       });
@@ -159,7 +161,7 @@ function distributeMonthlyPlan(total: number, day: number, daysInMonth: number):
   return base + (day <= remainder ? 1 : 0);
 }
 
-export const seedEvents: EventItem[] = [
+const fallbackSeedEvents: EventItem[] = [
   {
     id: "evt-2026-06-01-summer-season",
     startDate: "2026-06-01",
@@ -611,3 +613,5 @@ export const seedEvents: EventItem[] = [
     description: "Пост Гермес: плати потом. Будь в курсе.",
   },
 ];
+
+export const seedEvents: EventItem[] = importedEvents.length ? importedEvents : fallbackSeedEvents;

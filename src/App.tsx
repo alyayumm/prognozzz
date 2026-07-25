@@ -109,7 +109,8 @@ type MetricSummary = {
 };
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
-const storageKey = "weekly-report-local-v5";
+const storageKey = "weekly-report-local-v6";
+const legacyStorageKeys = ["weekly-report-local-v5"];
 const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const eventTypes: EventType[] = [
@@ -3562,7 +3563,9 @@ function loadInitialState() {
   if (typeof window === "undefined") return fallback;
 
   try {
-    const rawState = window.localStorage.getItem(storageKey);
+    const rawState =
+      window.localStorage.getItem(storageKey) ??
+      legacyStorageKeys.map((key) => window.localStorage.getItem(key)).find((state): state is string => Boolean(state));
     if (!rawState) return fallback;
 
     const parsed = JSON.parse(rawState) as Partial<typeof fallback>;
@@ -3572,10 +3575,17 @@ function loadInitialState() {
 
     const monthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
     const events = parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id));
+    const records = sanitizeStoredRecords(parsed.records, getTodayIso());
+    const fallbackLatestDate = getLatestActualRecordDate(fallback.records);
+    const storedLatestDate = getLatestActualRecordDate(records);
+
+    if (fallbackLatestDate && (!storedLatestDate || storedLatestDate < fallbackLatestDate)) {
+      return fallback;
+    }
 
     return {
       monthConfigs,
-      records: sanitizeStoredRecords(parsed.records, getTodayIso()),
+      records,
       events,
       selectedMonthKey: parsed.selectedMonthKey || monthConfigs[monthConfigs.length - 1]?.monthKey || fallback.selectedMonthKey,
       forecastCoefficients: normalizeForecastCoefficients(parsed.forecastCoefficients),
@@ -3583,6 +3593,14 @@ function loadInitialState() {
   } catch {
     return fallback;
   }
+}
+
+function getLatestActualRecordDate(records: DailyRecord[]): string | null {
+  return records.reduce<string | null>((latestDate, record) => {
+    if (record.fact <= 0 && record.recommendations <= 0) return latestDate;
+    if (!latestDate || record.date > latestDate) return record.date;
+    return latestDate;
+  }, null);
 }
 
 function createDefaultForecastCoefficients(): ForecastCoefficients {
