@@ -1,7 +1,8 @@
 import type { CreateMonthPayload, DailyRecord, DailyValueUpdate, EventItem, MonthConfig } from "../types";
 
-const endpoint = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
+const envEndpoint = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
 const envPassword = import.meta.env.VITE_ADMIN_PASSWORD as string | undefined;
+const endpointStorageKey = "weekly-report-apps-script-url";
 
 type ApiAction =
   | "getMonths"
@@ -16,10 +17,31 @@ type ApiAction =
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {
-  return Boolean(endpoint);
+  return Boolean(getReportApiEndpoint());
+}
+
+export function getReportApiEndpoint(): string {
+  const normalizedEnvEndpoint = normalizeEndpoint(envEndpoint);
+  if (normalizedEnvEndpoint) return normalizedEnvEndpoint;
+
+  if (typeof window === "undefined") return "";
+  return normalizeEndpoint(window.localStorage.getItem(endpointStorageKey));
+}
+
+export function saveReportApiEndpoint(value: string): string {
+  const endpoint = normalizeEndpoint(value);
+  if (typeof window !== "undefined") {
+    if (endpoint) {
+      window.localStorage.setItem(endpointStorageKey, endpoint);
+    } else {
+      window.localStorage.removeItem(endpointStorageKey);
+    }
+  }
+  return endpoint;
 }
 
 export async function callReportApi<T>(action: ApiAction, payload: unknown = {}, password = envPassword): Promise<T> {
+  const endpoint = getReportApiEndpoint();
   if (!endpoint) {
     throw new Error("Apps Script URL is not configured. Local prototype uses sample data.");
   }
@@ -35,6 +57,11 @@ export async function callReportApi<T>(action: ApiAction, payload: unknown = {},
     throw new Error(result.error || "Google Apps Script request failed");
   }
   return result.data as T;
+}
+
+function normalizeEndpoint(value: string | null | undefined): string {
+  const endpoint = String(value || "").trim();
+  return endpoint.startsWith("https://script.google.com/") ? endpoint : "";
 }
 
 export interface MonthPayload {

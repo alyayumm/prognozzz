@@ -146,6 +146,7 @@ nav { display: grid; gap: 7px; }
   font-weight: 850;
 }
 .sidebar-card input,
+.sidebar-card textarea,
 .topbar select,
 .inline-select select,
 .week-selector-row select,
@@ -165,11 +166,30 @@ nav { display: grid; gap: 7px; }
   outline: none;
   font-weight: 750;
 }
-.sidebar-card input {
+.sidebar-card input,
+.sidebar-card textarea {
   width: 100%;
-  height: 38px;
   border-radius: 14px;
-  padding: 0 11px;
+  padding: 9px 11px;
+}
+.sidebar-card input {
+  height: 38px;
+}
+.sidebar-card textarea {
+  min-height: 68px;
+  resize: vertical;
+  font-size: 11px;
+  line-height: 1.25;
+}
+.connect-api-button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #4d76ff 0%, var(--blue) 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
 }
 input:focus, select:focus, textarea:focus {
   border-color: var(--blue) !important;

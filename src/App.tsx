@@ -26,7 +26,7 @@ import {
   monthConfigs as seedMonthConfigs,
   seedEvents,
 } from "./data/dashboardMock";
-import { callReportApi, isReportApiConfigured, type MonthPayload } from "./api/reportApi";
+import { callReportApi, getReportApiEndpoint, saveReportApiEndpoint, type MonthPayload } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { buildAttentionItems } from "./lib/insights";
 import {
@@ -110,8 +110,8 @@ type MetricSummary = {
 };
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
-const storageKey = "weekly-report-local-v6";
-const legacyStorageKeys = ["weekly-report-local-v5"];
+const storageKey = "weekly-report-local-v7";
+const legacyStorageKeys: string[] = [];
 const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const eventTypes: EventType[] = [
@@ -151,7 +151,8 @@ const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; da
 ];
 
 export default function App() {
-  const apiConfigured = isReportApiConfigured();
+  const [apiEndpoint, setApiEndpoint] = useState(getReportApiEndpoint);
+  const apiConfigured = Boolean(apiEndpoint);
   const [initialState] = useState(loadInitialState);
   const latestRecordDateRef = useRef(getLatestActualRecordDate(initialState.records));
   const [monthConfigs, setMonthConfigs] = useState<MonthConfig[]>(initialState.monthConfigs);
@@ -168,12 +169,22 @@ export default function App() {
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
   const [auth, setAuth] = useState("");
+  const [apiUrlDraft, setApiUrlDraft] = useState(apiEndpoint);
   const [savedMessage, setSavedMessage] = useState(
     apiConfigured
       ? "Подключаю Google Sheets..."
       : "Локальный режим: изменения видны только в этом браузере и не обновляют общий сайт.",
   );
   const todayIso = useMemo(getTodayIso, []);
+
+  function connectApiEndpoint() {
+    const endpoint = saveReportApiEndpoint(apiUrlDraft);
+    setApiEndpoint(endpoint);
+    setApiUrlDraft(endpoint);
+    setSavedMessage(endpoint
+      ? "Общее сохранение подключено. Данные будут читаться и записываться через Apps Script."
+      : "Apps Script URL очищен. Сайт снова работает только в этом браузере.");
+  }
 
   const selectedMonthConfig = useMemo(
     () => monthConfigs.find((config) => config.monthKey === selectedMonthKey) ?? monthConfigs[monthConfigs.length - 1] ?? monthConfig,
@@ -512,7 +523,16 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar mode={mode} setMode={setMode} auth={auth} setAuth={setAuth} apiConfigured={apiConfigured} />
+      <Sidebar
+        mode={mode}
+        setMode={setMode}
+        auth={auth}
+        setAuth={setAuth}
+        apiConfigured={apiConfigured}
+        apiUrlDraft={apiUrlDraft}
+        setApiUrlDraft={setApiUrlDraft}
+        onConnectApi={connectApiEndpoint}
+      />
 
       <main className="workspace">
         <Topbar
@@ -656,12 +676,18 @@ function Sidebar({
   auth,
   setAuth,
   apiConfigured,
+  apiUrlDraft,
+  setApiUrlDraft,
+  onConnectApi,
 }: {
   mode: Mode;
   setMode: (mode: Mode) => void;
   auth: string;
   setAuth: (value: string) => void;
   apiConfigured: boolean;
+  apiUrlDraft: string;
+  setApiUrlDraft: (value: string) => void;
+  onConnectApi: () => void;
 }) {
   const items: Array<{ mode: Mode; label: string; icon: React.ReactNode }> = [
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
@@ -706,6 +732,15 @@ function Sidebar({
           type="password"
           placeholder="Пароль админки"
         />
+        <textarea
+          value={apiUrlDraft}
+          onChange={(event) => setApiUrlDraft(event.target.value)}
+          placeholder="URL Apps Script /exec"
+          rows={3}
+        />
+        <button className="connect-api-button" type="button" onClick={onConnectApi}>
+          Подключить
+        </button>
         <span className={apiConfigured ? (auth ? "status good" : "status muted") : "status warning"}>
           {!apiConfigured
             ? "Только этот браузер: общий сайт не обновится"
