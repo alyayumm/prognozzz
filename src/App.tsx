@@ -195,7 +195,14 @@ export default function App() {
     () => filterEventsForRange(reportEvents, monthDates[0], monthDates[monthDates.length - 1]),
     [reportEvents, monthDates],
   );
-  const weeks = useMemo(() => buildWeeklySummary(currentMonthRecords, currentMonthEvents), [currentMonthRecords, currentMonthEvents]);
+  const weeks = useMemo(
+    () => applyOverallPlanOverrideToWeeks(
+      buildWeeklySummary(currentMonthRecords, currentMonthEvents),
+      selectedMonthConfig,
+      selectedScope,
+    ),
+    [currentMonthRecords, currentMonthEvents, selectedMonthConfig, selectedScope],
+  );
   const safeSelectedWeek = weeks.some((week) => week.week === selectedWeek) ? selectedWeek : weeks[0]?.week ?? 1;
   const activeWeek = weeks.find((week) => week.week === safeSelectedWeek) ?? weeks[0];
   const activeWeekDates = useMemo(
@@ -206,13 +213,16 @@ export default function App() {
     () => activeWeek ? filterEventsForRange(reportEvents, activeWeek.startDate, activeWeek.endDate) : [],
     [activeWeek, reportEvents],
   );
-  const metricTotals = useMemo(() => buildMetricTotals(currentMonthRecords, metrics), [currentMonthRecords]);
+  const metricTotals = useMemo(() => mergeTotals(weeks), [weeks]);
   const conversions = useMemo(() => buildConversions(metricTotals), [metricTotals]);
   const periodStatus = useMemo(() => getPeriodStatus(metricTotals), [metricTotals]);
   const monthTiming = useMemo(() => getMonthTiming(monthDates, todayIso), [monthDates, todayIso]);
   const allMonths = useMemo(
-    () => buildOverallMonths(reportRecords, reportEvents, monthConfigs),
-    [reportRecords, reportEvents, monthConfigs],
+    () => buildOverallMonths(reportRecords, reportEvents, monthConfigs).map((month) => ({
+      ...month,
+      weeks: applyOverallPlanOverrideToWeeks(month.weeks, month.config, selectedScope),
+    })),
+    [reportRecords, reportEvents, monthConfigs, selectedScope],
   );
   const visibleEvents = useMemo(() => {
     if (mode === "week") return activeWeekEvents;
@@ -873,7 +883,13 @@ function MonthDashboard({
   records: DailyRecord[];
   forecastCoefficients: ForecastCoefficients;
 }) {
-  const monthForecast = buildMonthEndForecast(records, monthDates, monthTiming.isClosed, forecastCoefficients);
+  const monthForecast = buildMonthEndForecast(
+    records,
+    monthDates,
+    monthTiming.isClosed,
+    forecastCoefficients,
+    selectedScope === "Все" ? config.plan : undefined,
+  );
   const summaries = metrics.map((metric) =>
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
   );
@@ -1133,7 +1149,7 @@ function WeekDashboard({
   events: EventItem[];
   selectedScope: ReportScope;
 }) {
-  const totals = buildMetricTotals(records.filter((record) => dates.includes(record.date)), metrics);
+  const totals = week.totals;
   const conversions = buildConversions(totals);
   const status = getPeriodStatus(totals);
   const insights = buildAttentionItems(totals, events);
@@ -2872,6 +2888,7 @@ function buildMonthEndForecast(
   monthDates: string[],
   isClosedMonth: boolean,
   coefficients: ForecastCoefficients,
+  planOverride?: Record<Metric, number>,
 ) {
   const lastFactDate = getLastFactDate(records);
   const remainingDates = isClosedMonth ? [] : monthDates.filter((date) => !lastFactDate || date > lastFactDate);
@@ -2884,8 +2901,9 @@ function buildMonthEndForecast(
       const metricRecords = records.filter((record) => record.metric === metric);
       const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients);
       const fact = forecastParts.fact;
-      const plan = total(metricRecords, "plan");
-      const projected = forecastParts.projected;
+      const rawPlan = total(metricRecords, "plan");
+      const plan = planOverride?.[metric] ?? rawPlan;
+      const projected = !isClosedMonth && fact === 0 && planOverride?.[metric] !== undefined ? plan : forecastParts.projected;
       acc[metric] = {
         plan,
         fact,
@@ -2988,6 +3006,47 @@ function mergeTotals(weeks: WeekSummary[]): MetricTotals {
     );
     return acc;
   }, {} as MetricTotals);
+}
+
+function applyOverallPlanOverrideToWeeks(
+  weeks: WeekSummary[],
+  config: MonthConfig,
+  selectedScope: ReportScope,
+): WeekSummary[] {
+  if (selectedScope !== "Все" || !weeks.length) return weeks;
+
+  const rawTotals = mergeTotals(weeks);
+  const plansByMetric = metrics.reduce<Record<Metric, number[]>>((acc, metric) => {
+    const rawPlan = rawTotals[metric].plan;
+    const targetPlan = Number(config.plan[metric] ?? rawPlan);
+
+    if (!rawPlan || !Number.isFinite(targetPlan) || targetPlan === rawPlan) {
+      acc[metric] = weeks.map((week) => week.totals[metric].plan);
+      return acc;
+    }
+
+    let distributed = 0;
+    acc[metric] = weeks.map((week, index) => {
+      if (index === weeks.length - 1) {
+        return Math.max(0, Math.round(targetPlan - distributed));
+      }
+      const nextPlan = Math.max(0, Math.round((week.totals[metric].plan / rawPlan) * targetPlan));
+      distributed += nextPlan;
+      return nextPlan;
+    });
+    return acc;
+  }, {} as Record<Metric, number[]>);
+
+  return weeks.map((week, weekIndex) => ({
+    ...week,
+    totals: metrics.reduce<WeekSummary["totals"]>((acc, metric) => {
+      acc[metric] = {
+        ...week.totals[metric],
+        plan: plansByMetric[metric][weekIndex],
+      };
+      return acc;
+    }, {} as WeekSummary["totals"]),
+  }));
 }
 
 function pickMonthByCompletion(months: Array<{ config: MonthConfig; weeks: WeekSummary[] }>, mode: "best" | "worst") {
@@ -3721,11 +3780,17 @@ function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyR
 
 function normalizeMonthConfig(config: MonthConfig): MonthConfig {
   const plansByCity = config.plansByCity ?? splitPlanByCity(config.plan);
+  const combinedPlan = combineReportPlan(plansByCity);
+  const plan = metrics.reduce<Record<Metric, number>>((acc, metric) => {
+    const explicitPlan = Number(config.plan?.[metric]);
+    acc[metric] = Number.isFinite(explicitPlan) && explicitPlan >= 0 ? explicitPlan : combinedPlan[metric];
+    return acc;
+  }, {} as Record<Metric, number>);
   return {
     ...config,
     label: config.label.replace(/\sг\.$/, ""),
     plansByCity,
-    plan: combineReportPlan(plansByCity),
+    plan,
     status: config.status ?? "active",
   };
 }

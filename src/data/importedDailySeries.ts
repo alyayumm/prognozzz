@@ -140,7 +140,7 @@ export const importedMonthConfigs: MonthConfig[] = [
     "monthIndex": 7,
     "daysInMonth": 31,
     "plan": {
-      "Лиды": 2602,
+      "Лиды": 2515,
       "Квалы": 1121,
       "Продажи": 417
     },
