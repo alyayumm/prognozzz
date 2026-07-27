@@ -3632,15 +3632,18 @@ function loadInitialState() {
       return fallback;
     }
 
-    const monthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
+    const storedMonthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
     const events = parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id));
-    const records = sanitizeStoredRecords(parsed.records, getTodayIso());
+    const storedRecords = sanitizeStoredRecords(parsed.records, getTodayIso());
     const fallbackLatestDate = getLatestActualRecordDate(fallback.records);
-    const storedLatestDate = getLatestActualRecordDate(records);
+    const storedLatestDate = getLatestActualRecordDate(storedRecords);
 
     if (fallbackLatestDate && (!storedLatestDate || storedLatestDate < fallbackLatestDate)) {
       return fallback;
     }
+
+    const monthConfigs = mergeSeedMonthConfigs(fallback.monthConfigs, storedMonthConfigs);
+    const records = mergeSeedRecords(fallback.records, storedRecords);
 
     return {
       monthConfigs,
@@ -3652,6 +3655,18 @@ function loadInitialState() {
   } catch {
     return fallback;
   }
+}
+
+function mergeSeedMonthConfigs(seedConfigs: MonthConfig[], storedConfigs: MonthConfig[]): MonthConfig[] {
+  const configMap = new Map(seedConfigs.map((config) => [config.monthKey, config]));
+  storedConfigs.forEach((config) => configMap.set(config.monthKey, config));
+  return [...configMap.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
+function mergeSeedRecords(seedRecords: DailyRecord[], storedRecords: DailyRecord[]): DailyRecord[] {
+  const recordMap = new Map(seedRecords.map((record) => [record.id, record]));
+  storedRecords.forEach((record) => recordMap.set(record.id, record));
+  return [...recordMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
 }
 
 function getLatestActualRecordDate(records: DailyRecord[]): string | null {
