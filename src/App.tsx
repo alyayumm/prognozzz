@@ -3717,8 +3717,11 @@ function loadInitialState() {
 }
 
 function mergeSeedMonthConfigs(seedConfigs: MonthConfig[], storedConfigs: MonthConfig[]): MonthConfig[] {
-  const configMap = new Map(seedConfigs.map((config) => [config.monthKey, config]));
-  storedConfigs.forEach((config) => configMap.set(config.monthKey, config));
+  const configMap = new Map(storedConfigs.map((config) => [config.monthKey, config]));
+  seedConfigs.forEach((config) => {
+    const stored = configMap.get(config.monthKey);
+    configMap.set(config.monthKey, stored ? { ...stored, ...config } : config);
+  });
   return [...configMap.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 }
 

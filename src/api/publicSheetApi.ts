@@ -273,7 +273,7 @@ function buildMonthConfigs(records: DailyRecord[], fallbackMonthConfigs: MonthCo
       });
     });
     config.plansByCity = nextPlans;
-    config.plan = combineReportPlan(nextPlans);
+    config.plan = mergeExplicitPlan(config.plan, combineReportPlan(nextPlans));
     configMap.set(monthKey, config);
   });
 
@@ -302,6 +302,17 @@ function createEmptyPlans(): PlanByCity {
 function combineReportPlan(plansByCity: PlanByCity): Record<Metric, number> {
   return metricLabels.reduce<Record<Metric, number>>((acc, metric) => {
     acc[metric] = plansByCity.МСК[metric] + plansByCity.СПБ[metric];
+    return acc;
+  }, {} as Record<Metric, number>);
+}
+
+function mergeExplicitPlan(
+  explicitPlan: Record<Metric, number> | undefined,
+  combinedPlan: Record<Metric, number>,
+): Record<Metric, number> {
+  return metricLabels.reduce<Record<Metric, number>>((acc, metric) => {
+    const value = Number(explicitPlan?.[metric]);
+    acc[metric] = Number.isFinite(value) && value > 0 ? value : combinedPlan[metric];
     return acc;
   }, {} as Record<Metric, number>);
 }
