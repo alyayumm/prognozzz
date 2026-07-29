@@ -3,6 +3,8 @@ import type { CreateMonthPayload, DailyRecord, DailyValueUpdate, EventItem, Mont
 const envEndpoint = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
 const envPassword = import.meta.env.VITE_ADMIN_PASSWORD as string | undefined;
 const endpointStorageKey = "weekly-report-apps-script-url";
+const defaultEndpoint =
+  "https://script.google.com/macros/s/AKfycbxQSYUaFmhVdmZ1JKruN2AS0hV7TidbKaXAKXEx0REXmNmvYqIq39YniEyrY8Kes2F7fA/exec";
 
 type ApiAction =
   | "getMonths"
@@ -24,8 +26,11 @@ export function getReportApiEndpoint(): string {
   const normalizedEnvEndpoint = normalizeEndpoint(envEndpoint);
   if (normalizedEnvEndpoint) return normalizedEnvEndpoint;
 
-  if (typeof window === "undefined") return "";
-  return normalizeEndpoint(window.localStorage.getItem(endpointStorageKey));
+  const savedEndpoint =
+    typeof window === "undefined" ? "" : normalizeEndpoint(window.localStorage.getItem(endpointStorageKey));
+  if (savedEndpoint) return savedEndpoint;
+
+  return normalizeEndpoint(defaultEndpoint);
 }
 
 export function saveReportApiEndpoint(value: string): string {
