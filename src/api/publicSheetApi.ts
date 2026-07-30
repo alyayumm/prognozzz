@@ -176,6 +176,7 @@ function buildRecord(date: string, city: City, metric: Metric, plan: number, fac
     fact,
     forecast: 0,
     recommendations: 0,
+    omQualified: 0,
     comment: "",
   };
 }

@@ -25,6 +25,7 @@ const HEADERS = {
     'comment',
     'updatedAt',
     'recommendations',
+    'omQualified',
   ],
   Month_Config: [
     'monthKey',
@@ -50,6 +51,7 @@ const HEADERS = {
     'metric',
     'plan',
     'fact',
+    'omQualified',
     'forecast',
     'open',
     'low',
@@ -331,6 +333,7 @@ function rebuildWeeklySummary_(monthKey) {
       metric,
       sum_(rows, 'plan'),
       sum_(rows, 'fact'),
+      sum_(rows, 'omQualified'),
       sum_(rows, 'forecast'),
       dailyTotals[0] || 0,
       nonZeroDailyTotals.length ? Math.min.apply(null, nonZeroDailyTotals) : 0,
@@ -381,6 +384,7 @@ function dailyRow_(record) {
     record.comment || '',
     new Date(),
     Number(record.recommendations || 0),
+    record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
   ];
 }
 
@@ -472,6 +476,7 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
           forecast: plan,
           comment: current.comment || '',
           recommendations: current.recommendations || 0,
+          omQualified: metric === 'Квалы' ? Number(current.omQualified || 0) : 0,
         });
         if (rowById[id]) {
           sheet.getRange(rowById[id], 1, 1, values.length).setValues([values]);
@@ -501,6 +506,7 @@ function normalizeDailyUpdate_(record) {
     forecast: record.forecast !== undefined ? record.forecast : (current ? current.forecast : 0),
     comment: record.comment !== undefined ? record.comment : (current ? current.comment : ''),
     recommendations: record.recommendations !== undefined ? record.recommendations : (current ? current.recommendations : 0),
+    omQualified: metric === 'Квалы' ? (record.omQualified !== undefined ? record.omQualified : (current ? current.omQualified : 0)) : 0,
   };
 }
 
@@ -519,6 +525,7 @@ function normalizeDailyForClient_(record) {
     fact: Number(record.fact || 0),
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
+    omQualified: record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
     comment: record.comment || '',
   };
 }
@@ -707,7 +714,7 @@ function validateDailyRecord_(record) {
   ['id', 'date', 'city', 'metric'].forEach((field) => {
     if (!record[field]) throw new Error('Нет поля дневной записи: ' + field);
   });
-  ['plan', 'fact', 'forecast', 'recommendations'].forEach((field) => {
+  ['plan', 'fact', 'forecast', 'recommendations', 'omQualified'].forEach((field) => {
     if (Number(record[field] || 0) < 0) throw new Error('Метрика не может быть отрицательной: ' + field);
   });
 }
@@ -732,6 +739,9 @@ function sum_(rows, field) {
   }
   if (field === 'recommendations') {
     return rows.reduce((total, row) => total + Number(row.recommendations || 0), 0);
+  }
+  if (field === 'omQualified') {
+    return rows.reduce((total, row) => total + (row.metric === 'Квалы' ? Number(row.omQualified || 0) : 0), 0);
   }
   return rows.reduce((total, row) => total + Number(row[field] || 0), 0);
 }

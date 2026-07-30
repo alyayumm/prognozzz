@@ -30,6 +30,7 @@ import { callReportApi, getReportApiEndpoint, saveReportApiEndpoint, type MonthP
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { buildAttentionItems } from "./lib/insights";
 import {
+  applyTrafficModeToTotals,
   buildConversions,
   buildMetricTotals,
   buildOverallMonths,
@@ -38,7 +39,9 @@ import {
   filterRecordsByScope,
   getMonthTiming,
   getPeriodStatus,
+  metricFactForTraffic,
   netFact,
+  omQualifiedValue,
   percent,
   recommendationValue,
   reportScopes,
@@ -46,6 +49,7 @@ import {
   total,
   type MetricTotals,
   type ReportScope,
+  type TrafficMode,
 } from "./lib/metrics";
 import type {
   City,
@@ -73,7 +77,7 @@ type AdminTab = "day" | "month" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
-type DailyAdminMetricDraft = { fact: number; recommendations: number };
+type DailyAdminMetricDraft = { fact: number; recommendations: number; omQualified: number };
 type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
@@ -137,7 +141,7 @@ const planRingItems: Array<{ metric: Metric; label: string; className: string; r
 ];
 const dailyChartMeta: Array<{ metric: DailyMetricKey; sourceMetric: Metric; title: string }> = [
   { metric: "leads", sourceMetric: "Лиды", title: "Лиды" },
-  { metric: "qualifiedLeads", sourceMetric: "Квалы", title: "Квалы / целевые лиды" },
+  { metric: "qualifiedLeads", sourceMetric: "Квалы", title: "КВАЛ ОП" },
   { metric: "sales", sourceMetric: "Продажи", title: "Продажи" },
 ];
 const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; dayIndex: number; defaultValue: number }> = [
@@ -163,6 +167,7 @@ export default function App() {
   const [selectedMetric, setSelectedMetric] = useState<Metric>("Лиды");
   const [selectedMonthKey, setSelectedMonthKey] = useState(initialState.selectedMonthKey);
   const [selectedScope, setSelectedScope] = useState<ReportScope>("Все");
+  const [trafficMode, setTrafficMode] = useState<TrafficMode>("op");
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [adminTab, setAdminTab] = useState<AdminTab>("day");
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
@@ -225,8 +230,9 @@ export default function App() {
     [activeWeek, reportEvents],
   );
   const metricTotals = useMemo(() => mergeTotals(weeks), [weeks]);
-  const conversions = useMemo(() => buildConversions(metricTotals), [metricTotals]);
-  const periodStatus = useMemo(() => getPeriodStatus(metricTotals), [metricTotals]);
+  const displayMetricTotals = useMemo(() => applyTrafficModeToTotals(metricTotals, trafficMode), [metricTotals, trafficMode]);
+  const conversions = useMemo(() => buildConversions(metricTotals, trafficMode), [metricTotals, trafficMode]);
+  const periodStatus = useMemo(() => getPeriodStatus(displayMetricTotals), [displayMetricTotals]);
   const monthTiming = useMemo(() => getMonthTiming(monthDates, todayIso), [monthDates, todayIso]);
   const allMonths = useMemo(
     () => buildOverallMonths(reportRecords, reportEvents, monthConfigs).map((month) => ({
@@ -541,9 +547,11 @@ export default function App() {
           monthConfigs={monthConfigs}
           selectedMonthKey={selectedMonthKey}
           selectedScope={selectedScope}
+          trafficMode={trafficMode}
           todayIso={todayIso}
           selectMonth={selectMonth}
           setSelectedScope={setSelectedScope}
+          setTrafficMode={setTrafficMode}
           onCreateMonth={openCreateMonth}
           onExport={printCurrentPage}
         />
@@ -561,6 +569,7 @@ export default function App() {
                 selectedMetric={selectedMetric}
                 setSelectedMetric={setSelectedMetric}
                 selectedScope={selectedScope}
+                trafficMode={trafficMode}
                 todayIso={todayIso}
                 events={reportEvents}
               />
@@ -568,7 +577,7 @@ export default function App() {
             {mode === "month" && (
               <MonthDashboard
                 config={selectedMonthConfig}
-                totals={metricTotals}
+                totals={displayMetricTotals}
                 conversions={conversions}
                 weeks={weeks}
                 events={currentMonthEvents}
@@ -576,6 +585,7 @@ export default function App() {
                 monthTiming={monthTiming}
                 status={periodStatus}
                 selectedScope={selectedScope}
+                trafficMode={trafficMode}
                 todayIso={todayIso}
                 months={monthConfigs}
                 selectedMonthKey={selectedMonthKey}
@@ -588,12 +598,13 @@ export default function App() {
             {mode === "monthDaily" && (
               <MonthDailyDashboard
                 config={selectedMonthConfig}
-                totals={metricTotals}
+                totals={displayMetricTotals}
                 records={currentMonthRecords}
                 events={currentMonthEvents}
                 monthDates={monthDates}
                 monthTiming={monthTiming}
                 selectedScope={selectedScope}
+                trafficMode={trafficMode}
                 todayIso={todayIso}
                 highlightedEventId={highlightedDailyEventId}
               />
@@ -608,6 +619,7 @@ export default function App() {
                 records={currentMonthRecords}
                 events={activeWeekEvents}
                 selectedScope={selectedScope}
+                trafficMode={trafficMode}
               />
             )}
             {mode === "messages" && (
@@ -764,9 +776,11 @@ function Topbar({
   monthConfigs,
   selectedMonthKey,
   selectedScope,
+  trafficMode,
   todayIso,
   selectMonth,
   setSelectedScope,
+  setTrafficMode,
   onCreateMonth,
   onExport,
 }: {
@@ -775,9 +789,11 @@ function Topbar({
   monthConfigs: MonthConfig[];
   selectedMonthKey: string;
   selectedScope: ReportScope;
+  trafficMode: TrafficMode;
   todayIso: string;
   selectMonth: (monthKey: string) => void;
   setSelectedScope: (scope: ReportScope) => void;
+  setTrafficMode: (mode: TrafficMode) => void;
   onCreateMonth: () => void;
   onExport: () => void;
 }) {
@@ -799,6 +815,7 @@ function Topbar({
           <ChevronDown size={16} />
         </label>
         <CityToggle value={selectedScope} onChange={setSelectedScope} />
+        <TrafficToggle value={trafficMode} onChange={setTrafficMode} />
         <span className="updated-pill">обновлено {formatDay(todayIso)}</span>
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
@@ -830,6 +847,7 @@ function AllMonthsDashboard({
   selectedMetric,
   setSelectedMetric,
   selectedScope,
+  trafficMode,
   todayIso,
   events,
 }: {
@@ -837,13 +855,15 @@ function AllMonthsDashboard({
   selectedMetric: Metric;
   setSelectedMetric: (metric: Metric) => void;
   selectedScope: ReportScope;
+  trafficMode: TrafficMode;
   todayIso: string;
   events: EventItem[];
 }) {
-  const totals = mergeTotals(months.flatMap((month) => month.weeks));
+  const rawTotals = mergeTotals(months.flatMap((month) => month.weeks));
+  const totals = applyTrafficModeToTotals(rawTotals, trafficMode);
   const status = getPeriodStatus(totals);
   const insights = buildAttentionItems(totals, events);
-  const worstMonth = pickMonthByCompletion(months, "worst");
+  const worstMonth = pickMonthByCompletion(months, "worst", trafficMode);
   const monthRange = getMonthRangeLabel(months);
 
   return (
@@ -855,6 +875,7 @@ function AllMonthsDashboard({
         subtitle="Сравнение план-факт и прогноза Optima по месяцам"
         facts={[
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
+          `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
           `Период: ${monthRange}`,
           `Зона риска: ${worstMonth}`,
           `Событий в периоде: ${events.length}`,
@@ -863,7 +884,7 @@ function AllMonthsDashboard({
 
       <div className="weekly-sync-grid dashboard-weekly-grid">
         {metrics.map((metric) => (
-          <MetricMonthCard key={metric} metric={metric} months={months} />
+          <MetricMonthCard key={metric} metric={metric} months={months} trafficMode={trafficMode} />
         ))}
       </div>
 
@@ -874,10 +895,10 @@ function AllMonthsDashboard({
         >
           <MetricSelect value={selectedMetric} onChange={setSelectedMetric} />
         </PanelHead>
-        <ContinuousDashboardChart months={months} metric={selectedMetric} todayIso={todayIso} />
+        <ContinuousDashboardChart months={months} metric={selectedMetric} todayIso={todayIso} trafficMode={trafficMode} />
       </section>
 
-      <MonthMatrix months={months} />
+      <MonthMatrix months={months} trafficMode={trafficMode} />
       <InsightPanel items={insights} />
     </div>
   );
@@ -893,6 +914,7 @@ function MonthDashboard({
   monthTiming,
   status,
   selectedScope,
+  trafficMode,
   todayIso,
   months,
   selectedMonthKey,
@@ -910,6 +932,7 @@ function MonthDashboard({
   monthTiming: ReturnType<typeof getMonthTiming>;
   status: ReturnType<typeof getPeriodStatus>;
   selectedScope: ReportScope;
+  trafficMode: TrafficMode;
   todayIso: string;
   months: MonthConfig[];
   selectedMonthKey: string;
@@ -924,6 +947,7 @@ function MonthDashboard({
     monthTiming.isClosed,
     forecastCoefficients,
     selectedScope === "Все" ? config.plan : undefined,
+    trafficMode,
   );
   const summaries = metrics.map((metric) =>
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
@@ -940,16 +964,17 @@ function MonthDashboard({
           `Прошло дней: ${monthTiming.passed}`,
           `Осталось дней: ${monthTiming.left}`,
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
+          `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
           `Событий: ${events.length}`,
         ]}
       />
 
-      <MetricKpiStrip totals={totals} isClosedMonth={monthTiming.isClosed} summaries={summaries} />
-      <MonthEndForecastPanel projection={monthForecast} />
-      <PlanCompletionWidget totals={totals} periodLabel="План месяца" />
+      <MetricKpiStrip totals={totals} isClosedMonth={monthTiming.isClosed} summaries={summaries} trafficMode={trafficMode} />
+      <MonthEndForecastPanel projection={monthForecast} trafficMode={trafficMode} />
+      <PlanCompletionWidget totals={totals} periodLabel="План месяца" trafficMode={trafficMode} />
       <RecommendationWeekPanel weeks={weeks} />
 
-      <ConversionCards conversions={conversions} />
+      <ConversionCards conversions={conversions} trafficMode={trafficMode} />
 
       <section className="analytics-panel">
         <PanelHead
@@ -963,6 +988,7 @@ function MonthDashboard({
               metric={metric}
               weeks={weeks}
               todayIso={todayIso}
+              trafficMode={trafficMode}
             />
           ))}
         </div>
@@ -970,6 +996,28 @@ function MonthDashboard({
 
       <PlanNeedGrid summaries={summaries} />
       <InsightPanel items={insights} />
+    </div>
+  );
+}
+
+function TrafficToggle({ value, onChange }: { value: TrafficMode; onChange: (value: TrafficMode) => void }) {
+  const options: Array<{ value: TrafficMode; label: string }> = [
+    { value: "op", label: "Трафик ОП" },
+    { value: "marketing", label: "Трафик маркетинг" },
+  ];
+
+  return (
+    <div className="city-toggle traffic-toggle" aria-label="Режим трафика">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          className={value === option.value ? "selected" : ""}
+          onClick={() => onChange(option.value)}
+          type="button"
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -982,6 +1030,7 @@ function MonthDailyDashboard({
   monthDates,
   monthTiming,
   selectedScope,
+  trafficMode,
   todayIso,
   highlightedEventId,
 }: {
@@ -992,10 +1041,11 @@ function MonthDailyDashboard({
   monthDates: string[];
   monthTiming: ReturnType<typeof getMonthTiming>;
   selectedScope: ReportScope;
+  trafficMode: TrafficMode;
   todayIso: string;
   highlightedEventId: string | null;
 }) {
-  const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso));
+  const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso, trafficMode));
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
   const status = getPeriodStatus(totals);
 
@@ -1009,6 +1059,7 @@ function MonthDailyDashboard({
         facts={[
           `Дней в месяце: ${monthDates.length}`,
           `Прошло дней: ${monthTiming.passed}`,
+          `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
           `Событий месяца: ${events.length}`,
           monthTiming.isClosed ? "Месяц завершен" : `Осталось дней: ${monthTiming.left}`,
         ]}
@@ -1017,7 +1068,7 @@ function MonthDailyDashboard({
       <section className="daily-kpi-summary" aria-label="Краткие показатели месяца по дням">
         {summaries.map((summary) => (
           <article key={summary.metric} className="daily-kpi-card">
-            <span>{summary.metric === "Квалы" ? "КВАЛ / целевые лиды" : summary.metric}</span>
+            <span>{summary.metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : summary.metric}</span>
             <strong>{formatNumber(summary.fact)}</strong>
             <div>
               <small>Optima {summary.forecast === null ? "скрыт" : formatNumber(summary.forecast)}</small>
@@ -1174,6 +1225,7 @@ function WeekDashboard({
   records,
   events,
   selectedScope,
+  trafficMode,
 }: {
   weeks: WeekSummary[];
   selectedWeek: number;
@@ -1183,9 +1235,10 @@ function WeekDashboard({
   records: DailyRecord[];
   events: EventItem[];
   selectedScope: ReportScope;
+  trafficMode: TrafficMode;
 }) {
-  const totals = week.totals;
-  const conversions = buildConversions(totals);
+  const totals = applyTrafficModeToTotals(week.totals, trafficMode);
+  const conversions = buildConversions(week.totals, trafficMode);
   const status = getPeriodStatus(totals);
   const insights = buildAttentionItems(totals, events);
 
@@ -1197,6 +1250,7 @@ function WeekDashboard({
         title="Где внутри недели началось отклонение"
         facts={[
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
+          `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
           `Дней в неделе: ${dates.length}`,
           `Событий: ${events.length}`,
           `Лид → квал: ${conversions.leadToQualified}%`,
@@ -1216,12 +1270,12 @@ function WeekDashboard({
         </label>
       </div>
 
-      <MetricKpiStrip totals={totals} isClosedMonth />
-      <PlanCompletionWidget totals={totals} periodLabel="План недели" />
+      <MetricKpiStrip totals={totals} isClosedMonth trafficMode={trafficMode} />
+      <PlanCompletionWidget totals={totals} periodLabel="План недели" trafficMode={trafficMode} />
 
       <div className="dashboard-two-cols">
-        <DailyWeekEditor dates={dates} records={records} />
-        <ConversionCards conversions={conversions} />
+        <DailyWeekEditor dates={dates} records={records} trafficMode={trafficMode} />
+        <ConversionCards conversions={conversions} trafficMode={trafficMode} />
       </div>
 
       <InsightPanel items={insights} />
@@ -1370,10 +1424,12 @@ function MetricKpiStrip({
   totals,
   isClosedMonth,
   summaries,
+  trafficMode = "op",
 }: {
   totals: MetricTotals;
   isClosedMonth: boolean;
   summaries?: MetricSummary[];
+  trafficMode?: TrafficMode;
 }) {
   return (
     <section className="kpi-strip">
@@ -1385,7 +1441,7 @@ function MetricKpiStrip({
         const forecastValue = summary?.forecast ?? (isClosedMonth ? null : item.forecast);
         return (
           <article key={metric} className="kpi">
-            <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+            <span>{metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : metric}</span>
             <strong>{formatNumber(item.fact)}</strong>
             <div className="kpi-row">
               <small>План {formatNumber(item.plan)}</small>
@@ -1405,8 +1461,10 @@ function MetricKpiStrip({
 
 function MonthEndForecastPanel({
   projection,
+  trafficMode = "op",
 }: {
   projection: ReturnType<typeof buildMonthEndForecast>;
+  trafficMode?: TrafficMode;
 }) {
   return (
     <section className="month-end-forecast-panel">
@@ -1423,7 +1481,7 @@ function MonthEndForecastPanel({
           const item = projection.metrics[metric];
           return (
             <article key={metric}>
-              <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+              <span>{metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : metric}</span>
               <strong>{formatNumber(item.projected)}</strong>
               <div className="forecast-progress">
                 <i style={{ width: `${Math.min(item.completion, 130)}%` }} />
@@ -1444,7 +1502,15 @@ function MonthEndForecastPanel({
   );
 }
 
-function PlanCompletionWidget({ totals, periodLabel }: { totals: MetricTotals; periodLabel: string }) {
+function PlanCompletionWidget({
+  totals,
+  periodLabel,
+  trafficMode = "op",
+}: {
+  totals: MetricTotals;
+  periodLabel: string;
+  trafficMode?: TrafficMode;
+}) {
   const averageCompletion = Math.round(
     planRingItems.reduce((sum, item) => sum + percent(totals[item.metric].fact, totals[item.metric].plan), 0) / planRingItems.length,
   );
@@ -1492,7 +1558,7 @@ function PlanCompletionWidget({ totals, periodLabel }: { totals: MetricTotals; p
             return (
               <div key={item.metric}>
                 <i className={item.className} />
-                <span>{item.label}</span>
+                <span>{item.metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : item.label}</span>
                 <strong>{completion}%</strong>
                 <small>{formatNumber(totals[item.metric].fact)} из {formatNumber(totals[item.metric].plan)}</small>
               </div>
@@ -1529,22 +1595,32 @@ function FunnelOverview({ totals, conversions }: { totals: MetricTotals; convers
   );
 }
 
-function ConversionCards({ conversions }: { conversions: ReturnType<typeof buildConversions> }) {
+function ConversionCards({
+  conversions,
+  trafficMode,
+}: {
+  conversions: ReturnType<typeof buildConversions>;
+  trafficMode: TrafficMode;
+}) {
+  const isMarketing = trafficMode === "marketing";
   return (
     <section className="conversion-panel">
       <PanelHead title="Конверсии" description="Главные управленческие переходы воронки." />
       <div className="conversion-grid">
         <article>
-          <span>Лид → КВАЛ</span>
+          <span>{isMarketing ? "Лид → КВАЛ маркетинг" : "Лид → КВАЛ ОП"}</span>
           <strong>{conversions.leadToQualified}%</strong>
+          <small>{isMarketing ? `ОП отдельно: ${conversions.opLeadToQualified}%` : `Маркетинг: ${conversions.marketingLeadToQualified}%`}</small>
         </article>
         <article>
           <span>КВАЛ → продажа</span>
           <strong>{conversions.qualifiedToSale}%</strong>
+          <small>{isMarketing ? "с учетом ОМ КВАЛ" : "по квалам ОП"}</small>
         </article>
         <article className="secondary">
-          <span>Лид → продажа</span>
-          <strong>{conversions.leadToSale}%</strong>
+          <span>{isMarketing ? "ОМ КВАЛ сверху" : "ОМ КВАЛ отдельно"}</span>
+          <strong>{formatNumber(conversions.omQualified)}</strong>
+          <small>не смешан с КВАЛ ОП</small>
         </article>
       </div>
     </section>
@@ -1586,10 +1662,12 @@ function ContinuousDashboardChart({
   months,
   metric,
   todayIso,
+  trafficMode,
 }: {
   months: Array<{ config: MonthConfig; weeks: WeekSummary[] }>;
   metric: Metric;
   todayIso: string;
+  trafficMode: TrafficMode;
 }) {
   const flatWeeks = months.flatMap((month) =>
     month.weeks.map((week) => ({
@@ -1600,16 +1678,21 @@ function ContinuousDashboardChart({
     })),
   );
   const values = flatWeeks.map((item, index) => {
-    const plan = item.week.totals[metric].plan;
-    const fact = item.week.totals[metric].fact;
-    const forecast = item.week.totals[metric].forecast;
-    const previous = index > 0 ? flatWeeks[index - 1].week.totals[metric].fact : null;
+    const metricTotal = item.week.totals[metric];
+    const plan = metricTotal.plan;
+    const fact = metricFactForTraffic(metric, metricTotal, trafficMode);
+    const opFact = metricTotal.fact;
+    const omQualified = metric === "Квалы" ? metricTotal.omQualified : 0;
+    const forecast = metricTotal.forecast;
+    const previous = index > 0 ? metricFactForTraffic(metric, flatWeeks[index - 1].week.totals[metric], trafficMode) : null;
     const delta = previous ? ((fact - previous) / previous) * 100 : 0;
     const isFutureEmpty = isFutureWeekWithoutFact(item.week, metric, todayIso);
     return {
       ...item,
       plan,
       fact,
+      opFact,
+      omQualified,
       forecast,
       delta,
       trend: isFutureEmpty ? "warning" as const : trendClass(delta, previous === null),
@@ -1650,6 +1733,7 @@ function ContinuousDashboardChart({
             {values.map((item, index) => {
               const barTone = item.fact <= 0 ? "inactive" : item.trend;
               const deltaLabel = item.isFutureEmpty ? "нет FACT" : formatPercentDelta(item.delta, item.trend);
+              const showOmSegment = metric === "Квалы" && trafficMode === "marketing" && item.omQualified > 0 && item.fact > 0;
               return (
               <div
                 className={`continuous-week ${tooltipEdgeClass(index, values.length)}`}
@@ -1657,10 +1741,20 @@ function ContinuousDashboardChart({
                 data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
               >
                 <div className="continuous-bar-area">
-                  <span
-                    className={`continuous-bar ${barTone}`}
-                    style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
-                  />
+                  {showOmSegment ? (
+                    <span
+                      className={`continuous-bar continuous-bar-stack ${barTone}`}
+                      style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+                    >
+                      <i className="op-segment" style={{ height: `${Math.max((item.opFact / item.fact) * 100, 0)}%` }} />
+                      <i className="om-segment" style={{ height: `${Math.min((item.omQualified / item.fact) * 100, 100)}%` }} />
+                    </span>
+                  ) : (
+                    <span
+                      className={`continuous-bar ${barTone}`}
+                      style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+                    />
+                  )}
                 </div>
                 <strong>{formatNumber(item.fact)}</strong>
                 <small>{item.week.week} нед.</small>
@@ -1673,6 +1767,7 @@ function ContinuousDashboardChart({
           </div>
           <div className="continuous-legend">
             <span><i className="legend-dot fact" /> Факт</span>
+            {metric === "Квалы" && trafficMode === "marketing" && <span><i className="legend-dot om" /> ОМ КВАЛ</span>}
             <span><i className="legend-line plan" /> Прогноз Optima</span>
           </div>
         </div>
@@ -1685,10 +1780,12 @@ function MetricWeekCard({
   metric,
   weeks,
   todayIso,
+  trafficMode,
 }: {
   metric: Metric;
   weeks: WeekSummary[];
   todayIso: string;
+  trafficMode: TrafficMode;
 }) {
   return (
     <article className="week-chart-card">
@@ -1696,12 +1793,12 @@ function MetricWeekCard({
         <div>
           <span className="chart-eyebrow">график по неделям</span>
           <div className="chart-title-row">
-            <strong className="chart-title">{metric.toUpperCase()}</strong>
+            <strong className="chart-title">{getMetricDisplayTitle(metric, trafficMode)}</strong>
             <Info size={15} aria-hidden="true" />
           </div>
         </div>
       </div>
-      <WeeklyTrendChart weeks={weeks} metric={metric} todayIso={todayIso} />
+      <WeeklyTrendChart weeks={weeks} metric={metric} todayIso={todayIso} trafficMode={trafficMode} />
     </article>
   );
 }
@@ -1761,9 +1858,11 @@ function RecommendationMetricCard({ metric, weeks }: { metric: Metric; weeks: We
 function MetricMonthCard({
   metric,
   months,
+  trafficMode,
 }: {
   metric: Metric;
   months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  trafficMode: TrafficMode;
 }) {
   return (
     <article className="week-chart-card month-chart-card">
@@ -1771,12 +1870,12 @@ function MetricMonthCard({
         <div>
           <span className="chart-eyebrow">график по месяцам</span>
           <div className="chart-title-row">
-            <strong className="chart-title">{getMonthMetricTitle(metric)}</strong>
+            <strong className="chart-title">{getMonthMetricTitle(metric, trafficMode)}</strong>
             <Info size={15} aria-hidden="true" />
           </div>
         </div>
       </div>
-      <MonthlyTrendChart months={months} metric={metric} />
+      <MonthlyTrendChart months={months} metric={metric} trafficMode={trafficMode} />
     </article>
   );
 }
@@ -1784,22 +1883,28 @@ function MetricMonthCard({
 function MonthlyTrendChart({
   months,
   metric,
+  trafficMode,
 }: {
   months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
   metric: Metric;
+  trafficMode: TrafficMode;
 }) {
   const chartHeight = 210;
   const monthTotals = months.map((month) => mergeTotals(month.weeks));
   const values = months.map((month, index) => {
     const totals = monthTotals[index];
     const plan = totals[metric].plan;
-    const fact = totals[metric].fact;
-    const previous = index > 0 ? monthTotals[index - 1][metric].fact : null;
+    const fact = metricFactForTraffic(metric, totals[metric], trafficMode);
+    const opFact = totals[metric].fact;
+    const omQualified = metric === "Квалы" ? totals[metric].omQualified : 0;
+    const previous = index > 0 ? metricFactForTraffic(metric, monthTotals[index - 1][metric], trafficMode) : null;
     const delta = previous ? ((fact - previous) / previous) * 100 : 0;
     return {
       month,
       plan,
       fact,
+      opFact,
+      omQualified,
       delta,
       trend: trendClass(delta, previous === null),
       label: month.config.label,
@@ -1816,11 +1921,13 @@ function MonthlyTrendChart({
       <ChartLine className="plan-line" segments={planSegments} />
       <div className="mini-chart-legend">
         <span><i className="legend-dot fact" /> Факт</span>
+        {metric === "Квалы" && trafficMode === "marketing" && <span><i className="legend-dot om" /> ОМ КВАЛ</span>}
         <span><i className="legend-line plan" /> Прогноз Optima</span>
       </div>
       {values.map((item, index) => {
         const barTone = item.fact <= 0 ? "inactive" : item.trend;
         const deltaLabel = formatPercentDelta(item.delta, item.trend);
+        const showOmSegment = metric === "Квалы" && trafficMode === "marketing" && item.omQualified > 0 && item.fact > 0;
         return (
           <div
             key={item.month.config.monthKey}
@@ -1828,10 +1935,20 @@ function MonthlyTrendChart({
             data-tooltip={`${item.label}\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
           >
             <div className="trend-plot" style={{ height: chartHeight }}>
-              <span
-                className={`trend-bar ${barTone}`}
-                style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
-              />
+              {showOmSegment ? (
+                <span
+                  className={`trend-bar trend-bar-stack ${barTone}`}
+                  style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+                >
+                  <i className="op-segment" style={{ height: `${Math.max((item.opFact / item.fact) * 100, 0)}%` }} />
+                  <i className="om-segment" style={{ height: `${Math.min((item.omQualified / item.fact) * 100, 100)}%` }} />
+                </span>
+              ) : (
+                <span
+                  className={`trend-bar ${barTone}`}
+                  style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+                />
+              )}
             </div>
             <strong>{formatNumber(item.fact)}</strong>
             <small>{item.shortLabel}</small>
@@ -1848,22 +1965,28 @@ function WeeklyTrendChart({
   weeks,
   metric,
   todayIso,
+  trafficMode,
 }: {
   weeks: WeekSummary[];
   metric: Metric;
   todayIso: string;
+  trafficMode: TrafficMode;
 }) {
   const chartHeight = 210;
   const values = weeks.map((week, index) => {
     const plan = week.totals[metric].plan;
-    const fact = week.totals[metric].fact;
-    const previous = index > 0 ? weeks[index - 1].totals[metric].fact : null;
+    const fact = metricFactForTraffic(metric, week.totals[metric], trafficMode);
+    const opFact = week.totals[metric].fact;
+    const omQualified = metric === "Квалы" ? week.totals[metric].omQualified : 0;
+    const previous = index > 0 ? metricFactForTraffic(metric, weeks[index - 1].totals[metric], trafficMode) : null;
     const delta = previous ? ((fact - previous) / previous) * 100 : 0;
     const isFutureEmpty = isFutureWeekWithoutFact(week, metric, todayIso);
     return {
       week,
       plan,
       fact,
+      opFact,
+      omQualified,
       delta,
       trend: isFutureEmpty ? "warning" as const : trendClass(delta, previous === null),
       hasForecast: shouldShowForecastForWeek(week, todayIso),
@@ -1880,11 +2003,13 @@ function WeeklyTrendChart({
       <ChartLine className="plan-line" segments={planSegments} />
       <div className="mini-chart-legend">
         <span><i className="legend-dot fact" /> Факт</span>
+        {metric === "Квалы" && trafficMode === "marketing" && <span><i className="legend-dot om" /> ОМ КВАЛ</span>}
         <span><i className="legend-line plan" /> Прогноз Optima</span>
       </div>
       {values.map((item, index) => {
         const barTone = item.fact <= 0 ? "inactive" : item.trend;
         const deltaLabel = item.isFutureEmpty ? "нет FACT" : formatPercentDelta(item.delta, item.trend);
+        const showOmSegment = metric === "Квалы" && trafficMode === "marketing" && item.omQualified > 0 && item.fact > 0;
         return (
         <div
           key={item.week.week}
@@ -1892,10 +2017,20 @@ function WeeklyTrendChart({
           data-tooltip={`${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
         >
           <div className="trend-plot" style={{ height: chartHeight }}>
-            <span
-              className={`trend-bar ${barTone}`}
-              style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
-            />
+            {showOmSegment ? (
+              <span
+                className={`trend-bar trend-bar-stack ${barTone}`}
+                style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+              >
+                <i className="op-segment" style={{ height: `${Math.max((item.opFact / item.fact) * 100, 0)}%` }} />
+                <i className="om-segment" style={{ height: `${Math.min((item.omQualified / item.fact) * 100, 100)}%` }} />
+              </span>
+            ) : (
+              <span
+                className={`trend-bar ${barTone}`}
+                style={{ height: `${Math.max((item.fact / chartMax) * chartHeight, 8)}px` }}
+              />
+            )}
           </div>
           <strong>{formatNumber(item.fact)}</strong>
           <small>{item.week.week} нед.</small>
@@ -1959,16 +2094,24 @@ function ChartAxisLabels({ max }: { max: number }) {
   );
 }
 
-function MonthMatrix({ months }: { months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }> }) {
+function MonthMatrix({
+  months,
+  trafficMode,
+}: {
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  trafficMode: TrafficMode;
+}) {
   return (
     <section className="analytics-panel">
       <PanelHead title="Матрица месяцев" description="Итоги месяца, две конверсии и динамика к предыдущему месяцу." />
       <div className="month-matrix">
         {months.map((month, monthIndex) => {
-          const totals = mergeTotals(month.weeks);
-          const previousTotals = monthIndex > 0 ? mergeTotals(months[monthIndex - 1].weeks) : null;
-          const conversions = buildConversions(totals);
-          const previousConversions = previousTotals ? buildConversions(previousTotals) : null;
+          const rawTotals = mergeTotals(month.weeks);
+          const previousRawTotals = monthIndex > 0 ? mergeTotals(months[monthIndex - 1].weeks) : null;
+          const totals = applyTrafficModeToTotals(rawTotals, trafficMode);
+          const previousTotals = previousRawTotals ? applyTrafficModeToTotals(previousRawTotals, trafficMode) : null;
+          const conversions = buildConversions(rawTotals, trafficMode);
+          const previousConversions = previousRawTotals ? buildConversions(previousRawTotals, trafficMode) : null;
           return (
             <article key={month.config.monthKey} className="month-matrix-row">
               <div>
@@ -1985,7 +2128,7 @@ function MonthMatrix({ months }: { months: Array<{ config: MonthConfig; events: 
                 </div>
               ))}
               <div>
-                <span>Лид → квал</span>
+                <span>{trafficMode === "marketing" ? "Лид → квал маркетинг" : "Лид → квал ОП"}</span>
                 <b className="matrix-value">
                   {conversions.leadToQualified}%
                   <MatrixTrendArrow trend={getValueTrend(conversions.leadToQualified, previousConversions?.leadToQualified ?? null)} />
@@ -2134,7 +2277,10 @@ function AdminDashboard({
             <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
             <strong>{formatNumber(totals[metric].fact)}</strong>
             <small>чистый факт после вычета рекомендаций</small>
-            <em>рекомендации: {formatNumber(totals[metric].recommendations)}</em>
+            <em>
+              рекомендации: {formatNumber(totals[metric].recommendations)}
+              {metric === "Квалы" && <> · ОМ КВАЛ: {formatNumber(totals[metric].omQualified)}</>}
+            </em>
           </article>
         ))}
         <article className="messages-total-card">
@@ -2221,6 +2367,19 @@ function AdminDayPanel({
     }));
   }
 
+  function setOmQualified(city: City, value: number) {
+    setDraft((current) => ({
+      ...current,
+      [city]: {
+        ...current[city],
+        Квалы: {
+          ...current[city].Квалы,
+          omQualified: Math.max(0, value || 0),
+        },
+      },
+    }));
+  }
+
   function saveDay() {
     const values = adminCities.flatMap((city) =>
       metrics.map((metric) => ({
@@ -2229,6 +2388,7 @@ function AdminDayPanel({
         metric,
         fact: draft[city][metric].fact,
         recommendations: draft[city][metric].recommendations,
+        omQualified: metric === "Квалы" ? draft[city][metric].omQualified : 0,
       })),
     );
     onSaveDailyValues(values, `${formatDay(selectedDate)} сохранен.`);
@@ -2236,7 +2396,7 @@ function AdminDayPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="День" description="В каждой метрике две колонки: FACT и Рекомендации. Отчет считает чистый факт = FACT минус рекомендации.">
+      <PanelHead title="День" description="КВАЛ ОП и ОМ КВАЛ хранятся отдельно. В режиме маркетинга отчет показывает КВАЛ ОП + ОМ КВАЛ.">
         <label className="admin-date-select">
           <span>Дата</span>
           <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
@@ -2259,10 +2419,16 @@ function AdminDayPanel({
               const record = findDailyRecord(records, selectedDate, city, metric);
               const plan = record?.plan ?? 0;
               const cleanFact = Math.max(0, draft[city][metric].fact - draft[city][metric].recommendations);
+              const isQualified = metric === "Квалы";
+              const marketingQualified = cleanFact + draft[city][metric].omQualified;
               return (
                 <label className="admin-fact-input" key={metric}>
-                  <span className="admin-input-labels"><b>FACT</b><b>Рекомендации</b></span>
-                  <span className="admin-metric-inputs">
+                  <span className={isQualified ? "admin-input-labels three" : "admin-input-labels"}>
+                    <b>{isQualified ? "КВАЛ ОП" : "FACT"}</b>
+                    <b>Рекомендации</b>
+                    {isQualified && <b>ОМ КВАЛ</b>}
+                  </span>
+                  <span className={isQualified ? "admin-metric-inputs three" : "admin-metric-inputs"}>
                     <input
                       type="number"
                       min="0"
@@ -2277,8 +2443,20 @@ function AdminDayPanel({
                       onChange={(event) => setRecommendations(city, metric, Number(event.target.value))}
                       aria-label={`${cityLabels[city]} ${metric} рекомендации`}
                     />
+                    {isQualified && (
+                      <input
+                        type="number"
+                        min="0"
+                        value={draft[city][metric].omQualified}
+                        onChange={(event) => setOmQualified(city, Number(event.target.value))}
+                        aria-label={`${cityLabels[city]} ОМ КВАЛ`}
+                      />
+                    )}
                   </span>
-                  <small>план {formatNumber(plan)} · чистый факт <b>{formatNumber(cleanFact)}</b></small>
+                  <small>
+                    план {formatNumber(plan)} · ОП <b>{formatNumber(cleanFact)}</b>
+                    {isQualified && <> · маркетинг <b>{formatNumber(marketingQualified)}</b></>}
+                  </small>
                 </label>
               );
             })}
@@ -2418,7 +2596,7 @@ function AdminMonthPanel({
                       <strong>{cityLabels[city]}</strong>
                       {metrics.map((metric) => (
                         <label className="compact-input" key={metric}>
-                          <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+                          <span>{metric === "Квалы" ? "КВАЛ ОП" : metric}</span>
                           <input
                             type="number"
                             min="0"
@@ -2426,6 +2604,9 @@ function AdminMonthPanel({
                             readOnly
                             title="Чтобы изменить значение, откройте вкладку День и нажмите Сохранить."
                           />
+                          {metric === "Квалы" && (
+                            <small>ОМ {formatNumber(findDailyRecord(records, date, city, metric)?.omQualified ?? 0)}</small>
+                          )}
                         </label>
                       ))}
                     </div>
@@ -2542,9 +2723,11 @@ function AdminForecastCoefficientsPanel({
 function DailyWeekEditor({
   dates,
   records,
+  trafficMode,
 }: {
   dates: string[];
   records: DailyRecord[];
+  trafficMode: TrafficMode;
 }) {
   return (
     <section className="daily-editor-panel">
@@ -2559,7 +2742,7 @@ function DailyWeekEditor({
             <div className="table-row" key={date}>
               <span className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></span>
               {metrics.map((metric) => {
-                const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
+                const value = metricFactFromRecords(records.filter((record) => record.date === date && record.metric === metric), metric, trafficMode);
                 return (
                   <label key={metric} className="compact-input">
                     <input type="number" value={value} readOnly title="Чтобы изменить неделю, отредактируйте значения конкретных дней." />
@@ -2576,7 +2759,7 @@ function DailyWeekEditor({
             <div className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></div>
             <div>
               {metrics.map((metric) => {
-                const value = total(records.filter((record) => record.date === date && record.metric === metric), "fact");
+                const value = metricFactFromRecords(records.filter((record) => record.date === date && record.metric === metric), metric, trafficMode);
                 return (
                   <span key={metric}>
                     <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
@@ -2924,6 +3107,7 @@ function buildMonthEndForecast(
   isClosedMonth: boolean,
   coefficients: ForecastCoefficients,
   planOverride?: Record<Metric, number>,
+  trafficMode: TrafficMode = "op",
 ) {
   const lastFactDate = getLastFactDate(records);
   const remainingDates = isClosedMonth ? [] : monthDates.filter((date) => !lastFactDate || date > lastFactDate);
@@ -2934,7 +3118,7 @@ function buildMonthEndForecast(
     remainingDatesCount: remainingDates.length,
     metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>>((acc, metric) => {
       const metricRecords = records.filter((record) => record.metric === metric);
-      const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients);
+      const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients, trafficMode);
       const fact = forecastParts.fact;
       const rawPlan = total(metricRecords, "plan");
       const plan = planOverride?.[metric] ?? rawPlan;
@@ -2958,6 +3142,7 @@ function forecastMetricByFactAverage(
   monthDates: string[],
   isClosedMonth: boolean,
   coefficients: ForecastCoefficients,
+  trafficMode: TrafficMode,
 ) {
   const recordsByCity = adminCities.map((city) => ({
     city,
@@ -2971,14 +3156,17 @@ function forecastMetricByFactAverage(
   recordsByCity.forEach(({ city, records }) => {
     const factDates = monthDates.filter((date) => {
       const dayRecords = records.filter((record) => record.date === date);
-      return dayRecords.some((record) => record.fact > 0 || recommendationValue(record) > 0);
+      return dayRecords.some((record) => record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0);
     });
-    const cityFact = total(records.filter((record) => factDates.includes(record.date)), "fact");
+    const cityFact = records
+      .filter((record) => factDates.includes(record.date))
+      .reduce((sum, record) => sum + metricFactForTraffic(metric, recordToMetricTotal(record), trafficMode), 0);
     const cityPlan = total(records, "plan");
 
     if (isClosedMonth) {
-      fact += total(records, "fact");
-      projected += total(records, "fact");
+      const closedFact = records.reduce((sum, record) => sum + metricFactForTraffic(metric, recordToMetricTotal(record), trafficMode), 0);
+      fact += closedFact;
+      projected += closedFact;
       return;
     }
 
@@ -3007,7 +3195,10 @@ function forecastMetricByFactAverage(
 }
 
 function getLastFactDate(records: DailyRecord[]): string | null {
-  const factDates = records.filter((record) => record.fact > 0 || recommendationValue(record) > 0).map((record) => record.date).sort();
+  const factDates = records
+    .filter((record) => record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0)
+    .map((record) => record.date)
+    .sort();
   return factDates[factDates.length - 1] ?? null;
 }
 
@@ -3036,11 +3227,26 @@ function mergeTotals(weeks: WeekSummary[]): MetricTotals {
         fact: sum.fact + week.totals[metric].fact,
         forecast: sum.forecast + week.totals[metric].forecast,
         recommendations: sum.recommendations + week.totals[metric].recommendations,
+        omQualified: sum.omQualified + week.totals[metric].omQualified,
       }),
-      { plan: 0, fact: 0, forecast: 0, recommendations: 0 },
+      { plan: 0, fact: 0, forecast: 0, recommendations: 0, omQualified: 0 },
     );
     return acc;
   }, {} as MetricTotals);
+}
+
+function recordToMetricTotal(record: DailyRecord) {
+  return {
+    plan: Number(record.plan || 0),
+    fact: netFact(record),
+    forecast: Number(record.forecast || 0),
+    recommendations: recommendationValue(record),
+    omQualified: omQualifiedValue(record),
+  };
+}
+
+function metricFactFromRecords(records: DailyRecord[], metric: Metric, trafficMode: TrafficMode): number {
+  return records.reduce((sum, record) => sum + metricFactForTraffic(metric, recordToMetricTotal(record), trafficMode), 0);
 }
 
 function applyOverallPlanOverrideToWeeks(
@@ -3084,11 +3290,11 @@ function applyOverallPlanOverrideToWeeks(
   }));
 }
 
-function pickMonthByCompletion(months: Array<{ config: MonthConfig; weeks: WeekSummary[] }>, mode: "best" | "worst") {
+function pickMonthByCompletion(months: Array<{ config: MonthConfig; weeks: WeekSummary[] }>, mode: "best" | "worst", trafficMode: TrafficMode = "op") {
   if (!months.length) return "нет данных";
   const sorted = [...months].sort((a, b) => {
-    const aTotals = mergeTotals(a.weeks);
-    const bTotals = mergeTotals(b.weeks);
+    const aTotals = applyTrafficModeToTotals(mergeTotals(a.weeks), trafficMode);
+    const bTotals = applyTrafficModeToTotals(mergeTotals(b.weeks), trafficMode);
     return percent(aTotals["Продажи"].fact, aTotals["Продажи"].plan) - percent(bTotals["Продажи"].fact, bTotals["Продажи"].plan);
   });
   return (mode === "best" ? sorted[sorted.length - 1] : sorted[0]).config.label;
@@ -3106,8 +3312,13 @@ function getShortMonthLabel(config: MonthConfig): string {
   return monthName.length <= 3 ? monthName : monthName.slice(0, 3);
 }
 
-function getMonthMetricTitle(metric: Metric): string {
-  if (metric === "Квалы") return "Целевые лиды / Квалы";
+function getMonthMetricTitle(metric: Metric, trafficMode: TrafficMode = "op"): string {
+  if (metric === "Квалы") return trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП";
+  return metric.toUpperCase();
+}
+
+function getMetricDisplayTitle(metric: Metric, trafficMode: TrafficMode = "op"): string {
+  if (metric === "Квалы") return trafficMode === "marketing" ? "КВАЛ МАРКЕТИНГ" : "КВАЛ ОП";
   return metric.toUpperCase();
 }
 
@@ -3125,12 +3336,14 @@ function buildMetricDailyChartData(
   events: EventItem[],
   monthDates: string[],
   todayIso: string,
+  trafficMode: TrafficMode,
 ): MetricDailyChartData {
   const metricRecords = records.filter((record) => record.metric === meta.sourceMetric);
-  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && (record.fact > 0 || recommendationValue(record) > 0));
+  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && (record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0));
 
   return {
     ...meta,
+    title: meta.sourceMetric === "Квалы" && trafficMode === "marketing" ? "КВАЛ маркетинг" : meta.title,
     points: monthDates.map((date) => {
       const dayRecords = metricRecords.filter((record) => record.date === date);
       const dayEvents = events.filter((event) =>
@@ -3139,7 +3352,7 @@ function buildMetricDailyChartData(
         (event.metric === "все" || event.metric === meta.sourceMetric),
       );
       const plan = sumNullable(dayRecords, "plan");
-      const factTotal = sumNullable(dayRecords, "fact");
+      const factTotal = sumNullable(dayRecords, "fact", meta.sourceMetric, trafficMode);
       const forecastRaw = sumNullable(dayRecords, "forecast");
       const forecast = forecastRaw ?? plan;
       const fact = factTotal !== null && (factTotal > 0 || hasAnyFact || date <= todayIso) ? factTotal : null;
@@ -3160,11 +3373,17 @@ function buildMetricDailyChartData(
   };
 }
 
-function sumNullable(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations"): number | null {
+function sumNullable(
+  records: DailyRecord[],
+  key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified",
+  metric?: Metric,
+  trafficMode: TrafficMode = "op",
+): number | null {
   if (!records.length) return null;
   return records.reduce((sum, record) => {
-    if (key === "fact") return sum + netFact(record);
+    if (key === "fact") return sum + metricFactForTraffic(metric ?? record.metric, recordToMetricTotal(record), trafficMode);
     if (key === "recommendations") return sum + recommendationValue(record);
+    if (key === "omQualified") return sum + omQualifiedValue(record);
     const value = Number(record[key]);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
@@ -3462,6 +3681,7 @@ function buildWeightedPlanRecordsForMonth(
           fact: 0,
           forecast: plan,
           recommendations: 0,
+          omQualified: 0,
           comment: "",
         };
       }),
@@ -3557,6 +3777,7 @@ function createDailyFactDraft(records: DailyRecord[], date: string): DailyAdminD
       metricAcc[metric] = {
         fact: record?.fact ?? 0,
         recommendations: record?.recommendations ?? 0,
+        omQualified: record?.omQualified ?? 0,
       };
       return metricAcc;
     }, {} as Record<Metric, DailyAdminMetricDraft>);
@@ -3574,7 +3795,7 @@ function dailyRecordNetFact(record: DailyRecord | undefined): number {
 
 function validateDailyValueUpdates(values: DailyValueUpdate[]): boolean {
   return values.some((value) => {
-    const checkedValues = [value.plan, value.fact, value.forecast, value.recommendations].filter((item) => item !== undefined);
+    const checkedValues = [value.plan, value.fact, value.forecast, value.recommendations, value.omQualified].filter((item) => item !== undefined);
     return checkedValues.some((item) => {
       const numericValue = Number(item);
       return !Number.isFinite(numericValue) || numericValue < 0;
@@ -3589,6 +3810,7 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
     fact: value.fact === undefined ? undefined : Math.max(0, Number(value.fact) || 0),
     forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
     recommendations: value.recommendations === undefined ? undefined : Math.max(0, Number(value.recommendations) || 0),
+    omQualified: value.omQualified === undefined ? undefined : Math.max(0, Number(value.omQualified) || 0),
   };
 }
 
@@ -3615,6 +3837,7 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     fact: value.fact ?? previous?.fact ?? 0,
     forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
     recommendations: value.recommendations ?? previous?.recommendations ?? 0,
+    omQualified: value.metric === "Квалы" ? value.omQualified ?? previous?.omQualified ?? 0 : 0,
     comment: value.comment ?? previous?.comment ?? "",
   };
 }
@@ -3626,6 +3849,7 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
     fact: Number(record.fact || 0),
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
+    omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) : 0,
     comment: record.comment ?? "",
   };
 }
@@ -3697,6 +3921,7 @@ function mergePublicSheetRecords(currentRecords: DailyRecord[], publicRecords: D
     recordMap.set(record.id, {
       ...record,
       recommendations: current?.recommendations ?? record.recommendations,
+      omQualified: current?.omQualified ?? record.omQualified,
       comment: current?.comment ?? record.comment,
     });
   });
@@ -3768,7 +3993,7 @@ function mergeSeedRecords(seedRecords: DailyRecord[], storedRecords: DailyRecord
 
 function getLatestActualRecordDate(records: DailyRecord[]): string | null {
   return records.reduce<string | null>((latestDate, record) => {
-    if (record.fact <= 0 && record.recommendations <= 0) return latestDate;
+    if (record.fact <= 0 && record.recommendations <= 0 && record.omQualified <= 0) return latestDate;
     if (!latestDate || record.date > latestDate) return record.date;
     return latestDate;
   }, null);
@@ -3809,8 +4034,8 @@ function normalizeForecastCoefficients(value: unknown): ForecastCoefficients {
 function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyRecord[] {
   return records.map((record) => {
     const normalized = normalizeDailyRecord(record);
-    if (normalized.date > todayIso && (normalized.fact > 0 || normalized.recommendations > 0)) {
-      return { ...normalized, fact: 0, recommendations: 0 };
+    if (normalized.date > todayIso && (normalized.fact > 0 || normalized.recommendations > 0 || normalized.omQualified > 0)) {
+      return { ...normalized, fact: 0, recommendations: 0, omQualified: 0 };
     }
     return normalized;
   });

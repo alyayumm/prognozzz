@@ -124,6 +124,7 @@ export function buildRecordsForMonth(config: MonthConfig, _monthOffset = 0, _fac
           fact,
           forecast,
           recommendations: imported?.recommendations ?? 0,
+          omQualified: imported?.omQualified ?? 0,
           comment: "",
         });
       });

@@ -4,6 +4,7 @@ export interface ImportedMetricSeries {
   plan: number[];
   fact: number[];
   recommendations: number[];
+  omQualified?: number[];
 }
 
 export interface ImportedDailySeries {
@@ -4639,7 +4640,7 @@ export function getImportedDailyPoint(
   city: City,
   metric: Metric,
   dateIso: string,
-): { plan: number; fact: number; recommendations: number } | null {
+): { plan: number; fact: number; recommendations: number; omQualified: number } | null {
   const series = importedDailySeries[city];
 
   if (!series || dateIso < series.startDate || dateIso > series.endDate) {
@@ -4654,5 +4655,6 @@ export function getImportedDailyPoint(
     plan: metricSeries.plan[offset] ?? 0,
     fact: metricSeries.fact[offset] ?? 0,
     recommendations: metricSeries.recommendations[offset] ?? 0,
+    omQualified: metricSeries.omQualified?.[offset] ?? 0,
   };
 }

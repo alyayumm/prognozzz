@@ -27,6 +27,7 @@ export interface DailyRecord {
   fact: number;
   forecast: number;
   recommendations: number;
+  omQualified: number;
   comment?: string;
 }
 
@@ -50,6 +51,7 @@ export interface DailyValueUpdate {
   fact?: number;
   forecast?: number;
   recommendations?: number;
+  omQualified?: number;
   comment?: string;
 }
 
@@ -60,12 +62,12 @@ export interface WeeklyAggregates {
   week: number;
   startDate: string;
   endDate: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number }>;
+  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
 }
 
 export interface MonthlyAggregates {
   monthKey: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number }>;
+  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
 }
 
 export interface CreateMonthPayload {
@@ -95,7 +97,7 @@ export interface WeekSummary {
   week: number;
   startDate: string;
   endDate: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number }>;
+  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
   open: number;
   high: number;
   low: number;

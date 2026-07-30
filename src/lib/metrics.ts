@@ -3,7 +3,9 @@ import { getMonthDates } from "../utils/date";
 import { buildWeeklySummary } from "../utils/report";
 
 export type ReportScope = "Все" | "МСК" | "СПБ";
-export type MetricTotals = Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number }>;
+export type TrafficMode = "op" | "marketing";
+export type MetricTotal = { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number };
+export type MetricTotals = Record<Metric, MetricTotal>;
 export type ConversionKey = "leadToQualified" | "qualifiedToSale" | "leadToSale";
 
 export const reportCities: City[] = ["МСК", "СПБ"];
@@ -41,6 +43,7 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
       fact: total(metricRecords, "fact"),
       forecast: total(metricRecords, "forecast"),
       recommendations: total(metricRecords, "recommendations"),
+      omQualified: total(metricRecords, "omQualified"),
     };
     return acc;
   }, {} as MetricTotals);
@@ -61,16 +64,49 @@ export function buildOverallMonths(records: DailyRecord[], events: EventItem[], 
     .filter((month) => month.weeks.length > 0);
 }
 
-export function buildConversions(totals: MetricTotals) {
+export function buildConversions(totals: MetricTotals, trafficMode: TrafficMode = "op") {
   const leads = totals["Лиды"]?.fact ?? 0;
-  const qualified = totals["Квалы"]?.fact ?? 0;
+  const opQualified = totals["Квалы"]?.fact ?? 0;
+  const omQualified = totals["Квалы"]?.omQualified ?? 0;
+  const marketingQualified = opQualified + omQualified;
+  const qualified = trafficMode === "marketing" ? marketingQualified : opQualified;
   const sales = totals["Продажи"]?.fact ?? 0;
 
   return {
     leadToQualified: percent(qualified, leads),
     qualifiedToSale: percent(sales, qualified),
     leadToSale: percent(sales, leads),
+    opLeadToQualified: percent(opQualified, leads),
+    marketingLeadToQualified: percent(marketingQualified, leads),
+    opQualified,
+    marketingQualified,
+    omQualified,
   };
+}
+
+export function applyTrafficModeToTotals(totals: MetricTotals, trafficMode: TrafficMode): MetricTotals {
+  return Object.fromEntries(
+    Object.entries(totals).map(([metric, item]) => [
+      metric,
+      metricTotalForTraffic(metric as Metric, item, trafficMode),
+    ]),
+  ) as MetricTotals;
+}
+
+export function metricTotalForTraffic(metric: Metric, totalValue: MetricTotal, trafficMode: TrafficMode): MetricTotal {
+  if (metric !== "Квалы" || trafficMode !== "marketing") return totalValue;
+  return {
+    ...totalValue,
+    fact: totalValue.fact + totalValue.omQualified,
+  };
+}
+
+export function metricFactForTraffic(metric: Metric, totalValue: MetricTotal, trafficMode: TrafficMode): number {
+  return metricTotalForTraffic(metric, totalValue, trafficMode).fact;
+}
+
+export function trafficModeLabel(trafficMode: TrafficMode): string {
+  return trafficMode === "marketing" ? "Трафик маркетинг" : "Трафик ОП";
 }
 
 export function getPeriodStatus(totals: MetricTotals) {
@@ -123,7 +159,7 @@ export function percent(value: number, base: number): number {
   return Math.round((value / base) * 100);
 }
 
-export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations"): number {
+export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified"): number {
   return records.reduce((sum, record) => sum + recordMetricValue(record, key), 0);
 }
 
@@ -135,9 +171,14 @@ export function recommendationValue(record: DailyRecord): number {
   return Math.max(0, Number(record.recommendations || 0));
 }
 
-function recordMetricValue(record: DailyRecord, key: "plan" | "fact" | "forecast" | "recommendations"): number {
+export function omQualifiedValue(record: DailyRecord): number {
+  return record.metric === "Квалы" ? Math.max(0, Number(record.omQualified || 0)) : 0;
+}
+
+function recordMetricValue(record: DailyRecord, key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified"): number {
   if (key === "fact") return netFact(record);
   if (key === "recommendations") return recommendationValue(record);
+  if (key === "omQualified") return omQualifiedValue(record);
   return Number(record[key] || 0);
 }
 
