@@ -7,6 +7,11 @@ const sourceSheets: Array<{ sheetName: string; city: City }> = [
   { sheetName: "санкт-петербург", city: "СПБ" },
 ];
 const messagesSheetName = "СООБЩЕНИЯ";
+const serviceSheets = {
+  daily: "Data_Daily",
+  months: "Month_Config",
+  plans: "Month_Plans",
+};
 const metricLabels: Metric[] = ["Лиды", "Квалы", "Продажи"];
 const cityLabels: City[] = ["МСК", "СПБ", "сообщения"];
 const planCityLabels: Array<Extract<City, "МСК" | "СПБ">> = ["МСК", "СПБ"];
@@ -53,6 +58,15 @@ export type PublicSheetSnapshot = {
 };
 
 export async function loadPublicSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Promise<PublicSheetSnapshot> {
+  try {
+    const serviceSnapshot = await loadServiceSheetSnapshot(fallbackMonthConfigs);
+    if (serviceSnapshot.monthConfigs.length && serviceSnapshot.records.length) {
+      return serviceSnapshot;
+    }
+  } catch {
+    // If service sheets are not published yet, keep the old city-sheet import path alive.
+  }
+
   const cityTables = await Promise.all(
     sourceSheets.map(async (source) => ({
       ...source,
@@ -71,6 +85,23 @@ export async function loadPublicSheetSnapshot(fallbackMonthConfigs: MonthConfig[
     records,
     monthConfigs: buildMonthConfigs(records, fallbackMonthConfigs),
     latestActualDate,
+  };
+}
+
+async function loadServiceSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Promise<PublicSheetSnapshot> {
+  const [monthTable, planTable, dailyTable] = await Promise.all([
+    loadGvizSheet(serviceSheets.months),
+    loadGvizSheet(serviceSheets.plans),
+    loadGvizSheet(serviceSheets.daily),
+  ]);
+  const planRows = rowsToObjects(planTable);
+  const records = parseServiceDailySheet(dailyTable);
+  const monthConfigs = parseServiceMonthConfigs(monthTable, planRows, fallbackMonthConfigs);
+
+  return {
+    records,
+    monthConfigs,
+    latestActualDate: getLatestActualDate(records),
   };
 }
 
@@ -212,6 +243,127 @@ function readCell(row: GvizRow | undefined, index: number): string {
   const cell = row?.c?.[index];
   const value = cell?.f ?? cell?.v ?? "";
   return String(value).trim();
+}
+
+function rowsToObjects(table: GvizTable): Array<Record<string, string>> {
+  const headerRow = table.rows[0];
+  if (!headerRow) return [];
+  const headers = table.cols.map((_, index) => readCell(headerRow, index));
+
+  return table.rows.slice(1).map((row) => {
+    return headers.reduce<Record<string, string>>((acc, header, index) => {
+      if (header) acc[header] = readCell(row, index);
+      return acc;
+    }, {});
+  }).filter((row) => Object.values(row).some(Boolean));
+}
+
+function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
+  return rowsToObjects(table)
+    .map((row) => {
+      const date = normalizeDateValue(row.date);
+      const city = normalizeCity(row.city);
+      const metric = normalizeMetric(row.metric);
+      if (!date || !city || !metric) return null;
+
+      const record: DailyRecord = {
+        id: row.id || `${date}-${city}-${metric}`,
+        date,
+        city,
+        channel: row.channel || (city === "сообщения" ? "Сообщения" : "Город"),
+        metric,
+        plan: toNumber(row.plan || ""),
+        fact: toNumber(row.fact || ""),
+        forecast: toNumber(row.forecast || ""),
+        recommendations: toNumber(row.recommendations || ""),
+        omQualified: metric === "Квалы" ? toNumber(row.omQualified || "") : 0,
+        comment: row.comment || "",
+      };
+      return record;
+    })
+    .filter((record): record is DailyRecord => record !== null)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
+}
+
+function parseServiceMonthConfigs(
+  table: GvizTable,
+  planRows: Array<Record<string, string>>,
+  fallbackMonthConfigs: MonthConfig[],
+): MonthConfig[] {
+  const fallbackMap = new Map(fallbackMonthConfigs.map((config) => [config.monthKey, config]));
+
+  return rowsToObjects(table)
+    .map((row) => {
+      const year = toNumber(row.year || "");
+      const monthIndex = toNumber(row.monthIndex || "");
+      const monthKey = normalizeMonthKey(row.monthKey, year, monthIndex);
+      if (!monthKey || !Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
+
+      const fallback = fallbackMap.get(monthKey);
+      const plansByCity = plansByCityFromServiceRows(monthKey, planRows, fallback?.plansByCity);
+      const plan = mergeExplicitPlan(fallback?.plan, combineReportPlan(plansByCity));
+
+      const config: MonthConfig = {
+        monthKey,
+        label: row.label || fallback?.label || `${monthNames[monthIndex]} ${year}`,
+        year,
+        monthIndex,
+        daysInMonth: toNumber(row.daysInMonth || "") || fallback?.daysInMonth || new Date(year, monthIndex + 1, 0).getDate(),
+        plan,
+        plansByCity,
+        dailyAverageByCity: fallback?.dailyAverageByCity,
+        status: row.status === "closed" ? "closed" : "active",
+      };
+      return config;
+    })
+    .filter((config): config is MonthConfig => config !== null)
+    .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
+function plansByCityFromServiceRows(
+  monthKey: string,
+  rows: Array<Record<string, string>>,
+  fallbackPlans?: PlanByCity,
+): PlanByCity {
+  const plans = clonePlansByCity(fallbackPlans);
+
+  rows.forEach((row) => {
+    const rowMonthKey = normalizeMonthKey(row.monthKey);
+    const city = normalizeCity(row.city);
+    const metric = normalizeMetric(row.metric);
+    if (!city || !metric || rowMonthKey !== monthKey) return;
+    plans[city][metric] = toNumber(row.plan || "");
+  });
+
+  return plans;
+}
+
+function normalizeDateValue(value: string): string | null {
+  const isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const ruMatch = value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (ruMatch) {
+    return `${ruMatch[3]}-${ruMatch[2].padStart(2, "0")}-${ruMatch[1].padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+function normalizeMonthKey(value: string | undefined, year?: number, monthIndex?: number): string | null {
+  const raw = String(value || "").trim();
+  const isoMonth = raw.match(/^(\d{4})-(\d{2})/);
+  if (isoMonth) return `${isoMonth[1]}-${isoMonth[2]}`;
+
+  if (Number.isFinite(year) && Number.isFinite(monthIndex)) {
+    return `${year}-${String(Number(monthIndex) + 1).padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+function normalizeCity(value: string): City | null {
+  return cityLabels.find((city) => city.toLowerCase() === value.trim().toLowerCase()) ?? null;
 }
 
 function toNumber(value: string): number {

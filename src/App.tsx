@@ -257,8 +257,6 @@ export default function App() {
   }, [records]);
 
   useEffect(() => {
-    if (apiConfigured) return;
-
     let cancelled = false;
 
     async function loadFromPublicSheet() {
@@ -277,10 +275,10 @@ export default function App() {
         setMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig));
         setRecords((current) => mergePublicSheetRecords(current, snapshot.records));
         latestRecordDateRef.current = snapshot.latestActualDate;
-        setSavedMessage(`Данные автоматически загружены из Google-таблицы. Последний FACT: ${formatDay(snapshot.latestActualDate)}.`);
+        setSavedMessage(`Данные загружены напрямую из Google Sheets. Последний FACT: ${formatDay(snapshot.latestActualDate)}.`);
       } catch (error) {
         if (!cancelled) {
-          setSavedMessage(`Google-таблица пока не загрузилась автоматически: ${getErrorMessage(error)}. Показываю опубликованный снимок.`);
+          setSavedMessage(`Google-таблица пока не загрузилась напрямую: ${getErrorMessage(error)}. Показываю опубликованный снимок.`);
         }
       }
     }
@@ -292,7 +290,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [apiConfigured]);
+  }, []);
 
   useEffect(() => {
     if (!apiConfigured) return;
@@ -305,6 +303,11 @@ export default function App() {
 
         if (!remoteMonths.length) {
           setSavedMessage("Google Sheets подключен. Создайте первый месяц в админке, чтобы заполнить служебные листы.");
+          return;
+        }
+
+        if (remoteMonths.some((config) => !isPlainMonthKey(config.monthKey))) {
+          setSavedMessage("Apps Script пишет данные, но читает monthKey как дату. Для отображения использую прямое чтение Google Sheets.");
           return;
         }
 
@@ -4081,6 +4084,10 @@ function normalizeMonthConfig(config: MonthConfig): MonthConfig {
     plan,
     status: config.status ?? "active",
   };
+}
+
+function isPlainMonthKey(value: unknown): boolean {
+  return /^\d{4}-\d{2}$/.test(String(value || ""));
 }
 
 function normalizeEvent(event: EventItem): EventItem {
