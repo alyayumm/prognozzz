@@ -166,6 +166,21 @@ function ensureServiceSheets_() {
       sheet.autoResizeColumns(1, headers.length);
     }
   });
+  formatServiceSheetKeys_();
+}
+
+function formatServiceSheetKeys_() {
+  const ss = SpreadsheetApp.getActive();
+  [
+    { sheet: CONFIG.sheets.months, column: 1 },
+    { sheet: CONFIG.sheets.plans, column: 1 },
+    { sheet: CONFIG.sheets.daily, column: 3 },
+    { sheet: CONFIG.sheets.weekly, column: 1 },
+  ].forEach((entry) => {
+    const sheet = ss.getSheetByName(entry.sheet);
+    if (!sheet) return;
+    sheet.getRange(1, entry.column, Math.max(sheet.getMaxRows(), 1), 1).setNumberFormat('@');
+  });
 }
 
 function getMonths_() {
@@ -174,7 +189,7 @@ function getMonths_() {
 }
 
 function getMonthData_(payload) {
-  const monthKey = payload.monthKey;
+  const monthKey = normalizeMonthKey_(payload.monthKey);
   const plans = readObjects_(CONFIG.sheets.plans);
   return {
     config: decorateMonthConfig_(readObjects_(CONFIG.sheets.months).find((row) => row.monthKey === monthKey) || null, plans),
@@ -365,6 +380,12 @@ function readObjects_(sheetName) {
       headers.forEach((header, index) => {
         object[header] = row[index];
       });
+      if (object.monthKey !== undefined) {
+        object.monthKey = normalizeMonthKey_(object.monthKey, object.year, object.monthIndex);
+      }
+      if (object.month !== undefined) {
+        object.month = normalizeMonthKey_(object.month);
+      }
       return object;
     });
 }
@@ -373,7 +394,7 @@ function dailyRow_(record) {
   return [
     record.id,
     record.date,
-    record.month || String(record.date).slice(0, 7),
+    normalizeMonthKey_(record.month || String(record.date).slice(0, 7)),
     record.week || weekOfMonth_(record.date),
     record.city,
     record.channel || '',
@@ -409,10 +430,11 @@ function eventRow_(event) {
 
 function decorateMonthConfig_(month, plans) {
   if (!month) return null;
-  const monthPlans = plans.filter((row) => row.monthKey === month.monthKey);
+  const monthKey = normalizeMonthKey_(month.monthKey, month.year, month.monthIndex);
+  const monthPlans = plans.filter((row) => row.monthKey === monthKey);
   const plansByCity = plansByCityFromRows_(monthPlans);
   return {
-    monthKey: month.monthKey,
+    monthKey: monthKey,
     label: month.label,
     year: Number(month.year || 0),
     monthIndex: Number(month.monthIndex || 0),
@@ -704,6 +726,26 @@ function stringifyDate_(value) {
     return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
   return String(value).slice(0, 10);
+}
+
+function normalizeMonthKey_(value, year, monthIndex) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+
+  const raw = String(value || '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})/);
+  if (isoMatch) {
+    return isoMatch[1] + '-' + isoMatch[2];
+  }
+
+  const numericYear = Number(year);
+  const numericMonthIndex = Number(monthIndex);
+  if (isFinite(numericYear) && isFinite(numericMonthIndex)) {
+    return numericYear + '-' + String(numericMonthIndex + 1).padStart(2, '0');
+  }
+
+  return raw;
 }
 
 function eventGroupByType_(type) {
