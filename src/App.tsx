@@ -3880,7 +3880,7 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
     recommendations: value.recommendations ?? previous?.recommendations ?? 0,
     omQualified: value.metric === "Квалы" ? value.omQualified ?? previous?.omQualified ?? 0 : 0,
-    comment: value.comment ?? previous?.comment ?? "",
+    comment: stripOmQualifiedFromComment(value.comment ?? previous?.comment ?? ""),
   };
 }
 
