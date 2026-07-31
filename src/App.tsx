@@ -3833,12 +3833,14 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
     const current = findDailyRecord(currentRecords, value.date, value.city, value.metric);
     const plan = value.plan ?? current?.plan ?? 0;
     const forecast = value.forecast ?? current?.forecast ?? plan;
+    const omQualified = value.metric === "Квалы" ? value.omQualified ?? current?.omQualified ?? 0 : 0;
 
     return {
       ...value,
       plan,
       forecast,
-      comment: value.comment ?? current?.comment ?? "",
+      omQualified,
+      comment: encodeOmQualifiedInComment(value.comment ?? current?.comment ?? "", omQualified),
     };
   });
 }
@@ -3883,15 +3885,35 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
 }
 
 function normalizeDailyRecord(record: DailyRecord): DailyRecord {
+  const comment = record.comment ?? "";
   return {
     ...record,
     plan: Number(record.plan || 0),
     fact: Number(record.fact || 0),
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
-    omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) : 0,
-    comment: record.comment ?? "",
+    omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) || parseOmQualifiedFromComment(comment) : 0,
+    comment: stripOmQualifiedFromComment(comment),
   };
+}
+
+const omQualifiedCommentPattern = /\[OM_KVAL=([\d.,]+)\]/i;
+
+function encodeOmQualifiedInComment(comment: string, value: number): string {
+  const cleanComment = stripOmQualifiedFromComment(comment);
+  if (value <= 0) return cleanComment;
+  return `${cleanComment}${cleanComment ? " " : ""}[OM_KVAL=${Math.round(value)}]`;
+}
+
+function parseOmQualifiedFromComment(comment: string): number {
+  const match = comment.match(omQualifiedCommentPattern);
+  if (!match) return 0;
+  const value = Number(match[1].replace(",", "."));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function stripOmQualifiedFromComment(comment: string): string {
+  return comment.replace(omQualifiedCommentPattern, "").trim();
 }
 
 function dailyRecordKey(date: string, city: DailyRecordCity, metric: Metric): string {

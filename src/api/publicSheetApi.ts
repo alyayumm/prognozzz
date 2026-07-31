@@ -265,6 +265,7 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
       const city = normalizeCity(row.city);
       const metric = normalizeMetric(row.metric);
       if (!date || !city || !metric) return null;
+      const comment = row.comment || "";
 
       const record: DailyRecord = {
         id: row.id || `${date}-${city}-${metric}`,
@@ -276,8 +277,8 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
         fact: toNumber(row.fact || ""),
         forecast: toNumber(row.forecast || ""),
         recommendations: toNumber(row.recommendations || ""),
-        omQualified: metric === "Квалы" ? toNumber(row.omQualified || "") : 0,
-        comment: row.comment || "",
+        omQualified: metric === "Квалы" ? toNumber(row.omQualified || "") || parseOmQualifiedFromComment(comment) : 0,
+        comment: stripOmQualifiedFromComment(comment),
       };
       return record;
     })
@@ -379,6 +380,19 @@ function normalizeMetric(value: string): Metric | null {
   if (normalized.includes("КВАЛ")) return "Квалы";
   if (normalized.includes("ПРОДАЖ")) return "Продажи";
   return null;
+}
+
+const omQualifiedCommentPattern = /\[OM_KVAL=([\d.,]+)\]/i;
+
+function parseOmQualifiedFromComment(comment: string): number {
+  const match = comment.match(omQualifiedCommentPattern);
+  if (!match) return 0;
+  const value = Number(match[1].replace(",", "."));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function stripOmQualifiedFromComment(comment: string): string {
+  return comment.replace(omQualifiedCommentPattern, "").trim();
 }
 
 function buildMonthConfigs(records: DailyRecord[], fallbackMonthConfigs: MonthConfig[]): MonthConfig[] {
