@@ -389,6 +389,27 @@ export default function App() {
     return nextRecords;
   }
 
+  async function ensureRemoteMonth(monthKey: string, password: string) {
+    const config = monthConfigs.find((item) => item.monthKey === monthKey);
+    if (!config) return;
+
+    const dailyAverageByCity = clonePlansByCity(config.dailyAverageByCity ?? estimateDailyAverageByCity(config, forecastCoefficients));
+    const plansByCity = clonePlansByCity(
+      config.plansByCity ?? buildMonthlyPlansFromDailyAverage(config.year, config.monthIndex, dailyAverageByCity, forecastCoefficients),
+    );
+
+    await callReportApi(
+      "createMonth",
+      {
+        year: config.year,
+        monthIndex: config.monthIndex,
+        plansByCity,
+        dailyAverageByCity,
+      },
+      password,
+    );
+  }
+
   async function persistDailyValues(values: DailyValueUpdate[], _localMessage: string) {
     const hasInvalidValue = validateDailyValueUpdates(values);
 
@@ -413,6 +434,9 @@ export default function App() {
 
     try {
       const monthKey = sanitized[0]?.date.slice(0, 7);
+      if (monthKey) {
+        await ensureRemoteMonth(monthKey, auth);
+      }
       await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, auth);
 
       if (monthKey) {
@@ -441,7 +465,8 @@ export default function App() {
       setSavedMessage(isUpdate ? "Событие обновлено локально. Для записи в Google Sheets введите пароль админки." : "Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
       return;
     }
-    callReportApi("upsertEvent", { event }, auth)
+    ensureRemoteMonth(event.startDate.slice(0, 7), auth)
+      .then(() => callReportApi("upsertEvent", { event }, auth))
       .then(() => setSavedMessage(isUpdate ? "Событие обновлено в Google Sheets." : "Событие добавлено и сохранено в Google Sheets."))
       .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
