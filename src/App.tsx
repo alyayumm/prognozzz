@@ -414,14 +414,15 @@ export default function App() {
   }
 
   async function persistDailyValues(values: DailyValueUpdate[], _localMessage: string) {
-    const hasInvalidValue = validateDailyValueUpdates(values);
+    const preparedValues = prepareDailyValuesForRemote(values, records);
+    const hasInvalidValue = validateDailyValueUpdates(preparedValues);
 
     if (hasInvalidValue) {
       setSavedMessage("Не удалось сохранить данные. Проверьте подключение или формат значений.");
       return;
     }
 
-    const sanitized = values.map(sanitizeDailyValueUpdate);
+    const sanitized = preparedValues.map(sanitizeDailyValueUpdate);
 
     if (!apiConfigured) {
       const nextRecords = mergeDailyValues(sanitized);
@@ -441,11 +442,7 @@ export default function App() {
         await ensureRemoteMonth(monthKey, auth);
       }
       await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, auth);
-
-      if (monthKey) {
-        const payload = await callReportApi<MonthPayload>("getMonthData", { monthKey });
-        applyRemotePayload(payload, monthKey);
-      }
+      mergeDailyValues(sanitized);
 
       setSavedMessage("Сохранено. Итоги и графики обновлены.");
     } catch (error) {
@@ -3828,6 +3825,21 @@ function validateDailyValueUpdates(values: DailyValueUpdate[]): boolean {
       const numericValue = Number(item);
       return !Number.isFinite(numericValue) || numericValue < 0;
     });
+  });
+}
+
+function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords: DailyRecord[]): DailyValueUpdate[] {
+  return values.map((value) => {
+    const current = findDailyRecord(currentRecords, value.date, value.city, value.metric);
+    const plan = value.plan ?? current?.plan ?? 0;
+    const forecast = value.forecast ?? current?.forecast ?? plan;
+
+    return {
+      ...value,
+      plan,
+      forecast,
+      comment: value.comment ?? current?.comment ?? "",
+    };
   });
 }
 

@@ -386,6 +386,15 @@ function readObjects_(sheetName) {
       if (object.month !== undefined) {
         object.month = normalizeMonthKey_(object.month);
       }
+      if (object.date !== undefined) {
+        object.date = stringifyDate_(object.date);
+      }
+      if (object.startDate !== undefined) {
+        object.startDate = stringifyDate_(object.startDate);
+      }
+      if (object.endDate !== undefined) {
+        object.endDate = stringifyDate_(object.endDate);
+      }
       return object;
     });
 }
