@@ -18,6 +18,14 @@ type ApiAction =
   | "updateForecastCoefficients"
   | "verifyPassword";
 
+const writeActions = new Set<ApiAction>([
+  "createMonth",
+  "upsertDailyValues",
+  "upsertEvent",
+  "deleteEvent",
+  "updateForecastCoefficients",
+]);
+
 export function isReportApiConfigured(): boolean {
   return Boolean(getReportApiEndpoint());
 }
@@ -50,14 +58,29 @@ export async function callReportApi<T>(action: ApiAction, payload: unknown = {},
   if (!endpoint) {
     throw new Error("Apps Script URL is not configured. Local prototype uses sample data.");
   }
+  const body = JSON.stringify({ action, password, payload });
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, password, payload }),
-  });
+  let result: { ok: boolean; data?: unknown; error?: string };
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body,
+    });
+    result = await response.json();
+  } catch (error) {
+    if (writeActions.has(action)) {
+      await fetch(endpoint, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body,
+      });
+      return undefined as T;
+    }
+    throw error;
+  }
 
-  const result = await response.json();
   if (!result.ok) {
     throw new Error(result.error || "Google Apps Script request failed");
   }

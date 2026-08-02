@@ -279,6 +279,7 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
         recommendations: toNumber(row.recommendations || ""),
         omQualified: metric === "Квалы" ? toNumber(row.omQualified || "") || parseOmQualifiedFromComment(comment) : 0,
         comment: stripOmQualifiedFromComment(comment),
+        updatedAt: row.updatedAt || "",
       };
       return record;
     })

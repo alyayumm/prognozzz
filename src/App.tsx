@@ -115,6 +115,8 @@ type MetricSummary = {
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
 const storageKey = "weekly-report-local-v8";
+const adminPasswordStorageKey = "weekly-report-admin-password";
+const fallbackAdminPassword = "4412";
 const legacyStorageKeys: string[] = [];
 const legacySeedEventIds = new Set(["evt-1", "evt-2", "evt-3"]);
 const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
@@ -173,7 +175,8 @@ export default function App() {
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
-  const [auth, setAuth] = useState("");
+  const [auth, setAuth] = useState(loadAdminPassword);
+  const [isSavingDaily, setIsSavingDaily] = useState(false);
   const [apiUrlDraft, setApiUrlDraft] = useState(apiEndpoint);
   const [savedMessage, setSavedMessage] = useState(
     apiConfigured
@@ -181,6 +184,7 @@ export default function App() {
       : "Локальный режим: изменения видны только в этом браузере и не обновляют общий сайт.",
   );
   const todayIso = useMemo(getTodayIso, []);
+  const writePassword = auth.trim() || fallbackAdminPassword;
 
   function connectApiEndpoint() {
     const endpoint = saveReportApiEndpoint(apiUrlDraft);
@@ -190,6 +194,10 @@ export default function App() {
       ? "Общее сохранение подключено. Данные будут читаться и записываться через Apps Script."
       : "Apps Script URL очищен. Сайт снова работает только в этом браузере.");
   }
+
+  useEffect(() => {
+    saveAdminPassword(auth);
+  }, [auth]);
 
   const selectedMonthConfig = useMemo(
     () => monthConfigs.find((config) => config.monthKey === selectedMonthKey) ?? monthConfigs[monthConfigs.length - 1] ?? monthConfig,
@@ -431,27 +439,31 @@ export default function App() {
       return;
     }
 
-    if (!auth.trim()) {
-      setSavedMessage("Не удалось сохранить данные. Проверьте подключение или формат значений.");
+    if (!writePassword) {
+      setSavedMessage("Не удалось сохранить данные: нет пароля админки.");
       return;
     }
 
+    setIsSavingDaily(true);
+    setSavedMessage("Сохраняю день в Google Sheets...");
     try {
       const monthKey = sanitized[0]?.date.slice(0, 7);
       if (monthKey) {
-        await ensureRemoteMonth(monthKey, auth);
+        await ensureRemoteMonth(monthKey, writePassword);
       }
-      await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, auth);
+      await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, writePassword);
       mergeDailyValues(sanitized);
 
       setSavedMessage("Сохранено. Итоги и графики обновлены.");
     } catch (error) {
       setSavedMessage(`Не удалось сохранить данные. Проверьте подключение или формат значений. ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
     }
   }
 
   function updateDailyValues(values: DailyValueUpdate[], message = "День обновлен.") {
-    persistDailyValues(values, message);
+    return persistDailyValues(values, message);
   }
 
   function addEvent(event: EventItem) {
@@ -461,12 +473,12 @@ export default function App() {
       setSavedMessage(isUpdate ? "Событие обновлено только в этом браузере." : "Событие добавлено только в этом браузере. Общий сайт не обновится без Apps Script.");
       return;
     }
-    if (!auth.trim()) {
+    if (!writePassword) {
       setSavedMessage(isUpdate ? "Событие обновлено локально. Для записи в Google Sheets введите пароль админки." : "Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
       return;
     }
-    ensureRemoteMonth(event.startDate.slice(0, 7), auth)
-      .then(() => callReportApi("upsertEvent", { event }, auth))
+    ensureRemoteMonth(event.startDate.slice(0, 7), writePassword)
+      .then(() => callReportApi("upsertEvent", { event }, writePassword))
       .then(() => setSavedMessage(isUpdate ? "Событие обновлено в Google Sheets." : "Событие добавлено и сохранено в Google Sheets."))
       .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
@@ -480,11 +492,11 @@ export default function App() {
       setSavedMessage("Событие удалено только в этом браузере.");
       return;
     }
-    if (!auth.trim()) {
+    if (!writePassword) {
       setSavedMessage("Событие удалено локально. Для удаления в Google Sheets введите пароль админки.");
       return;
     }
-    callReportApi("deleteEvent", { id: eventId }, auth)
+    callReportApi("deleteEvent", { id: eventId }, writePassword)
       .then(() => setSavedMessage("Событие удалено из Google Sheets."))
       .catch((error) => setSavedMessage(`Событие удалено локально, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
@@ -507,13 +519,13 @@ export default function App() {
       setSavedMessage("Коэффициенты сохранены только в этом браузере. Общий сайт не обновится без Apps Script.");
       return;
     }
-    if (!auth.trim()) {
+    if (!writePassword) {
       setSavedMessage("Коэффициенты изменены локально. Для записи в Google Sheets введите пароль админки.");
       return;
     }
 
     try {
-      await callReportApi("updateForecastCoefficients", { coefficients: forecastCoefficients }, auth);
+      await callReportApi("updateForecastCoefficients", { coefficients: forecastCoefficients }, writePassword);
       setSavedMessage("Коэффициенты прогноза сохранены в Google Sheets.");
     } catch (error) {
       setSavedMessage(`Коэффициенты изменены локально, но Sheets вернул ошибку: ${getErrorMessage(error)}.`);
@@ -542,12 +554,12 @@ export default function App() {
       setSavedMessage(exists ? `${nextConfig.label} уже есть, месяц открыт в панели.` : `${nextConfig.label} добавлен только в этом браузере. Общий сайт не обновится без Apps Script.`);
       return;
     }
-    if (!auth.trim()) {
+    if (!writePassword) {
       setSavedMessage(`${nextConfig.label} подготовлен локально. Для создания в Google Sheets введите пароль админки.`);
       return;
     }
 
-    callReportApi("createMonth", { ...draft, plansByCity: monthlyPlansByCity, dailyAverageByCity }, auth)
+    callReportApi("createMonth", { ...draft, plansByCity: monthlyPlansByCity, dailyAverageByCity }, writePassword)
       .then(() => setSavedMessage(exists ? `${nextConfig.label} открыт в админке.` : `${nextConfig.label} создан в Google Sheets.`))
       .catch((error) => setSavedMessage(`${nextConfig.label} локально подготовлен, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
@@ -559,6 +571,7 @@ export default function App() {
         setMode={setMode}
         auth={auth}
         setAuth={setAuth}
+        writePassword={writePassword}
         apiConfigured={apiConfigured}
         apiUrlDraft={apiUrlDraft}
         setApiUrlDraft={setApiUrlDraft}
@@ -675,6 +688,7 @@ export default function App() {
                 selectMonth={selectMonth}
                 onCreateMonth={createMonthFromPanel}
                 onSaveDailyValues={updateDailyValues}
+                isSavingDaily={isSavingDaily}
                 onAddEvent={addEvent}
                 onDeleteEvent={deleteEvent}
                 forecastCoefficients={forecastCoefficients}
@@ -712,6 +726,7 @@ function Sidebar({
   setMode,
   auth,
   setAuth,
+  writePassword,
   apiConfigured,
   apiUrlDraft,
   setApiUrlDraft,
@@ -721,6 +736,7 @@ function Sidebar({
   setMode: (mode: Mode) => void;
   auth: string;
   setAuth: (value: string) => void;
+  writePassword: string;
   apiConfigured: boolean;
   apiUrlDraft: string;
   setApiUrlDraft: (value: string) => void;
@@ -778,10 +794,10 @@ function Sidebar({
         <button className="connect-api-button" type="button" onClick={onConnectApi}>
           Подключить
         </button>
-        <span className={apiConfigured ? (auth ? "status good" : "status muted") : "status warning"}>
+        <span className={apiConfigured ? (writePassword ? "status good" : "status muted") : "status warning"}>
           {!apiConfigured
             ? "Только этот браузер: общий сайт не обновится"
-            : auth
+            : writePassword
               ? "Готово к записи через Apps Script"
               : "Google Sheets подключен, нужен пароль"}
         </span>
@@ -2224,6 +2240,7 @@ function AdminDashboard({
   selectMonth,
   onCreateMonth,
   onSaveDailyValues,
+  isSavingDaily,
   onAddEvent,
   onDeleteEvent,
   forecastCoefficients,
@@ -2241,7 +2258,8 @@ function AdminDashboard({
   todayIso: string;
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
-  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
+  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => Promise<void>;
+  isSavingDaily: boolean;
   onAddEvent: (event: EventItem) => void;
   onDeleteEvent: (eventId: string) => void;
   forecastCoefficients: ForecastCoefficients;
@@ -2322,6 +2340,7 @@ function AdminDashboard({
           setSelectedDate={setSelectedDate}
           records={records}
           onSaveDailyValues={onSaveDailyValues}
+          isSavingDaily={isSavingDaily}
         />
       )}
       {tab === "month" && (
@@ -2353,12 +2372,14 @@ function AdminDayPanel({
   setSelectedDate,
   records,
   onSaveDailyValues,
+  isSavingDaily,
 }: {
   dates: string[];
   selectedDate: string;
   setSelectedDate: (date: string) => void;
   records: DailyRecord[];
-  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => void;
+  onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => Promise<void>;
+  isSavingDaily: boolean;
 }) {
   const [draft, setDraft] = useState(() => createDailyFactDraft(records, selectedDate));
 
@@ -2405,7 +2426,8 @@ function AdminDayPanel({
     }));
   }
 
-  function saveDay() {
+  async function saveDay() {
+    if (isSavingDaily) return;
     const values = adminCities.flatMap((city) =>
       metrics.map((metric) => ({
         date: selectedDate,
@@ -2416,7 +2438,7 @@ function AdminDayPanel({
         omQualified: metric === "Квалы" ? draft[city][metric].omQualified : 0,
       })),
     );
-    onSaveDailyValues(values, `${formatDay(selectedDate)} сохранен.`);
+    await onSaveDailyValues(values, `${formatDay(selectedDate)} сохранен.`);
   }
 
   return (
@@ -2491,9 +2513,9 @@ function AdminDayPanel({
 
       <div className="admin-actions">
         <span>Данные сообщений сохраняются отдельно и не попадают в общий дашборд МСК + СПБ.</span>
-        <button className="primary-button" type="button" onClick={saveDay}>
+        <button className="primary-button" type="button" onClick={saveDay} disabled={isSavingDaily}>
           <Save size={16} />
-          Сохранить
+          {isSavingDaily ? "Сохраняю..." : "Сохранить"}
         </button>
       </div>
     </section>
@@ -3881,6 +3903,7 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     recommendations: value.recommendations ?? previous?.recommendations ?? 0,
     omQualified: value.metric === "Квалы" ? value.omQualified ?? previous?.omQualified ?? 0 : 0,
     comment: stripOmQualifiedFromComment(value.comment ?? previous?.comment ?? ""),
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -3894,6 +3917,7 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
     recommendations: Number(record.recommendations || 0),
     omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) || parseOmQualifiedFromComment(comment) : 0,
     comment: stripOmQualifiedFromComment(comment),
+    updatedAt: record.updatedAt ?? "",
   };
 }
 
@@ -3980,6 +4004,18 @@ function mergePublicSheetRecords(currentRecords: DailyRecord[], publicRecords: D
 
   publicRecords.forEach((record) => {
     const current = recordMap.get(record.id);
+    const currentUpdatedAt = parseRecordUpdatedAt(current?.updatedAt);
+    const publicUpdatedAt = parseRecordUpdatedAt(record.updatedAt);
+
+    if (current && currentUpdatedAt && (!publicUpdatedAt || currentUpdatedAt > publicUpdatedAt)) {
+      recordMap.set(record.id, {
+        ...current,
+        plan: record.plan || current.plan,
+        forecast: record.forecast || current.forecast,
+      });
+      return;
+    }
+
     recordMap.set(record.id, {
       ...record,
       recommendations: current?.recommendations ?? record.recommendations,
@@ -3989,6 +4025,26 @@ function mergePublicSheetRecords(currentRecords: DailyRecord[], publicRecords: D
   });
 
   return [...recordMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
+}
+
+function parseRecordUpdatedAt(value: string | undefined): number {
+  if (!value) return 0;
+
+  const iso = Date.parse(value);
+  if (Number.isFinite(iso)) return iso;
+
+  const match = value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return 0;
+
+  const [, day, month, year, hour, minute, second = "0"] = match;
+  return new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  ).getTime();
 }
 
 function loadInitialState() {
@@ -4131,6 +4187,22 @@ function normalizeEvent(event: EventItem): EventItem {
     group: event.group ?? (internalEventTypes.includes(type) ? "internal" : "external"),
     source: event.source ?? "manual",
   };
+}
+
+function loadAdminPassword(): string {
+  if (typeof window === "undefined") return fallbackAdminPassword;
+  return window.localStorage.getItem(adminPasswordStorageKey) || fallbackAdminPassword;
+}
+
+function saveAdminPassword(password: string) {
+  if (typeof window === "undefined") return;
+
+  const normalized = password.trim();
+  if (normalized) {
+    window.localStorage.setItem(adminPasswordStorageKey, normalized);
+  } else {
+    window.localStorage.removeItem(adminPasswordStorageKey);
+  }
 }
 
 function saveLocalState(state: ReturnType<typeof loadInitialState>) {

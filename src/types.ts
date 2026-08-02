@@ -29,6 +29,7 @@ export interface DailyRecord {
   recommendations: number;
   omQualified: number;
   comment?: string;
+  updatedAt?: string;
 }
 
 export interface MonthConfig {
