@@ -114,7 +114,7 @@ type MetricSummary = {
 };
 type SummaryStatus = { label: string; tone: "neutral" | "good" | "warning" | "danger" };
 
-const storageKey = "weekly-report-local-v8";
+const storageKey = "weekly-report-local-v9";
 const adminPasswordStorageKey = "weekly-report-admin-password";
 const fallbackAdminPassword = "4412";
 const legacyStorageKeys: string[] = [];
@@ -4020,7 +4020,7 @@ function loadInitialState() {
       return fallback;
     }
 
-    const storedMonthConfigs = parsed.monthConfigs.map(normalizeMonthConfig);
+    const storedMonthConfigs = dedupeMonthConfigs(parsed.monthConfigs.map(normalizeMonthConfig));
     const events = parsed.events.map(normalizeEvent).filter((event) => !legacySeedEventIds.has(event.id));
     const storedRecords = sanitizeStoredRecords(parsed.records, getTodayIso());
     const fallbackLatestDate = getLatestActualRecordDate(fallback.records);
@@ -4052,6 +4052,11 @@ function mergeSeedMonthConfigs(seedConfigs: MonthConfig[], storedConfigs: MonthC
     configMap.set(config.monthKey, stored ? { ...stored, ...config } : config);
   });
   return [...configMap.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
+function dedupeMonthConfigs(configs: MonthConfig[]): MonthConfig[] {
+  return [...new Map(configs.map((config) => [config.monthKey, config])).values()]
+    .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 }
 
 function mergeSeedRecords(seedRecords: DailyRecord[], storedRecords: DailyRecord[]): DailyRecord[] {
@@ -4156,7 +4161,10 @@ function saveLocalState(state: ReturnType<typeof loadInitialState>) {
   if (typeof window === "undefined") return;
 
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(state));
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      ...state,
+      monthConfigs: dedupeMonthConfigs(state.monthConfigs),
+    }));
   } catch {
     // Local storage can be blocked; the current session still works.
   }
