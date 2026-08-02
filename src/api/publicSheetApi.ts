@@ -298,7 +298,9 @@ function parseServiceMonthConfigs(
 ): MonthConfig[] {
   const fallbackMap = new Map(fallbackMonthConfigs.map((config) => [config.monthKey, config]));
 
-  return rowsToObjects(table)
+  const configMap = new Map<string, MonthConfig>();
+
+  rowsToObjects(table)
     .map((row) => {
       const year = toNumber(row.year || "");
       const monthIndex = toNumber(row.monthIndex || "");
@@ -323,7 +325,11 @@ function parseServiceMonthConfigs(
       return config;
     })
     .filter((config): config is MonthConfig => config !== null)
-    .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+    .forEach((config) => {
+      configMap.set(config.monthKey, config);
+    });
+
+  return [...configMap.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 }
 
 function plansByCityFromServiceRows(

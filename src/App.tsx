@@ -3677,7 +3677,9 @@ function groupDatesByWeek(dates: string[]): Record<number, string[]> {
 }
 
 function buildAutomaticWeekEvents(months: MonthConfig[]): EventItem[] {
-  return months.flatMap((month) => {
+  const uniqueMonths = [...new Map(months.map((month) => [month.monthKey, month])).values()];
+
+  return uniqueMonths.flatMap((month) => {
     const datesByWeek = groupDatesByWeek(getMonthDates(month.year, month.monthIndex, month.daysInMonth));
     return Object.entries(datesByWeek)
       .filter(([, dates]) => dates.length < 7)

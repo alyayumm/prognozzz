@@ -50,7 +50,9 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
 }
 
 export function buildOverallMonths(records: DailyRecord[], events: EventItem[], months: MonthConfig[]) {
-  return months
+  const uniqueMonths = [...new Map(months.map((month) => [month.monthKey, month])).values()];
+
+  return uniqueMonths
     .map((month) => {
       const monthRecords = records.filter((record) => record.date.startsWith(month.monthKey));
       const monthDates = getMonthDates(month.year, month.monthIndex, month.daysInMonth);
