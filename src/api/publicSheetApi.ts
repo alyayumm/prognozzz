@@ -246,11 +246,15 @@ function readCell(row: GvizRow | undefined, index: number): string {
 }
 
 function rowsToObjects(table: GvizTable): Array<Record<string, string>> {
-  const headerRow = table.rows[0];
-  if (!headerRow) return [];
-  const headers = table.cols.map((_, index) => readCell(headerRow, index));
+  const columnHeaders = table.cols.map((column) => String(column.label ?? "").trim());
+  const hasColumnHeaders = columnHeaders.some(Boolean);
+  const headerRow = hasColumnHeaders ? undefined : table.rows[0];
+  if (!hasColumnHeaders && !headerRow) return [];
 
-  return table.rows.slice(1).map((row) => {
+  const headers = hasColumnHeaders ? columnHeaders : table.cols.map((_, index) => readCell(headerRow, index));
+  const rows = hasColumnHeaders ? table.rows : table.rows.slice(1);
+
+  return rows.map((row) => {
     return headers.reduce<Record<string, string>>((acc, header, index) => {
       if (header) acc[header] = readCell(row, index);
       return acc;
