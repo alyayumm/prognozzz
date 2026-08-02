@@ -26,7 +26,7 @@ import {
   monthConfigs as seedMonthConfigs,
   seedEvents,
 } from "./data/dashboardMock";
-import { callReportApi, getReportApiEndpoint, saveReportApiEndpoint, type MonthPayload } from "./api/reportApi";
+import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { buildAttentionItems } from "./lib/insights";
 import {
@@ -157,7 +157,7 @@ const coefficientWeekdays: Array<{ key: WeekdayCoefficientKey; label: string; da
 ];
 
 export default function App() {
-  const [apiEndpoint, setApiEndpoint] = useState(getReportApiEndpoint);
+  const [apiEndpoint] = useState(getReportApiEndpoint);
   const apiConfigured = Boolean(apiEndpoint);
   const [initialState] = useState(loadInitialState);
   const latestRecordDateRef = useRef(getLatestActualRecordDate(initialState.records));
@@ -177,7 +177,6 @@ export default function App() {
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
   const [auth, setAuth] = useState(loadAdminPassword);
   const [isSavingDaily, setIsSavingDaily] = useState(false);
-  const [apiUrlDraft, setApiUrlDraft] = useState(apiEndpoint);
   const [savedMessage, setSavedMessage] = useState(
     apiConfigured
       ? "Подключаю Google Sheets..."
@@ -185,15 +184,6 @@ export default function App() {
   );
   const todayIso = useMemo(getTodayIso, []);
   const writePassword = auth.trim() || fallbackAdminPassword;
-
-  function connectApiEndpoint() {
-    const endpoint = saveReportApiEndpoint(apiUrlDraft);
-    setApiEndpoint(endpoint);
-    setApiUrlDraft(endpoint);
-    setSavedMessage(endpoint
-      ? "Общее сохранение подключено. Данные будут читаться и записываться через Apps Script."
-      : "Apps Script URL очищен. Сайт снова работает только в этом браузере.");
-  }
 
   useEffect(() => {
     saveAdminPassword(auth);
@@ -301,70 +291,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!apiConfigured) return;
-
     let cancelled = false;
-    async function loadFromSheets() {
+
+    async function loadForecastCoefficients() {
       try {
-        const remoteMonths = await callReportApi<MonthConfig[]>("getMonths");
-        if (cancelled) return;
-
-        if (!remoteMonths.length) {
-          setSavedMessage("Google Sheets подключен. Создайте первый месяц в админке, чтобы заполнить служебные листы.");
-          return;
-        }
-
-        if (remoteMonths.some((config) => !isPlainMonthKey(config.monthKey))) {
-          setSavedMessage("Apps Script пишет данные, но читает monthKey как дату. Для отображения использую прямое чтение Google Sheets.");
-          return;
-        }
-
-        const normalizedMonths = remoteMonths.map(normalizeMonthConfig);
-        setMonthConfigs(normalizedMonths);
-        try {
-          const remoteCoefficients = await callReportApi<unknown>("getForecastCoefficients");
-          if (!cancelled) {
-            setForecastCoefficients(normalizeForecastCoefficients(remoteCoefficients));
-          }
-        } catch {
-          // Старый Apps Script без листа коэффициентов не должен ломать загрузку отчета.
-        }
-        const remoteMonthKey = normalizedMonths.some((config) => config.monthKey === selectedMonthKey)
-          ? selectedMonthKey
-          : normalizedMonths[normalizedMonths.length - 1].monthKey;
-
-        if (remoteMonthKey !== selectedMonthKey) {
-          setSelectedMonthKey(remoteMonthKey);
-        }
-
-        const monthPayloads = await Promise.all(
-          normalizedMonths.map((config) => callReportApi<MonthPayload>("getMonthData", { monthKey: config.monthKey })),
-        );
-        if (cancelled) return;
-
-        const remoteRecords = monthPayloads.flatMap((payload) => payload.records.map(normalizeDailyRecord));
-        const remoteEvents = uniqueEvents(
-          monthPayloads
-            .flatMap((payload) => payload.events)
-            .map(normalizeEvent)
-            .filter((event) => !legacySeedEventIds.has(event.id)),
-        );
-
-        setRecords(remoteRecords);
-        setEvents(remoteEvents);
-        setSavedMessage("Данные загружены из Google Sheets. Запись доступна после ввода пароля.");
-      } catch (error) {
+        const remoteCoefficients = await callReportApi<unknown>("getForecastCoefficients");
         if (!cancelled) {
-          setSavedMessage(`Google Sheets пока недоступен: ${getErrorMessage(error)}. Работаю в локальном fallback.`);
+          setForecastCoefficients(normalizeForecastCoefficients(remoteCoefficients));
         }
+      } catch {
+        // Коэффициенты не должны ломать общий отчет, если Apps Script пока старой версии.
       }
     }
 
-    loadFromSheets();
+    loadForecastCoefficients();
     return () => {
       cancelled = true;
     };
-  }, [apiConfigured, selectedMonthKey]);
+  }, []);
 
   function selectMonth(monthKey: string) {
     const config = monthConfigs.find((item) => item.monthKey === monthKey);
@@ -380,18 +324,6 @@ export default function App() {
 
   function printCurrentPage() {
     window.print();
-  }
-
-  function applyRemotePayload(payload: MonthPayload, monthKey: string) {
-    const remoteConfig = payload.config;
-    if (remoteConfig) {
-      setMonthConfigs((current) => upsertMonthConfig(current, normalizeMonthConfig(remoteConfig)));
-    }
-    setRecords((current) => [
-      ...current.filter((record) => !record.date.startsWith(monthKey)),
-      ...payload.records.map(normalizeDailyRecord),
-    ]);
-    setEvents(payload.events.map(normalizeEvent));
   }
 
   function mergeDailyValues(values: DailyValueUpdate[]) {
@@ -453,8 +385,11 @@ export default function App() {
       }
       await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, writePassword);
       mergeDailyValues(sanitized);
+      if (monthKey) {
+        await verifySharedDailySave(sanitized);
+      }
 
-      setSavedMessage("Сохранено. Итоги и графики обновлены.");
+      setSavedMessage("Сохранено в общую Google-таблицу. Данные будут видны с любого компьютера.");
     } catch (error) {
       setSavedMessage(`Не удалось сохранить данные. Проверьте подключение или формат значений. ${getErrorMessage(error)}`);
     } finally {
@@ -573,9 +508,6 @@ export default function App() {
         setAuth={setAuth}
         writePassword={writePassword}
         apiConfigured={apiConfigured}
-        apiUrlDraft={apiUrlDraft}
-        setApiUrlDraft={setApiUrlDraft}
-        onConnectApi={connectApiEndpoint}
       />
 
       <main className="workspace">
@@ -728,9 +660,6 @@ function Sidebar({
   setAuth,
   writePassword,
   apiConfigured,
-  apiUrlDraft,
-  setApiUrlDraft,
-  onConnectApi,
 }: {
   mode: Mode;
   setMode: (mode: Mode) => void;
@@ -738,9 +667,6 @@ function Sidebar({
   setAuth: (value: string) => void;
   writePassword: string;
   apiConfigured: boolean;
-  apiUrlDraft: string;
-  setApiUrlDraft: (value: string) => void;
-  onConnectApi: () => void;
 }) {
   const items: Array<{ mode: Mode; label: string; icon: React.ReactNode }> = [
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
@@ -785,20 +711,11 @@ function Sidebar({
           type="password"
           placeholder="Пароль админки"
         />
-        <textarea
-          value={apiUrlDraft}
-          onChange={(event) => setApiUrlDraft(event.target.value)}
-          placeholder="URL Apps Script /exec"
-          rows={3}
-        />
-        <button className="connect-api-button" type="button" onClick={onConnectApi}>
-          Подключить
-        </button>
         <span className={apiConfigured ? (writePassword ? "status good" : "status muted") : "status warning"}>
           {!apiConfigured
             ? "Только этот браузер: общий сайт не обновится"
             : writePassword
-              ? "Готово к записи через Apps Script"
+              ? "Общая запись включена"
               : "Google Sheets подключен, нужен пароль"}
         </span>
       </div>
@@ -3867,6 +3784,38 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
   });
 }
 
+async function verifySharedDailySave(values: DailyValueUpdate[]) {
+  const importantValues = values.filter((value) =>
+    value.fact !== undefined || value.recommendations !== undefined || value.omQualified !== undefined,
+  );
+  if (!importantValues.length) return;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      await waitForGoogleSheetRefresh(1200 * attempt);
+    }
+
+    const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
+    const recordMap = new Map(snapshot.records.map((record) => [dailyRecordKey(record.date, record.city, record.metric), record]));
+    const allSaved = importantValues.every((value) => {
+      const record = recordMap.get(dailyRecordKey(value.date, value.city, value.metric));
+      if (!record) return false;
+      if (value.fact !== undefined && record.fact !== Math.max(0, Number(value.fact) || 0)) return false;
+      if (value.recommendations !== undefined && record.recommendations !== Math.max(0, Number(value.recommendations) || 0)) return false;
+      if (value.metric === "Квалы" && value.omQualified !== undefined && record.omQualified !== Math.max(0, Number(value.omQualified) || 0)) return false;
+      return true;
+    });
+
+    if (allSaved) return;
+  }
+
+  throw new Error("Google Sheets пока не вернул сохраненные значения. Нажмите сохранить еще раз или проверьте доступ Apps Script.");
+}
+
+function waitForGoogleSheetRefresh(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
   return {
     ...value,
@@ -4174,10 +4123,6 @@ function normalizeMonthConfig(config: MonthConfig): MonthConfig {
     plan,
     status: config.status ?? "active",
   };
-}
-
-function isPlainMonthKey(value: unknown): boolean {
-  return /^\d{4}-\d{2}$/.test(String(value || ""));
 }
 
 function normalizeEvent(event: EventItem): EventItem {
