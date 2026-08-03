@@ -2183,8 +2183,7 @@ function AdminDashboard({
 }) {
   const firstDate = dates.includes(todayIso) ? todayIso : dates[0] ?? todayIso;
   const [selectedDate, setSelectedDate] = useState(firstDate);
-  const totals = buildMetricTotals(records, metrics);
-  const messageTotals = buildMetricTotals(records.filter((record) => record.city === "сообщения"), metrics);
+  const reportTotals = buildMetricTotals(filterRecordsByScope(records, "Все"), metrics);
 
   useEffect(() => {
     if (!dates.includes(selectedDate)) {
@@ -2199,7 +2198,8 @@ function AdminDashboard({
         eyebrow={selectedMonthConfig.label}
         title="Админка ежедневного отчета"
         facts={[
-          "МСК, СПБ и сообщения отдельно",
+          "Итоги: МСК + СПБ без сообщений",
+          "Сообщения только в отдельной вкладке",
           "План по каждому направлению",
           "День сохраняется пачкой",
           "Коэффициенты прогноза редактируются",
@@ -2231,19 +2231,14 @@ function AdminDashboard({
         {metrics.map((metric) => (
           <article key={metric}>
             <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
-            <strong>{formatNumber(totals[metric].fact)}</strong>
+            <strong>{formatNumber(reportTotals[metric].fact)}</strong>
             <small>чистый факт после вычета рекомендаций</small>
             <em>
-              рекомендации: {formatNumber(totals[metric].recommendations)}
-              {metric === "Квалы" && <> · ОМ КВАЛ: {formatNumber(totals[metric].omQualified)}</>}
+              рекомендации: {formatNumber(reportTotals[metric].recommendations)}
+              {metric === "Квалы" && <> · ОМ КВАЛ: {formatNumber(reportTotals[metric].omQualified)}</>}
             </em>
           </article>
         ))}
-        <article className="messages-total-card">
-          <span>Сообщения</span>
-          <strong>{formatNumber(messageTotals["Лиды"].fact)}</strong>
-          <small>лиды сообщений отдельно от городов</small>
-        </article>
       </section>
 
       {tab === "day" && (

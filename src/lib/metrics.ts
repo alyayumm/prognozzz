@@ -51,10 +51,11 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
 
 export function buildOverallMonths(records: DailyRecord[], events: EventItem[], months: MonthConfig[]) {
   const uniqueMonths = [...new Map(months.map((month) => [month.monthKey, month])).values()];
+  const reportRecords = filterRecordsByScope(records, "Все");
 
   return uniqueMonths
     .map((month) => {
-      const monthRecords = records.filter((record) => record.date.startsWith(month.monthKey));
+      const monthRecords = reportRecords.filter((record) => record.date.startsWith(month.monthKey));
       const monthDates = getMonthDates(month.year, month.monthIndex, month.daysInMonth);
       return {
         config: month,
