@@ -260,20 +260,16 @@ export default function App() {
     async function loadFromPublicSheet() {
       try {
         const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
-        if (cancelled || !snapshot.latestActualDate) return;
+        if (cancelled || !snapshot.records.length) return;
 
-        const currentLatestDate = latestRecordDateRef.current;
-        if (currentLatestDate && snapshot.latestActualDate < currentLatestDate) {
-          setSavedMessage(
-            `Опубликованный снимок свежее Google-таблицы: в таблице последний FACT ${formatDay(snapshot.latestActualDate)}, на сайте ${formatDay(currentLatestDate)}. Обновлю автоматически, когда таблица догонит сайт.`,
-          );
-          return;
-        }
-
-        setMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig));
-        setRecords((current) => mergePublicSheetRecords(current, snapshot.records));
+        setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
+        setRecords(mergePublicSheetRecords([], snapshot.records));
         latestRecordDateRef.current = snapshot.latestActualDate;
-        setSavedMessage(`Данные загружены напрямую из Google Sheets. Последний FACT: ${formatDay(snapshot.latestActualDate)}.`);
+        setSavedMessage(
+          snapshot.latestActualDate
+            ? `Данные загружены напрямую из Google Sheets. Последний FACT: ${formatDay(snapshot.latestActualDate)}.`
+            : "Данные загружены напрямую из Google Sheets.",
+        );
       } catch (error) {
         if (!cancelled) {
           setSavedMessage(`Google-таблица пока не загрузилась напрямую: ${getErrorMessage(error)}. Показываю опубликованный снимок.`);
