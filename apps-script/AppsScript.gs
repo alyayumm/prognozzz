@@ -75,6 +75,7 @@ const HEADERS = {
     'metric',
     'description',
     'updatedAt',
+    'leadSource',
   ],
   Forecast_Coefficients: [
     'city',
@@ -419,6 +420,7 @@ function dailyRow_(record) {
 }
 
 function eventRow_(event) {
+  const leadSource = normalizeLeadSource_(event.leadSource || parseLeadSourceFromDescription_(event.description || ''));
   return [
     event.id || Utilities.getUuid(),
     event.startDate,
@@ -432,8 +434,9 @@ function eventRow_(event) {
     Number(event.importance || 2),
     event.city || 'все',
     event.metric || 'все',
-    event.description || '',
+    stripLeadSourceFromDescription_(event.description || ''),
     new Date(),
+    leadSource,
   ];
 }
 
@@ -593,7 +596,8 @@ function normalizeEventForClient_(event) {
     importance: Number(event.importance || 2),
     city: event.city || 'все',
     metric: event.metric || 'все',
-    description: event.description || '',
+    leadSource: normalizeLeadSource_(event.leadSource || parseLeadSourceFromDescription_(event.description || '')),
+    description: stripLeadSourceFromDescription_(event.description || ''),
   };
 }
 
@@ -777,6 +781,22 @@ function normalizeMonthKey_(value, year, monthIndex) {
 
 function eventGroupByType_(type) {
   return ['рекламные изменения', 'техработы', 'продуктовые изменения', 'прочее'].indexOf(type) >= 0 ? 'internal' : 'external';
+}
+
+function normalizeLeadSource_(value) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized || normalized === '__none__') return '';
+  if (normalized.toLowerCase() === 'другое') return 'другое';
+  return normalized;
+}
+
+function parseLeadSourceFromDescription_(description) {
+  const match = String(description || '').match(/\[LEAD_SOURCE=([^\]]+)\]/i);
+  return match ? match[1] : '';
+}
+
+function stripLeadSourceFromDescription_(description) {
+  return String(description || '').replace(/\[LEAD_SOURCE=([^\]]+)\]/i, '').trim();
 }
 
 function validateDailyRecord_(record) {

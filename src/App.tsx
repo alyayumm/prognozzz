@@ -73,7 +73,7 @@ import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/
 import { buildWeeklySummary } from "./utils/report";
 
 type Mode = "allMonths" | "month" | "monthDaily" | "week" | "sources" | "messages" | "events" | "admin";
-type AdminTab = "day" | "month" | "events" | "coefficients";
+type AdminTab = "day" | "month" | "sources" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
 type MonthDraft = CreateMonthPayload;
@@ -142,6 +142,9 @@ const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
 const defaultLeadSources = ["SEO", "Яндекс Карты", "2ГИС", "Гугл Карты", "Основные"];
+const noLeadSourceOption = "__none__";
+const otherLeadSourceOption = "другое";
+const leadSourceCommentPattern = /\[LEAD_SOURCE=([^\]]+)\]/i;
 const planRingItems: Array<{ metric: Metric; label: string; className: string; radius: number }> = [
   { metric: "Лиды", label: "Лиды", className: "leads", radius: 58 },
   { metric: "Квалы", label: "Квалы", className: "qualified", radius: 46 },
@@ -205,6 +208,14 @@ export default function App() {
   );
   const automaticEvents = useMemo(() => buildAutomaticWeekEvents(monthConfigs), [monthConfigs]);
   const allEvents = useMemo(() => mergeEventLists(events, automaticEvents), [events, automaticEvents]);
+  const currentMonthAllRecords = useMemo(
+    () => records.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey)),
+    [records, selectedMonthConfig.monthKey],
+  );
+  const currentMonthSourceOptions = useMemo(
+    () => getActiveLeadSources(currentMonthAllRecords),
+    [currentMonthAllRecords],
+  );
   const reportRecords = useMemo(() => filterRecordsByScope(records, selectedScope), [records, selectedScope]);
   const reportEvents = useMemo(() => filterEventsByScope(allEvents, selectedScope), [allEvents, selectedScope]);
   const currentMonthRecords = useMemo(
@@ -270,6 +281,9 @@ export default function App() {
 
         setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
         setRecords(mergePublicSheetRecords([], snapshot.records));
+        if (snapshot.eventsLoaded) {
+          setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
+        }
         latestRecordDateRef.current = snapshot.latestActualDate;
         setSavedMessage(
           snapshot.latestActualDate
@@ -404,8 +418,9 @@ export default function App() {
   }
 
   function addEvent(event: EventItem) {
-    const isUpdate = events.some((item) => item.id === event.id);
-    setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)].sort(sortEvents));
+    const normalizedEvent = normalizeEvent(event);
+    const isUpdate = events.some((item) => item.id === normalizedEvent.id);
+    setEvents((current) => [normalizedEvent, ...current.filter((item) => item.id !== normalizedEvent.id)].sort(sortEvents));
     if (!apiConfigured) {
       setSavedMessage(isUpdate ? "Событие обновлено только в этом браузере." : "Событие добавлено только в этом браузере. Общий сайт не обновится без Apps Script.");
       return;
@@ -414,8 +429,8 @@ export default function App() {
       setSavedMessage(isUpdate ? "Событие обновлено локально. Для записи в Google Sheets введите пароль админки." : "Событие добавлено локально. Для записи в Google Sheets введите пароль админки.");
       return;
     }
-    ensureRemoteMonth(event.startDate.slice(0, 7), writePassword)
-      .then(() => callReportApi("upsertEvent", { event }, writePassword))
+    ensureRemoteMonth(normalizedEvent.startDate.slice(0, 7), writePassword)
+      .then(() => callReportApi("upsertEvent", { event: serializeEventForRemote(normalizedEvent) }, writePassword))
       .then(() => setSavedMessage(isUpdate ? "Событие обновлено в Google Sheets." : "Событие добавлено и сохранено в Google Sheets."))
       .catch((error) => setSavedMessage(`Событие локально сохранено, но Sheets вернул ошибку: ${getErrorMessage(error)}.`));
   }
@@ -599,17 +614,16 @@ export default function App() {
             )}
             {mode === "sources" && (
               <SourcesDashboard
-                records={records.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey))}
+                records={currentMonthAllRecords}
+                events={currentMonthEvents}
                 selectedMonthConfig={selectedMonthConfig}
-                monthDates={monthDates}
-                onSaveDailyValues={updateDailyValues}
-                isSavingDaily={isSavingDaily}
               />
             )}
             {mode === "events" && (
               <EventsDashboard
                 dates={monthDates}
                 events={allEvents}
+                sourceOptions={currentMonthSourceOptions}
                 selectedScope={selectedScope}
                 groupFilter={eventGroupFilter}
                 setGroupFilter={setEventGroupFilter}
@@ -625,8 +639,9 @@ export default function App() {
                 months={monthConfigs}
                 selectedMonthKey={selectedMonthKey}
                 selectedMonthConfig={selectedMonthConfig}
-                records={records.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey))}
+                records={currentMonthAllRecords}
                 events={currentMonthEvents}
+                sourceOptions={currentMonthSourceOptions}
                 todayIso={todayIso}
                 selectMonth={selectMonth}
                 onCreateMonth={createMonthFromPanel}
@@ -1276,6 +1291,144 @@ function MessagesDashboard({ records, selectedMonthKey }: { records: DailyRecord
 
 function SourcesDashboard({
   records,
+  events,
+  selectedMonthConfig,
+}: {
+  records: DailyRecord[];
+  events: EventItem[];
+  selectedMonthConfig: MonthConfig;
+}) {
+  const activeSources = useMemo(() => getActiveLeadSources(records), [records]);
+  const sourceTotals = useMemo(() => activeSources.map((source) => ({
+    source,
+    totals: getSourceMetricTotals(records, source),
+  })), [activeSources, records]);
+  const sourceTotalsMax = useMemo(
+    () => Math.max(1, ...sourceTotals.flatMap((item) => metrics.map((metric) => item.totals[metric]))),
+    [sourceTotals],
+  );
+  const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
+    acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
+    return acc;
+  }, {} as Record<Metric, number>);
+  const sourceEvents = events.filter((event) => Boolean(normalizeSourceName(event.leadSource ?? "")));
+  const strongestMetric = metrics.reduce((best, metric) => (summaryTotals[metric] > summaryTotals[best] ? metric : best), "Лиды" as Metric);
+  const strongestSource = sourceTotals
+    .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
+    .sort((a, b) => b.value - a.value)[0];
+
+  return (
+    <div className="page-stack sources-dashboard">
+      <ExecutiveSummary
+        status={{ label: "отдельный слой", tone: "good" }}
+        eyebrow={selectedMonthConfig.label}
+        title="Дашборд источников"
+        facts={[
+          "Отдельно от МСК + СПБ",
+          "Отдельно от сообщений",
+          `Источников: ${activeSources.length}`,
+          `Событий с источником: ${sourceEvents.length}`,
+        ]}
+      />
+
+      <section className="source-kpi-strip">
+        {metrics.map((metric) => (
+          <article key={metric}>
+            <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+            <strong>{formatNumber(summaryTotals[metric])}</strong>
+            <small>итог по активным источникам месяца</small>
+          </article>
+        ))}
+      </section>
+
+      <section className="analytics-panel source-dashboard-panel">
+        <PanelHead
+          title="Разрез по метрикам"
+          description="Для каждого показателя видно, какой источник дает основной вклад в выбранном месяце."
+        />
+        <div className="source-dashboard-grid">
+          {metrics.map((metric) => (
+            <SourceMetricBreakdownCard
+              key={metric}
+              metric={metric}
+              sourceTotals={sourceTotals}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="analytics-panel">
+        <PanelHead
+          title="Итоги по источникам"
+          description={strongestSource?.value ? `Самый сильный источник по ${strongestMetric.toLowerCase()}: ${strongestSource.source}.` : "Пока нет FACT по источникам за выбранный месяц."}
+        />
+        <div className="source-summary-grid">
+          {sourceTotals.map((item) => (
+            <article key={item.source} className="source-summary-card">
+              <strong>{item.source}</strong>
+              <div>
+                {metrics.map((metric) => (
+                  <span key={metric}>
+                    <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
+                    <b>{formatNumber(item.totals[metric])}</b>
+                    <i className="source-mini-bar" aria-hidden="true">
+                      <em style={{ width: `${Math.round((item.totals[metric] / sourceTotalsMax) * 100)}%` }} />
+                    </i>
+                  </span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="analytics-panel source-events-panel">
+        <PanelHead title="События, привязанные к источникам" description="Показываем только события, где заполнено необязательное поле источника." />
+        <div className="source-event-list">
+          {sourceEvents.length === 0 && <p className="empty-state">Событий с привязкой к источнику пока нет.</p>}
+          {sourceEvents.map((event) => <EventCard key={event.id} event={event} />)}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SourceMetricBreakdownCard({
+  metric,
+  sourceTotals,
+}: {
+  metric: Metric;
+  sourceTotals: Array<{ source: string; totals: Record<Metric, number> }>;
+}) {
+  const rows = [...sourceTotals].sort((a, b) => b.totals[metric] - a.totals[metric]);
+  const metricMax = Math.max(1, ...rows.map((item) => item.totals[metric]));
+  const totalValue = rows.reduce((sum, item) => sum + item.totals[metric], 0);
+
+  return (
+    <article className="source-breakdown-card">
+      <div className="source-breakdown-head">
+        <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
+        <strong>{formatNumber(totalValue)}</strong>
+      </div>
+      <div className="source-breakdown-list">
+        {rows.map((item) => {
+          const value = item.totals[metric];
+          const width = Math.round((value / metricMax) * 100);
+          return (
+            <div className="source-breakdown-row" key={item.source}>
+              <span>{item.source}</span>
+              <i aria-hidden="true"><em style={{ width: `${width}%` }} /></i>
+              <strong>{formatNumber(value)}</strong>
+            </div>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
+function SourceAdminPanel({
+  records,
   selectedMonthConfig,
   monthDates,
   onSaveDailyValues,
@@ -1292,18 +1445,6 @@ function SourcesDashboard({
   const [newSourceName, setNewSourceName] = useState("");
   const activeSources = useMemo(() => getActiveLeadSources(records), [records]);
   const [draft, setDraft] = useState<Record<string, SourceMetricDraft>>(() => createSourceDraft(records, selectedDate, activeSources));
-  const sourceTotals = useMemo(() => activeSources.map((source) => ({
-    source,
-    totals: getSourceMetricTotals(records, source),
-  })), [activeSources, records]);
-  const sourceTotalsMax = useMemo(
-    () => Math.max(1, ...sourceTotals.flatMap((item) => metrics.map((metric) => item.totals[metric]))),
-    [sourceTotals],
-  );
-  const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
-    acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
-    return acc;
-  }, {} as Record<Metric, number>);
 
   useEffect(() => {
     if (!monthDates.includes(selectedDate)) {
@@ -1345,126 +1486,81 @@ function SourcesDashboard({
   }
 
   return (
-    <div className="page-stack sources-dashboard">
-      <ExecutiveSummary
-        status={{ label: "отдельный слой", tone: "good" }}
-        eyebrow={selectedMonthConfig.label}
-        title="Источники лидов"
-        facts={[
-          "Не входят в МСК + СПБ",
-          "Не входят в сообщения",
-          `Источников: ${activeSources.length}`,
-          `Дней месяца: ${monthDates.length}`,
-        ]}
+    <section className="analytics-panel source-editor-panel">
+      <PanelHead
+        title="Источники"
+        description="Ввод лидов, КВАЛ и продаж по каналам привлечения. Эти данные не смешиваются с городами и сообщениями."
       />
+      <div className="source-toolbar">
+        <label>
+          Дата
+          <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
+            {monthDates.map((date) => (
+              <option key={date} value={date}>{formatDay(date)} · {weekdayLabel(date)}</option>
+            ))}
+          </select>
+        </label>
+        <div className="source-add">
+          <input
+            type="text"
+            value={newSourceName}
+            onChange={(event) => setNewSourceName(event.target.value)}
+            placeholder="Новый источник"
+            aria-label="Новый источник"
+          />
+          <button className="select-button" type="button" onClick={addSource} disabled={!normalizeSourceName(newSourceName) || isSavingDaily}>
+            <Plus size={16} />
+            Добавить
+          </button>
+        </div>
+      </div>
 
-      <section className="source-kpi-strip">
-        {metrics.map((metric) => (
-          <article key={metric}>
-            <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
-            <strong>{formatNumber(summaryTotals[metric])}</strong>
-            <small>итог по активным источникам месяца</small>
-          </article>
-        ))}
-      </section>
-
-      <section className="analytics-panel source-editor-panel">
-        <PanelHead
-          title="Ввод по источникам"
-          description="Каждый источник хранится отдельно от городов и сообщений. Сохраняется выбранный день."
-        />
-        <div className="source-toolbar">
-          <label>
-            Дата
-            <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
-              {monthDates.map((date) => (
-                <option key={date} value={date}>{formatDay(date)} · {weekdayLabel(date)}</option>
-              ))}
-            </select>
-          </label>
-          <div className="source-add">
-            <input
-              type="text"
-              value={newSourceName}
-              onChange={(event) => setNewSourceName(event.target.value)}
-              placeholder="Новый источник"
-              aria-label="Новый источник"
-            />
-            <button className="select-button" type="button" onClick={addSource} disabled={!normalizeSourceName(newSourceName) || isSavingDaily}>
-              <Plus size={16} />
-              Добавить
+      <div className="source-table">
+        <div className="source-row source-head">
+          <span>Источник</span>
+          {metrics.map((metric) => <span key={metric}>{metric === "Квалы" ? "КВАЛ" : metric}</span>)}
+          <span>Действие</span>
+        </div>
+        {activeSources.map((source) => (
+          <div className="source-row" key={source}>
+            <strong>{source}</strong>
+            {metrics.map((metric) => (
+              <label className="compact-input" key={metric}>
+                <input
+                  type="number"
+                  min="0"
+                  value={draft[source]?.[metric] ?? 0}
+                  onChange={(event) => updateSourceValue(source, metric, Number(event.target.value))}
+                  aria-label={`${source} ${metric}`}
+                />
+              </label>
+            ))}
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => hideSource(source)}
+              disabled={defaultLeadSources.some((item) => sourceNameEquals(item, source)) || isSavingDaily}
+              aria-label={`Скрыть источник ${source}`}
+              title={defaultLeadSources.some((item) => sourceNameEquals(item, source)) ? "Базовый источник остается в списке" : "Скрыть источник"}
+            >
+              <Trash2 size={16} />
             </button>
           </div>
-        </div>
+        ))}
+      </div>
 
-        <div className="source-table">
-          <div className="source-row source-head">
-            <span>Источник</span>
-            {metrics.map((metric) => <span key={metric}>{metric === "Квалы" ? "КВАЛ" : metric}</span>)}
-            <span>Действие</span>
-          </div>
-          {activeSources.map((source) => (
-            <div className="source-row" key={source}>
-              <strong>{source}</strong>
-              {metrics.map((metric) => (
-                <label className="compact-input" key={metric}>
-                  <input
-                    type="number"
-                    min="0"
-                    value={draft[source]?.[metric] ?? 0}
-                    onChange={(event) => updateSourceValue(source, metric, Number(event.target.value))}
-                    aria-label={`${source} ${metric}`}
-                  />
-                </label>
-              ))}
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => hideSource(source)}
-                disabled={defaultLeadSources.some((item) => sourceNameEquals(item, source)) || isSavingDaily}
-                aria-label={`Скрыть источник ${source}`}
-                title={defaultLeadSources.some((item) => sourceNameEquals(item, source)) ? "Базовый источник остается в списке" : "Скрыть источник"}
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <button className="primary-button source-save" type="button" onClick={saveSourceDay} disabled={isSavingDaily || !activeSources.length}>
-          <Save size={16} />
-          {isSavingDaily ? "Сохраняю..." : "Сохранить источники"}
-        </button>
-      </section>
-
-      <section className="analytics-panel">
-        <PanelHead title="Итоги месяца" description="Сумма по активным источникам за выбранный месяц." />
-        <div className="source-summary-grid">
-          {sourceTotals.map((item) => (
-            <article key={item.source} className="source-summary-card">
-              <strong>{item.source}</strong>
-              <div>
-                {metrics.map((metric) => (
-                  <span key={metric}>
-                    <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
-                    <b>{formatNumber(item.totals[metric])}</b>
-                    <i className="source-mini-bar" aria-hidden="true">
-                      <em style={{ width: `${Math.round((item.totals[metric] / sourceTotalsMax) * 100)}%` }} />
-                    </i>
-                  </span>
-                ))}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
+      <button className="primary-button source-save" type="button" onClick={saveSourceDay} disabled={isSavingDaily || !activeSources.length}>
+        <Save size={16} />
+        {isSavingDaily ? "Сохраняю..." : "Сохранить источники"}
+      </button>
+    </section>
   );
 }
 
 function EventsDashboard({
   dates,
   events,
+  sourceOptions,
   selectedScope,
   groupFilter,
   setGroupFilter,
@@ -1475,6 +1571,7 @@ function EventsDashboard({
 }: {
   dates: string[];
   events: EventItem[];
+  sourceOptions: string[];
   selectedScope: ReportScope;
   groupFilter: EventGroupFilter;
   setGroupFilter: (value: EventGroupFilter) => void;
@@ -1538,6 +1635,7 @@ function EventsDashboard({
         <EventForm
           dates={dates}
           selectedDate={selectedDate}
+          sourceOptions={sourceOptions}
           editingEvent={editingEvent}
           onCancelEdit={() => setEditingEvent(null)}
           onSave={(event) => {
@@ -2353,6 +2451,7 @@ function AdminDashboard({
   selectedMonthConfig,
   records,
   events,
+  sourceOptions,
   todayIso,
   selectMonth,
   onCreateMonth,
@@ -2372,6 +2471,7 @@ function AdminDashboard({
   selectedMonthConfig: MonthConfig;
   records: DailyRecord[];
   events: EventItem[];
+  sourceOptions: string[];
   todayIso: string;
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
@@ -2404,6 +2504,7 @@ function AdminDashboard({
         facts={[
           "Итоги: МСК + СПБ без сообщений",
           "Сообщения только в отдельной вкладке",
+          `Источников: ${sourceOptions.length}`,
           "План по каждому направлению",
           "День сохраняется пачкой",
           "Коэффициенты прогноза редактируются",
@@ -2426,6 +2527,7 @@ function AdminDashboard({
         <div className="admin-tabs" role="tablist" aria-label="Режим админки">
           <button className={tab === "day" ? "active" : ""} type="button" onClick={() => setTab("day")}>День</button>
           <button className={tab === "month" ? "active" : ""} type="button" onClick={() => setTab("month")}>Месяц</button>
+          <button className={tab === "sources" ? "active" : ""} type="button" onClick={() => setTab("sources")}>Источники</button>
           <button className={tab === "events" ? "active" : ""} type="button" onClick={() => setTab("events")}>События</button>
           <button className={tab === "coefficients" ? "active" : ""} type="button" onClick={() => setTab("coefficients")}>Коэф.</button>
         </div>
@@ -2464,8 +2566,17 @@ function AdminDashboard({
           onCreateMonth={onCreateMonth}
         />
       )}
+      {tab === "sources" && (
+        <SourceAdminPanel
+          records={records}
+          selectedMonthConfig={selectedMonthConfig}
+          monthDates={dates}
+          onSaveDailyValues={onSaveDailyValues}
+          isSavingDaily={isSavingDaily}
+        />
+      )}
       {tab === "events" && (
-        <AdminEventsPanel dates={dates} events={events} onAddEvent={onAddEvent} onDeleteEvent={onDeleteEvent} />
+        <AdminEventsPanel dates={dates} events={events} sourceOptions={sourceOptions} onAddEvent={onAddEvent} onDeleteEvent={onDeleteEvent} />
       )}
       {tab === "coefficients" && (
         <AdminForecastCoefficientsPanel
@@ -2783,11 +2894,13 @@ function AdminMonthPanel({
 function AdminEventsPanel({
   dates,
   events,
+  sourceOptions,
   onAddEvent,
   onDeleteEvent,
 }: {
   dates: string[];
   events: EventItem[];
+  sourceOptions: string[];
   onAddEvent: (event: EventItem) => void;
   onDeleteEvent: (eventId: string) => void;
 }) {
@@ -2811,6 +2924,7 @@ function AdminEventsPanel({
         <EventForm
           dates={dates}
           selectedDate={selectedDate}
+          sourceOptions={sourceOptions}
           editingEvent={editingEvent}
           onCancelEdit={() => setEditingEvent(null)}
           onSave={(event) => {
@@ -2997,6 +3111,7 @@ function createEventDraft(date: string) {
     actualEffect: "неизвестно" as Effect,
     city: "МСК + СПБ" as EventCity,
     metric: "все" as Metric | "все",
+    leadSource: "",
     importance: 2 as 1 | 2 | 3,
     description: "",
   };
@@ -3013,20 +3128,23 @@ function eventToDraft(event: EventItem) {
     actualEffect: event.actualEffect,
     city: event.city,
     metric: event.metric,
+    leadSource: normalizeEventLeadSource(event.leadSource ?? parseLeadSourceFromDescription(event.description)),
     importance: event.importance,
-    description: event.description,
+    description: stripLeadSourceFromDescription(event.description),
   };
 }
 
 function EventForm({
   dates,
   selectedDate,
+  sourceOptions,
   editingEvent,
   onCancelEdit,
   onSave,
 }: {
   dates: string[];
   selectedDate: string;
+  sourceOptions: string[];
   editingEvent: EventItem | null;
   onCancelEdit: () => void;
   onSave: (event: EventItem) => void;
@@ -3077,6 +3195,7 @@ function EventForm({
           ...draft,
           startDate,
           endDate,
+          leadSource: normalizeEventLeadSource(draft.leadSource),
           source: "manual",
         });
         setDraft(createEventDraft(selectedDate || dates[0] || getTodayIso()));
@@ -3103,6 +3222,17 @@ function EventForm({
         <select value={draft.metric} onChange={(event) => setDraft({ ...draft, metric: event.target.value as Metric | "все" })}>
           <option value="все">все</option>
           {metrics.map((metric) => <option key={metric} value={metric}>{metric === "Квалы" ? "КВАЛ" : metric}</option>)}
+        </select>
+      </label>
+      <label>
+        Источник влияния
+        <select
+          value={draft.leadSource || noLeadSourceOption}
+          onChange={(event) => setDraft({ ...draft, leadSource: event.target.value === noLeadSourceOption ? "" : event.target.value })}
+        >
+          <option value={noLeadSourceOption}>нет привязки</option>
+          {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+          <option value={otherLeadSourceOption}>другое</option>
         </select>
       </label>
       <label>
@@ -3182,7 +3312,7 @@ function MonthDailyEventsPanel({
                   <span>{event.group === "internal" ? "внутреннее" : "внешнее"}</span>
                 </div>
                 <p>{event.description}</p>
-                <small>{eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
+                <small>{eventMetaLine(event)}</small>
               </article>
             ))}
           </section>
@@ -3211,7 +3341,7 @@ function EventCard({
       </div>
       <p>{event.description}</p>
       <div className="event-card-bottom">
-        <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventCityLabel(event.city)} · {event.type} · {event.actualEffect}</small>
+        <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventMetaLine(event)}</small>
         {(onEdit || onDelete) && event.source !== "system" && (
           <span className="event-card-actions">
             {onEdit && (
@@ -3935,6 +4065,50 @@ function eventCityLabel(city: EventCity): string {
   return cityLabels[city as City] ?? city;
 }
 
+function eventMetaLine(event: EventItem): string {
+  return [
+    eventCityLabel(event.city),
+    event.type,
+    event.actualEffect,
+    eventLeadSourceLabel(event.leadSource),
+  ].filter(Boolean).join(" · ");
+}
+
+function eventLeadSourceLabel(source: string | undefined): string {
+  const normalized = normalizeEventLeadSource(source ?? "");
+  return normalized ? `источник: ${normalized}` : "";
+}
+
+function normalizeEventLeadSource(value: string | undefined): string {
+  const normalized = normalizeSourceName(value ?? "");
+  if (!normalized || normalized === noLeadSourceOption) return "";
+  if (normalized.toLowerCase() === otherLeadSourceOption) return otherLeadSourceOption;
+  return normalized;
+}
+
+function parseLeadSourceFromDescription(description: string | undefined): string {
+  return description?.match(leadSourceCommentPattern)?.[1] ?? "";
+}
+
+function stripLeadSourceFromDescription(description: string | undefined): string {
+  return String(description ?? "").replace(leadSourceCommentPattern, "").trim();
+}
+
+function encodeLeadSourceInDescription(description: string | undefined, leadSource: string | undefined): string {
+  const cleanDescription = stripLeadSourceFromDescription(description);
+  const normalizedSource = normalizeEventLeadSource(leadSource);
+  if (!normalizedSource) return cleanDescription;
+  return `${cleanDescription}${cleanDescription ? " " : ""}[LEAD_SOURCE=${normalizedSource}]`;
+}
+
+function serializeEventForRemote(event: EventItem): EventItem {
+  return {
+    ...event,
+    leadSource: normalizeEventLeadSource(event.leadSource),
+    description: encodeLeadSourceInDescription(event.description, event.leadSource),
+  };
+}
+
 function normalizeSourceName(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -4456,10 +4630,13 @@ function normalizeMonthConfig(config: MonthConfig): MonthConfig {
 
 function normalizeEvent(event: EventItem): EventItem {
   const type = event.type;
+  const description = stripLeadSourceFromDescription(event.description);
   return {
     ...event,
     group: event.group ?? (internalEventTypes.includes(type) ? "internal" : "external"),
     source: event.source ?? "manual",
+    leadSource: normalizeEventLeadSource(event.leadSource ?? parseLeadSourceFromDescription(event.description)),
+    description,
   };
 }
 

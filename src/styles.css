@@ -2257,6 +2257,81 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-weight: 760;
 }
 .source-editor-panel { display: grid; gap: 14px; }
+.source-dashboard-panel { display: grid; gap: 14px; }
+.source-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.source-breakdown-card {
+  min-height: 250px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+.source-breakdown-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.source-breakdown-head span {
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+.source-breakdown-head strong {
+  color: var(--navy);
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 950;
+}
+.source-breakdown-list {
+  display: grid;
+  gap: 10px;
+}
+.source-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.9fr) minmax(120px, 1.5fr) 54px;
+  align-items: center;
+  gap: 9px;
+}
+.source-breakdown-row span {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-breakdown-row i {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(127, 167, 255, 0.16);
+}
+.source-breakdown-row em {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue), var(--soft-blue));
+}
+.source-breakdown-row strong {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 950;
+  text-align: right;
+}
+.source-event-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
 .source-toolbar {
   display: grid;
   grid-template-columns: minmax(190px, 240px) minmax(280px, 1fr);
@@ -2691,6 +2766,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .month-end-forecast-grid,
   .calendar-grid,
   .source-kpi-strip,
+  .source-dashboard-grid,
   .source-toolbar,
   .admin-total-strip,
   .admin-plan-grid,
@@ -2700,7 +2776,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .source-row { min-width: 720px; }
   .admin-command-panel,
   .admin-actions { display: grid; }
-  .admin-tabs { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); }
+  .admin-tabs { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .admin-tabs button { min-width: 0; width: 100%; }
   .admin-day-row,
   .admin-create-top,

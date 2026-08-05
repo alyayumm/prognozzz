@@ -1,4 +1,17 @@
-import type { City, DailyRecord, DailyRecordCity, Metric, MonthConfig, PlanByCity } from "../types";
+import type {
+  City,
+  DailyRecord,
+  DailyRecordCity,
+  Effect,
+  EventCity,
+  EventGroup,
+  EventItem,
+  EventSource,
+  EventType,
+  Metric,
+  MonthConfig,
+  PlanByCity,
+} from "../types";
 
 const spreadsheetId = "1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s";
 const sourceYear = 2026;
@@ -11,11 +24,26 @@ const serviceSheets = {
   daily: "Data_Daily",
   months: "Month_Config",
   plans: "Month_Plans",
+  events: "Event_Map",
 };
 const metricLabels: Metric[] = ["Лиды", "Квалы", "Продажи"];
 const cityLabels: City[] = ["МСК", "СПБ", "сообщения"];
 const sourceRecordCity = "источники";
+const noLeadSourceValue = "";
+const otherLeadSourceValue = "другое";
+const leadSourceCommentPattern = /\[LEAD_SOURCE=([^\]]+)\]/i;
 const planCityLabels: Array<Extract<City, "МСК" | "СПБ">> = ["МСК", "СПБ"];
+const eventTypes: EventType[] = [
+  "рекламные изменения",
+  "сезонность",
+  "праздники",
+  "техработы",
+  "конкуренты",
+  "продуктовые изменения",
+  "прочее",
+];
+const internalEventTypes: EventType[] = ["рекламные изменения", "техработы", "продуктовые изменения", "прочее"];
+const effectLabels: Effect[] = ["положительный", "негативный", "неизвестно"];
 const monthNames = [
   "Январь",
   "Февраль",
@@ -54,6 +82,8 @@ type DateColumn = {
 
 export type PublicSheetSnapshot = {
   records: DailyRecord[];
+  events: EventItem[];
+  eventsLoaded: boolean;
   monthConfigs: MonthConfig[];
   latestActualDate: string | null;
 };
@@ -84,6 +114,8 @@ export async function loadPublicSheetSnapshot(fallbackMonthConfigs: MonthConfig[
 
   return {
     records,
+    events: [],
+    eventsLoaded: false,
     monthConfigs: buildMonthConfigs(records, fallbackMonthConfigs),
     latestActualDate,
   };
@@ -95,15 +127,26 @@ async function loadServiceSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Pr
     loadGvizSheet(serviceSheets.plans),
     loadGvizSheet(serviceSheets.daily),
   ]);
+  const eventTable = await loadOptionalGvizSheet(serviceSheets.events);
   const planRows = rowsToObjects(planTable);
   const records = parseServiceDailySheet(dailyTable);
   const monthConfigs = parseServiceMonthConfigs(monthTable, planRows, fallbackMonthConfigs);
 
   return {
     records,
+    events: eventTable ? parseServiceEventSheet(eventTable) : [],
+    eventsLoaded: Boolean(eventTable),
     monthConfigs,
     latestActualDate: getLatestActualDate(records),
   };
+}
+
+async function loadOptionalGvizSheet(sheetName: string): Promise<GvizTable | null> {
+  try {
+    return await loadGvizSheet(sheetName);
+  } catch {
+    return null;
+  }
 }
 
 function loadGvizSheet(sheetName: string): Promise<GvizTable> {
@@ -292,6 +335,40 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
     .sort((a, b) => a.date.localeCompare(b.date) || a.city.localeCompare(b.city) || a.metric.localeCompare(b.metric));
 }
 
+function parseServiceEventSheet(table: GvizTable): EventItem[] {
+  return rowsToObjects(table)
+    .map((row) => {
+      const startDate = normalizeDateValue(row.startDate);
+      const endDate = normalizeDateValue(row.endDate);
+      const title = String(row.title || "").trim();
+      if (!startDate || !endDate || !title) return null;
+
+      const rawDescription = row.description || "";
+      const leadSource = normalizeLeadSource(row.leadSource || parseLeadSourceFromComment(rawDescription));
+      const type = normalizeEventType(row.type);
+
+      const event: EventItem = {
+        id: row.id || `evt-${startDate}-${title}`,
+        startDate: startDate <= endDate ? startDate : endDate,
+        endDate: startDate <= endDate ? endDate : startDate,
+        title,
+        type,
+        group: normalizeEventGroup(row.group, type),
+        source: normalizeEventSource(row.source),
+        expectedEffect: normalizeEffect(row.expectedEffect),
+        actualEffect: normalizeEffect(row.actualEffect),
+        importance: normalizeImportance(row.importance),
+        city: normalizeEventCity(row.city),
+        metric: normalizeEventMetric(row.metric),
+        leadSource: leadSource || undefined,
+        description: stripLeadSourceFromComment(rawDescription),
+      };
+      return event;
+    })
+    .filter((event): event is EventItem => event !== null)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title));
+}
+
 function parseServiceMonthConfigs(
   table: GvizTable,
   planRows: Array<Record<string, string>>,
@@ -398,6 +475,63 @@ function normalizeMetric(value: string): Metric | null {
   if (normalized.includes("КВАЛ")) return "Квалы";
   if (normalized.includes("ПРОДАЖ")) return "Продажи";
   return null;
+}
+
+function normalizeEventMetric(value: string): Metric | "все" {
+  return normalizeMetric(value) ?? "все";
+}
+
+function normalizeEventType(value: string): EventType {
+  const normalized = value.trim().toLowerCase();
+  return eventTypes.find((type) => type.toLowerCase() === normalized) ?? "прочее";
+}
+
+function normalizeEventGroup(value: string, type: EventType): EventGroup {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "internal" || normalized === "внутреннее" || normalized === "внутренние") return "internal";
+  if (normalized === "external" || normalized === "внешнее" || normalized === "внешние") return "external";
+  return internalEventTypes.includes(type) ? "internal" : "external";
+}
+
+function normalizeEventSource(value: string): EventSource {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "system") return "system";
+  if (normalized === "google_sheets") return "google_sheets";
+  return "manual";
+}
+
+function normalizeEffect(value: string): Effect {
+  const normalized = value.trim().toLowerCase();
+  return effectLabels.find((effect) => effect === normalized) ?? "неизвестно";
+}
+
+function normalizeEventCity(value: string): EventCity {
+  const normalized = value.trim();
+  if (normalized === "МСК" || normalized === "СПБ" || normalized === "сообщения" || normalized === "МСК + СПБ" || normalized === "все") {
+    return normalized;
+  }
+  return "все";
+}
+
+function normalizeImportance(value: string): 1 | 2 | 3 {
+  const numeric = Number(value);
+  if (numeric === 1 || numeric === 2 || numeric === 3) return numeric;
+  return 2;
+}
+
+function normalizeLeadSource(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized || normalized === noLeadSourceValue) return "";
+  if (normalized.toLowerCase() === otherLeadSourceValue) return otherLeadSourceValue;
+  return normalized;
+}
+
+function parseLeadSourceFromComment(comment: string): string {
+  return comment.match(leadSourceCommentPattern)?.[1] ?? "";
+}
+
+function stripLeadSourceFromComment(comment: string): string {
+  return comment.replace(leadSourceCommentPattern, "").trim();
 }
 
 const omQualifiedCommentPattern = /\[OM_KVAL=([\d.,]+)\]/i;

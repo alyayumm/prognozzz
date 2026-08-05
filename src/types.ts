@@ -94,6 +94,7 @@ export interface EventItem {
   importance: 1 | 2 | 3;
   city: EventCity;
   metric: Metric | "все";
+  leadSource?: string;
   description: string;
 }
 
