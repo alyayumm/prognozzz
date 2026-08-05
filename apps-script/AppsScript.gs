@@ -523,14 +523,15 @@ function normalizeDailyUpdate_(record) {
   const date = record.date;
   const city = record.city;
   const metric = record.metric;
-  const current = findDailyRecord_(date, city, metric);
+  const channel = record.channel || defaultDailyChannel_(city);
+  const current = findDailyRecord_(date, city, metric, channel);
   return {
-    id: record.id || date + '-' + city + '-' + metric,
+    id: record.id || dailyRecordId_(date, city, metric, channel),
     date: date,
     month: record.month || String(date).slice(0, 7),
     week: record.week || weekOfMonth_(date),
     city: city,
-    channel: record.channel || (city === 'сообщения' ? 'Сообщения' : 'Город'),
+    channel: channel,
     metric: metric,
     plan: record.plan !== undefined ? record.plan : (current ? current.plan : 0),
     fact: record.fact !== undefined ? record.fact : (current ? current.fact : 0),
@@ -541,8 +542,25 @@ function normalizeDailyUpdate_(record) {
   };
 }
 
-function findDailyRecord_(date, city, metric) {
-  return readObjects_(CONFIG.sheets.daily).find((row) => row.date === date && row.city === city && row.metric === metric);
+function findDailyRecord_(date, city, metric, channel) {
+  return readObjects_(CONFIG.sheets.daily).find((row) => {
+    if (row.date !== date || row.city !== city || row.metric !== metric) return false;
+    if (city === 'источники') return String(row.channel || '') === String(channel || '');
+    return true;
+  });
+}
+
+function dailyRecordId_(date, city, metric, channel) {
+  if (city === 'источники' && channel) {
+    return date + '-' + city + '-' + channel + '-' + metric;
+  }
+  return date + '-' + city + '-' + metric;
+}
+
+function defaultDailyChannel_(city) {
+  if (city === 'сообщения') return 'Сообщения';
+  if (city === 'источники') return 'Источник';
+  return 'Город';
 }
 
 function normalizeDailyForClient_(record) {

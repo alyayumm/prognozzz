@@ -1,4 +1,4 @@
-import type { City, DailyRecord, Metric, MonthConfig, PlanByCity } from "../types";
+import type { City, DailyRecord, DailyRecordCity, Metric, MonthConfig, PlanByCity } from "../types";
 
 const spreadsheetId = "1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s";
 const sourceYear = 2026;
@@ -14,6 +14,7 @@ const serviceSheets = {
 };
 const metricLabels: Metric[] = ["Лиды", "Квалы", "Продажи"];
 const cityLabels: City[] = ["МСК", "СПБ", "сообщения"];
+const sourceRecordCity = "источники";
 const planCityLabels: Array<Extract<City, "МСК" | "СПБ">> = ["МСК", "СПБ"];
 const monthNames = [
   "Январь",
@@ -275,7 +276,7 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
         id: row.id || `${date}-${city}-${metric}`,
         date,
         city,
-        channel: row.channel || (city === "сообщения" ? "Сообщения" : "Город"),
+        channel: row.channel || (city === "сообщения" ? "Сообщения" : city === sourceRecordCity ? "Источник" : "Город"),
         metric,
         plan: toNumber(row.plan || ""),
         fact: toNumber(row.fact || ""),
@@ -343,7 +344,7 @@ function plansByCityFromServiceRows(
     const rowMonthKey = normalizeMonthKey(row.monthKey);
     const city = normalizeCity(row.city);
     const metric = normalizeMetric(row.metric);
-    if (!city || !metric || rowMonthKey !== monthKey) return;
+    if (!city || !metric || !isConfigCity(city) || rowMonthKey !== monthKey) return;
     plans[city][metric] = toNumber(row.plan || "");
   });
 
@@ -374,8 +375,14 @@ function normalizeMonthKey(value: string | undefined, year?: number, monthIndex?
   return null;
 }
 
-function normalizeCity(value: string): City | null {
-  return cityLabels.find((city) => city.toLowerCase() === value.trim().toLowerCase()) ?? null;
+function normalizeCity(value: string): DailyRecordCity | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === sourceRecordCity) return sourceRecordCity;
+  return cityLabels.find((city) => city.toLowerCase() === normalized) ?? null;
+}
+
+function isConfigCity(city: DailyRecordCity): city is City {
+  return city === "МСК" || city === "СПБ" || city === "сообщения";
 }
 
 function toNumber(value: string): number {

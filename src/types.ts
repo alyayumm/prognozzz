@@ -1,5 +1,6 @@
 export type City = "МСК" | "СПБ" | "сообщения";
-export type DailyRecordCity = City | "Все";
+export type SourceRecordCity = "источники";
+export type DailyRecordCity = City | "Все" | SourceRecordCity;
 export type Metric = "Лиды" | "Квалы" | "Продажи";
 export type PlanByCity = Record<City, Record<Metric, number>>;
 export type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
@@ -45,8 +46,10 @@ export interface MonthConfig {
 }
 
 export interface DailyValueUpdate {
+  id?: string;
   date: string;
-  city: City;
+  city: DailyRecordCity;
+  channel?: string;
   metric: Metric;
   plan?: number;
   fact?: number;
