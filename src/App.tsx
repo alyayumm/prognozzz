@@ -149,7 +149,7 @@ const sourceRecordCity = "источники";
 const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
-const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Основные"];
+const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Другие"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
@@ -4498,12 +4498,19 @@ function normalizeSourceName(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function canonicalSourceName(value: string): string {
+  const normalized = normalizeSourceName(value);
+  const lower = normalized.toLowerCase();
+  if (lower === "основные" || lower === "другое" || lower === "другие") return "Другие";
+  return normalized;
+}
+
 function sourceNameEquals(left: string, right: string): boolean {
-  return normalizeSourceName(left).toLowerCase() === normalizeSourceName(right).toLowerCase();
+  return canonicalSourceName(left).toLowerCase() === canonicalSourceName(right).toLowerCase();
 }
 
 function sourceKey(source: string): string {
-  return normalizeSourceName(source).toLowerCase();
+  return canonicalSourceName(source).toLowerCase();
 }
 
 function sourceMetricLabel(metric: Metric): string {
@@ -4512,13 +4519,13 @@ function sourceMetricLabel(metric: Metric): string {
 }
 
 function getLeadSourceColor(source: string, fallbackIndex = 0): string {
-  const normalized = normalizeSourceName(source).toLowerCase();
+  const normalized = canonicalSourceName(source).toLowerCase();
   if (normalized.includes("seo") || normalized.includes("сео")) return "#1C46F5";
   if (normalized.includes("2гис") || normalized.includes("2gis")) return "#22B94B";
   if (normalized.includes("директ")) return "#F5B800";
   if (normalized.includes("яндекс") && normalized.includes("карт")) return "#FB6258";
   if (normalized.includes("гугл") || normalized.includes("google")) return "#34B7C7";
-  if (normalized.includes("основ")) return "#131B2F";
+  if (normalized.includes("друг")) return "#131B2F";
 
   const fallbackPalette = ["#7FA7FF", "#8B5CF6", "#14B8A6", "#F97316", "#64748B", "#EC4899"];
   return fallbackPalette[Math.abs(fallbackIndex) % fallbackPalette.length];
@@ -4628,7 +4635,7 @@ function isSourceValueRecord(record: DailyRecord): boolean {
 }
 
 function sourceNameFromMeta(record: DailyRecord): string {
-  return normalizeSourceName(record.channel.slice(sourceMetaChannelPrefix.length));
+  return canonicalSourceName(record.channel.slice(sourceMetaChannelPrefix.length));
 }
 
 function getSourceMeta(records: DailyRecord[]) {
@@ -4656,10 +4663,11 @@ function getActiveLeadSources(records: DailyRecord[]): string[] {
   });
 
   records.filter(isSourceValueRecord).forEach((record) => {
-    const source = normalizeSourceName(record.channel);
+    const source = canonicalSourceName(record.channel);
     if (!source || meta.hidden.has(source.toLowerCase())) return;
     if (record.fact > 0 || record.plan > 0 || record.forecast > 0 || record.recommendations > 0 || record.omQualified > 0) {
-      names.add(source);
+      const existing = [...names].find((item) => sourceNameEquals(item, source));
+      names.add(existing ?? source);
     }
   });
 
