@@ -28,6 +28,7 @@ import {
 } from "./data/dashboardMock";
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
+import type { CSSProperties } from "react";
 import { buildAttentionItems } from "./lib/insights";
 import {
   applyTrafficModeToTotals,
@@ -80,6 +81,13 @@ type MonthDraft = CreateMonthPayload;
 type DailyAdminMetricDraft = { fact: number; recommendations: number; omQualified: number };
 type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type SourceMetricDraft = Record<Metric, number>;
+type SourcePeriodMode = "day" | "week" | "month";
+type SourceChartBucket = {
+  key: string;
+  label: string;
+  caption: string;
+  values: Record<string, Record<Metric, number>>;
+};
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -141,7 +149,12 @@ const sourceRecordCity = "источники";
 const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
-const defaultLeadSources = ["SEO", "Яндекс Карты", "2ГИС", "Гугл Карты", "Основные"];
+const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Основные"];
+const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
+  { value: "day", label: "По дням" },
+  { value: "week", label: "По неделям" },
+  { value: "month", label: "По месяцам" },
+];
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
 const leadSourceCommentPattern = /\[LEAD_SOURCE=([^\]]+)\]/i;
@@ -613,10 +626,10 @@ export default function App() {
               <MessagesDashboard records={records} selectedMonthKey={selectedMonthKey} />
             )}
             {mode === "sources" && (
-              <SourcesDashboard
-                records={currentMonthAllRecords}
-                events={currentMonthEvents}
+              <SourcesAnalyticsDashboard
+                records={records}
                 selectedMonthConfig={selectedMonthConfig}
+                monthConfigs={monthConfigs}
               />
             )}
             {mode === "events" && (
@@ -1285,6 +1298,370 @@ function MessagesDashboard({ records, selectedMonthKey }: { records: DailyRecord
         <h2>Панель сообщений подготовлена</h2>
         <p>Данные сообщений вынесены отдельно от лидов. Подробные поля и связь с продажами добавим после следующего ТЗ.</p>
       </section>
+    </div>
+  );
+}
+
+function SourcesAnalyticsDashboard({
+  records,
+  selectedMonthConfig,
+  monthConfigs,
+}: {
+  records: DailyRecord[];
+  selectedMonthConfig: MonthConfig;
+  monthConfigs: MonthConfig[];
+}) {
+  const [periodMode, setPeriodMode] = useState<SourcePeriodMode>("day");
+  const scopedRecords = useMemo(
+    () => getSourceRecordsForPeriod(records, periodMode, selectedMonthConfig),
+    [records, periodMode, selectedMonthConfig],
+  );
+  const activeSources = useMemo(() => getActiveLeadSources(scopedRecords), [scopedRecords]);
+  const [hiddenSourceKeys, setHiddenSourceKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    setHiddenSourceKeys((current) => current.filter((key) => activeSources.some((source) => sourceKey(source) === key)));
+  }, [activeSources]);
+
+  const visibleSources = activeSources.filter((source) => !hiddenSourceKeys.includes(sourceKey(source)));
+  const sourceTotals = useMemo(
+    () => visibleSources.map((source) => ({ source, totals: getSourceMetricTotals(scopedRecords, source) })),
+    [visibleSources, scopedRecords],
+  );
+  const buckets = useMemo(
+    () => buildSourceChartBuckets(records, periodMode, selectedMonthConfig, monthConfigs, activeSources),
+    [records, periodMode, selectedMonthConfig, monthConfigs, activeSources],
+  );
+  const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
+    acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
+    return acc;
+  }, {} as Record<Metric, number>);
+  const periodLabel = periodMode === "month" ? getSourceMonthRangeLabel(monthConfigs) : selectedMonthConfig.label;
+  const strongestMetric = metrics.reduce((best, metric) => (summaryTotals[metric] > summaryTotals[best] ? metric : best), "Лиды" as Metric);
+  const strongestSource = sourceTotals
+    .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
+    .sort((a, b) => b.value - a.value)[0];
+  const activePeriodLabel = sourcePeriodOptions.find((option) => option.value === periodMode)?.label ?? "По дням";
+
+  const toggleSource = (source: string) => {
+    const key = sourceKey(source);
+    setHiddenSourceKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
+  };
+
+  return (
+    <div className="page-stack sources-dashboard">
+      <ExecutiveSummary
+        status={{ label: "источники отдельно", tone: "good" }}
+        eyebrow={periodLabel}
+        title="Источники"
+        facts={[
+          "Мониторинг трафика и эффективности по источникам",
+          `Период: ${activePeriodLabel.toLowerCase()}`,
+          `Включено: ${visibleSources.length} из ${activeSources.length}`,
+          strongestSource?.value ? `Лидер: ${strongestSource.source}` : "FACT по источникам пока пустой",
+        ]}
+      />
+
+      <section className="analytics-panel source-control-panel">
+        <div>
+          <span>Срез</span>
+          <div className="source-period-toggle" role="group" aria-label="Переключить период источников">
+            {sourcePeriodOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={periodMode === option.value ? "active" : ""}
+                onClick={() => setPeriodMode(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <span>Источники на графиках</span>
+          <div className="source-source-toggles">
+            {activeSources.map((source, index) => {
+              const isVisible = !hiddenSourceKeys.includes(sourceKey(source));
+              return (
+                <button
+                  key={source}
+                  type="button"
+                  className={isVisible ? "source-toggle-button active" : "source-toggle-button"}
+                  onClick={() => toggleSource(source)}
+                  style={{ "--source-color": getLeadSourceColor(source, index) } as CSSProperties}
+                  aria-pressed={isVisible}
+                >
+                  <i aria-hidden="true" />
+                  {source}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="source-kpi-strip">
+        {metrics.map((metric) => (
+          <article key={metric}>
+            <span>{sourceMetricLabel(metric)}</span>
+            <strong>{formatNumber(summaryTotals[metric])}</strong>
+            <small>итог по включенным источникам</small>
+          </article>
+        ))}
+      </section>
+
+      <section className="analytics-panel source-share-panel">
+        <PanelHead
+          title="Доля по источникам"
+          description="Круговая диаграмма показывает вклад каждого включенного источника в лиды, КВАЛ и продажи."
+        />
+        <div className="source-pie-grid">
+          {metrics.map((metric) => (
+            <SourceShareCard
+              key={metric}
+              metric={metric}
+              sourceTotals={sourceTotals}
+              activeSources={activeSources}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="analytics-panel source-chart-panel">
+        <PanelHead
+          title={`Динамика источников: ${activePeriodLabel.toLowerCase()}`}
+          description="Ниже отдельные графики по лидам, КВАЛ и продажам. Любой источник можно временно выключить."
+        />
+        <div className="source-chart-stack">
+          {metrics.map((metric) => (
+            <SourceMetricLineChart
+              key={metric}
+              metric={metric}
+              buckets={buckets}
+              activeSources={activeSources}
+              visibleSources={visibleSources}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="analytics-panel">
+        <PanelHead
+          title="Эффективность источников"
+          description={strongestSource?.value ? `Самый сильный источник по ${sourceMetricLabel(strongestMetric).toLowerCase()}: ${strongestSource.source}.` : "Пока нет FACT по источникам за выбранный период."}
+        />
+        <SourceEfficiencyTable
+          sourceTotals={sourceTotals}
+          activeSources={activeSources}
+          summaryTotals={summaryTotals}
+        />
+      </section>
+    </div>
+  );
+}
+
+function SourceShareCard({
+  metric,
+  sourceTotals,
+  activeSources,
+}: {
+  metric: Metric;
+  sourceTotals: Array<{ source: string; totals: Record<Metric, number> }>;
+  activeSources: string[];
+}) {
+  const rows = sourceTotals
+    .map((item) => ({
+      source: item.source,
+      value: item.totals[metric],
+      color: getLeadSourceColor(item.source, activeSources.findIndex((source) => sourceNameEquals(source, item.source))),
+    }))
+    .sort((a, b) => b.value - a.value);
+  const totalValue = rows.reduce((sum, item) => sum + item.value, 0);
+  const donutBackground = totalValue > 0 ? buildSourceConicGradient(rows, totalValue) : "conic-gradient(#dbe7ff 0 100%)";
+
+  return (
+    <article className="source-pie-card">
+      <div className="source-pie-head">
+        <span>{sourceMetricLabel(metric)}</span>
+        <strong>{formatNumber(totalValue)}</strong>
+      </div>
+      <div className="source-pie-body">
+        <div className="source-donut" style={{ background: donutBackground }}>
+          <div className="source-donut-center">
+            <strong>{totalValue > 0 ? "100%" : "0%"}</strong>
+            <small>{sourceMetricLabel(metric)}</small>
+          </div>
+        </div>
+        <div className="source-pie-legend">
+          {rows.map((item) => {
+            const share = totalValue > 0 ? Math.round((item.value / totalValue) * 100) : 0;
+            return (
+              <div key={item.source}>
+                <i style={{ background: item.color }} aria-hidden="true" />
+                <span>{item.source}</span>
+                <strong>{share}%</strong>
+              </div>
+            );
+          })}
+          {rows.length === 0 && <p className="empty-state">Выберите хотя бы один источник.</p>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function SourceMetricLineChart({
+  metric,
+  buckets,
+  activeSources,
+  visibleSources,
+}: {
+  metric: Metric;
+  buckets: SourceChartBucket[];
+  activeSources: string[];
+  visibleSources: string[];
+}) {
+  const chartWidth = Math.max(960, buckets.length * 42);
+  const chartHeight = 230;
+  const plot = { left: 44, right: 24, top: 18, bottom: 44 };
+  const plotWidth = chartWidth - plot.left - plot.right;
+  const plotHeight = chartHeight - plot.top - plot.bottom;
+  const maxValue = Math.max(
+    1,
+    ...buckets.flatMap((bucket) => visibleSources.map((source) => bucket.values[source]?.[metric] ?? 0)),
+  );
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(maxValue * ratio));
+  const xFor = (index: number) => plot.left + (buckets.length <= 1 ? plotWidth / 2 : (index / (buckets.length - 1)) * plotWidth);
+  const yFor = (value: number) => plot.top + plotHeight - (value / maxValue) * plotHeight;
+  const labelEvery = buckets.length > 20 ? 3 : buckets.length > 12 ? 2 : 1;
+
+  return (
+    <article className="source-line-card">
+      <div className="source-line-head">
+        <div>
+          <span>график по источникам</span>
+          <strong>{sourceMetricLabel(metric)}</strong>
+        </div>
+        <div className="source-line-legend">
+          {visibleSources.map((source) => {
+            const sourceIndex = activeSources.findIndex((item) => sourceNameEquals(item, source));
+            return (
+              <span key={source}>
+                <i style={{ background: getLeadSourceColor(source, sourceIndex) }} aria-hidden="true" />
+                {source}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+      {visibleSources.length === 0 ? (
+        <p className="empty-state">Выберите хотя бы один источник.</p>
+      ) : (
+        <div className="source-line-scroll">
+          <svg className="source-line-svg" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={`${sourceMetricLabel(metric)} по источникам`}>
+            {ticks.map((tick) => {
+              const y = yFor(tick);
+              return (
+                <g key={tick}>
+                  <line x1={plot.left} x2={chartWidth - plot.right} y1={y} y2={y} className="source-grid-line" />
+                  <text x={plot.left - 10} y={y + 4} className="source-axis-label">{formatNumber(tick)}</text>
+                </g>
+              );
+            })}
+            {visibleSources.map((source) => {
+              const sourceIndex = activeSources.findIndex((item) => sourceNameEquals(item, source));
+              const color = getLeadSourceColor(source, sourceIndex);
+              const points = buckets.map((bucket, index) => ({
+                x: xFor(index),
+                y: yFor(bucket.values[source]?.[metric] ?? 0),
+                value: bucket.values[source]?.[metric] ?? 0,
+                bucket,
+              }));
+              const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+              return (
+                <g key={source}>
+                  <path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                  {points.map((point) => (
+                    <circle
+                      key={`${source}-${point.bucket.key}`}
+                      cx={point.x}
+                      cy={point.y}
+                      r="3.5"
+                      fill={color}
+                      data-tooltip={`${point.bucket.label}: ${source}\n${sourceMetricLabel(metric)}: ${formatNumber(point.value)}`}
+                    />
+                  ))}
+                </g>
+              );
+            })}
+            {buckets.map((bucket, index) => (
+              index % labelEvery === 0 && (
+                <g key={bucket.key}>
+                  <text x={xFor(index)} y={chartHeight - 20} className="source-x-label">{bucket.label}</text>
+                  <text x={xFor(index)} y={chartHeight - 7} className="source-x-caption">{bucket.caption}</text>
+                </g>
+              )
+            ))}
+          </svg>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function SourceEfficiencyTable({
+  sourceTotals,
+  activeSources,
+  summaryTotals,
+}: {
+  sourceTotals: Array<{ source: string; totals: Record<Metric, number> }>;
+  activeSources: string[];
+  summaryTotals: Record<Metric, number>;
+}) {
+  const rows = sourceTotals
+    .map((item) => {
+      const leads = item.totals["Лиды"];
+      const qualified = item.totals["Квалы"];
+      const sales = item.totals["Продажи"];
+      return {
+        ...item,
+        leads,
+        qualified,
+        sales,
+        share: percent(leads, summaryTotals["Лиды"]),
+        leadToQualified: percent(qualified, leads),
+        qualifiedToSales: percent(sales, qualified),
+      };
+    })
+    .sort((a, b) => b.leads - a.leads);
+
+  return (
+    <div className="source-efficiency-table">
+      <div className="source-efficiency-row source-efficiency-head">
+        <span>Источник</span>
+        <span>Доля</span>
+        <span>Лиды</span>
+        <span>КВАЛ</span>
+        <span>Продажи</span>
+        <span>Лид → КВАЛ</span>
+        <span>КВАЛ → продажа</span>
+      </div>
+      {rows.map((item) => {
+        const sourceIndex = activeSources.findIndex((source) => sourceNameEquals(source, item.source));
+        return (
+          <div className="source-efficiency-row" key={item.source}>
+            <strong><i style={{ background: getLeadSourceColor(item.source, sourceIndex) }} aria-hidden="true" />{item.source}</strong>
+            <span>{item.share}%</span>
+            <span>{formatNumber(item.leads)}</span>
+            <span>{formatNumber(item.qualified)}</span>
+            <span>{formatNumber(item.sales)}</span>
+            <span>{item.leadToQualified}%</span>
+            <span>{item.qualifiedToSales}%</span>
+          </div>
+        );
+      })}
+      {rows.length === 0 && <p className="empty-state">Нет включенных источников для таблицы.</p>}
     </div>
   );
 }
@@ -3601,6 +3978,14 @@ function getShortMonthLabel(config: MonthConfig): string {
   return monthName.length <= 3 ? monthName : monthName.slice(0, 3);
 }
 
+function getSourceMonthRangeLabel(configs: MonthConfig[]): string {
+  if (!configs.length) return "нет данных";
+  const sorted = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const first = sorted[0].label;
+  const last = sorted[sorted.length - 1].label;
+  return first === last ? first : `${first} → ${last}`;
+}
+
 function getMonthMetricTitle(metric: Metric, trafficMode: TrafficMode = "op"): string {
   if (metric === "Квалы") return trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП";
   return metric.toUpperCase();
@@ -4115,6 +4500,123 @@ function normalizeSourceName(value: string): string {
 
 function sourceNameEquals(left: string, right: string): boolean {
   return normalizeSourceName(left).toLowerCase() === normalizeSourceName(right).toLowerCase();
+}
+
+function sourceKey(source: string): string {
+  return normalizeSourceName(source).toLowerCase();
+}
+
+function sourceMetricLabel(metric: Metric): string {
+  if (metric === "Квалы") return "КВАЛ";
+  return metric;
+}
+
+function getLeadSourceColor(source: string, fallbackIndex = 0): string {
+  const normalized = normalizeSourceName(source).toLowerCase();
+  if (normalized.includes("seo") || normalized.includes("сео")) return "#1C46F5";
+  if (normalized.includes("2гис") || normalized.includes("2gis")) return "#22B94B";
+  if (normalized.includes("директ")) return "#F5B800";
+  if (normalized.includes("яндекс") && normalized.includes("карт")) return "#FB6258";
+  if (normalized.includes("гугл") || normalized.includes("google")) return "#34B7C7";
+  if (normalized.includes("основ")) return "#131B2F";
+
+  const fallbackPalette = ["#7FA7FF", "#8B5CF6", "#14B8A6", "#F97316", "#64748B", "#EC4899"];
+  return fallbackPalette[Math.abs(fallbackIndex) % fallbackPalette.length];
+}
+
+function createEmptySourceValues(sources: string[]): Record<string, Record<Metric, number>> {
+  return sources.reduce<Record<string, Record<Metric, number>>>((acc, source) => {
+    acc[source] = metrics.reduce<Record<Metric, number>>((metricAcc, metric) => {
+      metricAcc[metric] = 0;
+      return metricAcc;
+    }, {} as Record<Metric, number>);
+    return acc;
+  }, {});
+}
+
+function findSourceLabel(source: string, sources: string[]): string | null {
+  return sources.find((item) => sourceNameEquals(item, source)) ?? null;
+}
+
+function getSourceRecordsForPeriod(records: DailyRecord[], periodMode: SourcePeriodMode, config: MonthConfig): DailyRecord[] {
+  const sourceRecords = records.filter(isSourceValueRecord);
+  if (periodMode === "month") return sourceRecords;
+  return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
+}
+
+function buildSourceChartBuckets(
+  records: DailyRecord[],
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+  configs: MonthConfig[],
+  sources: string[],
+): SourceChartBucket[] {
+  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const buckets = periodMode === "month"
+    ? sortedConfigs.map((monthConfig) => ({
+      key: monthConfig.monthKey,
+      label: getShortMonthLabel(monthConfig),
+      caption: String(monthConfig.year),
+      values: createEmptySourceValues(sources),
+    }))
+    : buildMonthSourceBuckets(periodMode, config, sources);
+
+  const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+
+  records.filter(isSourceValueRecord).forEach((record) => {
+    if (periodMode !== "month" && !record.date.startsWith(config.monthKey)) return;
+
+    const bucketKey = periodMode === "month"
+      ? record.date.slice(0, 7)
+      : periodMode === "week"
+        ? `${config.monthKey}-week-${getWeekOfMonth(record.date)}`
+        : record.date;
+    const bucket = bucketByKey.get(bucketKey);
+    if (!bucket) return;
+
+    const source = findSourceLabel(record.channel, sources);
+    if (!source || !bucket.values[source]) return;
+
+    bucket.values[source][record.metric] += Math.max(0, Number(record.fact || 0));
+  });
+
+  return buckets;
+}
+
+function buildMonthSourceBuckets(periodMode: SourcePeriodMode, config: MonthConfig, sources: string[]): SourceChartBucket[] {
+  const dates = getMonthDates(config.year, config.monthIndex, config.daysInMonth);
+  if (periodMode === "day") {
+    return dates.map((date) => ({
+      key: date,
+      label: formatDay(date),
+      caption: weekdayLabel(date),
+      values: createEmptySourceValues(sources),
+    }));
+  }
+
+  const weekNumbers = [...new Set(dates.map((date) => getWeekOfMonth(date)))];
+  return weekNumbers.map((week) => {
+    const weekDates = dates.filter((date) => getWeekOfMonth(date) === week);
+    return {
+      key: `${config.monthKey}-week-${week}`,
+      label: `${week} нед.`,
+      caption: `${formatDay(weekDates[0])} - ${formatDay(weekDates[weekDates.length - 1])}`,
+      values: createEmptySourceValues(sources),
+    };
+  });
+}
+
+function buildSourceConicGradient(rows: Array<{ color: string; value: number }>, total: number): string {
+  let cursor = 0;
+  const segments = rows
+    .filter((row) => row.value > 0)
+    .map((row) => {
+      const next = cursor + (row.value / total) * 100;
+      const segment = `${row.color} ${cursor.toFixed(2)}% ${next.toFixed(2)}%`;
+      cursor = next;
+      return segment;
+    });
+  return segments.length ? `conic-gradient(${segments.join(", ")})` : "conic-gradient(#dbe7ff 0 100%)";
 }
 
 function isSourceMetaRecord(record: DailyRecord): boolean {
