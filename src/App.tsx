@@ -3920,24 +3920,27 @@ function applyOverallPlanOverrideToWeeks(
   config: MonthConfig,
   selectedScope: ReportScope,
 ): WeekSummary[] {
-  if (selectedScope !== "Все" || !weeks.length) return weeks;
+  if (!weeks.length) return weeks;
 
   const rawTotals = mergeTotals(weeks);
   const plansByMetric = metrics.reduce<Record<Metric, number[]>>((acc, metric) => {
     const rawPlan = rawTotals[metric].plan;
-    const targetPlan = Number(config.plan[metric] ?? rawPlan);
+    const targetPlan = getPlanOverrideForScope(config, selectedScope, metric, rawPlan);
 
-    if (!rawPlan || !Number.isFinite(targetPlan) || targetPlan === rawPlan) {
+    if (!Number.isFinite(targetPlan) || targetPlan <= 0 || targetPlan === rawPlan) {
       acc[metric] = weeks.map((week) => week.totals[metric].plan);
       return acc;
     }
 
+    const rawWeights = weeks.map((week) => week.totals[metric].plan);
+    const weights = rawPlan > 0 ? rawWeights : weeks.map((week) => getWeekDurationDays(week));
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || weeks.length;
     let distributed = 0;
     acc[metric] = weeks.map((week, index) => {
       if (index === weeks.length - 1) {
         return Math.max(0, Math.round(targetPlan - distributed));
       }
-      const nextPlan = Math.max(0, Math.round((week.totals[metric].plan / rawPlan) * targetPlan));
+      const nextPlan = Math.max(0, Math.round((weights[index] / totalWeight) * targetPlan));
       distributed += nextPlan;
       return nextPlan;
     });
@@ -3954,6 +3957,23 @@ function applyOverallPlanOverrideToWeeks(
       return acc;
     }, {} as WeekSummary["totals"]),
   }));
+}
+
+function getPlanOverrideForScope(
+  config: MonthConfig,
+  selectedScope: ReportScope,
+  metric: Metric,
+  rawPlan: number,
+): number {
+  if (selectedScope === "Все") return Number(config.plan[metric] ?? rawPlan);
+  return Number(config.plansByCity?.[selectedScope]?.[metric] ?? rawPlan);
+}
+
+function getWeekDurationDays(week: WeekSummary): number {
+  const start = Date.parse(`${week.startDate}T00:00:00Z`);
+  const end = Date.parse(`${week.endDate}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 1;
+  return Math.max(1, Math.round((end - start) / 86400000) + 1);
 }
 
 function pickMonthByCompletion(months: Array<{ config: MonthConfig; weeks: WeekSummary[] }>, mode: "best" | "worst", trafficMode: TrafficMode = "op") {
