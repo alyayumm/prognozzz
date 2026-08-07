@@ -149,7 +149,7 @@ const sourceRecordCity = "источники";
 const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
-const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Другие"];
+const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Рек/кешбэк", "Другие"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
@@ -4521,6 +4521,7 @@ function normalizeSourceName(value: string): string {
 function canonicalSourceName(value: string): string {
   const normalized = normalizeSourceName(value);
   const lower = normalized.toLowerCase();
+  if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites") return "SEO";
   if (lower === "основные" || lower === "другое" || lower === "другие") return "Другие";
   return normalized;
 }
@@ -4545,6 +4546,8 @@ function getLeadSourceColor(source: string, fallbackIndex = 0): string {
   if (normalized.includes("директ")) return "#F5B800";
   if (normalized.includes("яндекс") && normalized.includes("карт")) return "#FB6258";
   if (normalized.includes("гугл") || normalized.includes("google")) return "#34B7C7";
+  if (normalized.includes("zoon")) return "#8B5CF6";
+  if (normalized.includes("кеш") || normalized.includes("кэш") || normalized.includes("cashback")) return "#FF7A45";
   if (normalized.includes("друг")) return "#131B2F";
 
   const fallbackPalette = ["#7FA7FF", "#8B5CF6", "#14B8A6", "#F97316", "#64748B", "#EC4899"];
