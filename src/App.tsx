@@ -82,6 +82,7 @@ type DailyAdminMetricDraft = { fact: number; recommendations: number; omQualifie
 type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type SourceMetricDraft = Record<Metric, number>;
 type SourcePeriodMode = "day" | "week" | "month";
+type SourceCityFilter = "Все" | "МСК" | "СПБ";
 type SourceChartBucket = {
   key: string;
   label: string;
@@ -149,12 +150,14 @@ const sourceRecordCity = "источники";
 const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
+const sourceCityCommentPattern = /\[SOURCE_CITY=(МСК|СПБ)\]/i;
 const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
   { value: "month", label: "По месяцам" },
 ];
+const sourceCityOptions: SourceCityFilter[] = ["Все", "МСК", "СПБ"];
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
 const leadSourceCommentPattern = /\[LEAD_SOURCE=([^\]]+)\]/i;
@@ -1312,9 +1315,14 @@ function SourcesAnalyticsDashboard({
   monthConfigs: MonthConfig[];
 }) {
   const [periodMode, setPeriodMode] = useState<SourcePeriodMode>("day");
+  const [sourceCityFilter, setSourceCityFilter] = useState<SourceCityFilter>("Все");
+  const cityFilteredRecords = useMemo(
+    () => getSourceRecordsForCity(records, sourceCityFilter),
+    [records, sourceCityFilter],
+  );
   const scopedRecords = useMemo(
-    () => getSourceRecordsForPeriod(records, periodMode, selectedMonthConfig),
-    [records, periodMode, selectedMonthConfig],
+    () => getSourceRecordsForPeriod(cityFilteredRecords, periodMode, selectedMonthConfig),
+    [cityFilteredRecords, periodMode, selectedMonthConfig],
   );
   const activeSources = useMemo(() => getActiveLeadSources(scopedRecords), [scopedRecords]);
   const [hiddenSourceKeys, setHiddenSourceKeys] = useState<string[]>([]);
@@ -1329,8 +1337,8 @@ function SourcesAnalyticsDashboard({
     [visibleSources, scopedRecords],
   );
   const buckets = useMemo(
-    () => buildSourceChartBuckets(records, periodMode, selectedMonthConfig, monthConfigs, activeSources),
-    [records, periodMode, selectedMonthConfig, monthConfigs, activeSources],
+    () => buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources),
+    [cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources],
   );
   const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
     acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
@@ -1356,6 +1364,7 @@ function SourcesAnalyticsDashboard({
         title="Источники"
         facts={[
           "Мониторинг трафика и эффективности по источникам",
+          `Город: ${sourceCityFilter === "Все" ? "МСК + СПБ" : sourceCityFilter}`,
           `Период: ${activePeriodLabel.toLowerCase()}`,
           `Включено: ${visibleSources.length} из ${activeSources.length}`,
           strongestSource?.value ? `Лидер: ${strongestSource.source}` : "FACT по источникам пока пустой",
@@ -1374,6 +1383,21 @@ function SourcesAnalyticsDashboard({
                 onClick={() => setPeriodMode(option.value)}
               >
                 {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <span>Город</span>
+          <div className="source-period-toggle source-city-toggle" role="group" aria-label="Переключить город источников">
+            {sourceCityOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={sourceCityFilter === option ? "active" : ""}
+                onClick={() => setSourceCityFilter(option)}
+              >
+                {option === "Все" ? "Все" : option}
               </button>
             ))}
           </div>
@@ -4572,6 +4596,16 @@ function createEmptySourceValues(sources: string[]): Record<string, Record<Metri
 
 function findSourceLabel(source: string, sources: string[]): string | null {
   return sources.find((item) => sourceNameEquals(item, source)) ?? null;
+}
+
+function getSourceRecordCityScope(record: DailyRecord): SourceCityFilter | null {
+  const match = (record.comment ?? "").match(sourceCityCommentPattern);
+  return match ? (match[1].toUpperCase() as SourceCityFilter) : null;
+}
+
+function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter): DailyRecord[] {
+  if (city === "Все") return records;
+  return records.filter((record) => !isSourceValueRecord(record) || getSourceRecordCityScope(record) === city);
 }
 
 function getSourceRecordsForPeriod(records: DailyRecord[], periodMode: SourcePeriodMode, config: MonthConfig): DailyRecord[] {

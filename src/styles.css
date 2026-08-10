@@ -2467,7 +2467,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 
 .source-control-panel {
   display: grid;
-  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 320px) minmax(190px, 250px) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -2488,6 +2488,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   border: 1px solid var(--line);
   border-radius: 15px;
   background: rgba(255, 255, 255, 0.84);
+}
+.source-city-toggle {
+  min-width: 0;
 }
 .source-period-toggle button {
   border: 0;
