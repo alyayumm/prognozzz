@@ -149,7 +149,7 @@ const sourceRecordCity = "источники";
 const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
-const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк", "Другие"];
+const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
@@ -4535,6 +4535,10 @@ function sourceKey(source: string): string {
   return canonicalSourceName(source).toLowerCase();
 }
 
+function isSuppressedLeadSource(source: string): boolean {
+  return sourceNameEquals(source, "Другие");
+}
+
 function sourceMetricLabel(metric: Metric): string {
   if (metric === "Квалы") return "КВАЛ";
   return metric;
@@ -4656,7 +4660,7 @@ function isSourceMetaRecord(record: DailyRecord): boolean {
 }
 
 function isSourceValueRecord(record: DailyRecord): boolean {
-  return record.city === sourceRecordCity && !isSourceMetaRecord(record);
+  return record.city === sourceRecordCity && !isSourceMetaRecord(record) && !isSuppressedLeadSource(record.channel);
 }
 
 function sourceNameFromMeta(record: DailyRecord): string {
@@ -4684,12 +4688,13 @@ function getActiveLeadSources(records: DailyRecord[]): string[] {
   const names = new Set<string>(defaultLeadSources);
 
   meta.active.forEach((source) => {
+    if (isSuppressedLeadSource(source)) return;
     if (!meta.hidden.has(source.toLowerCase())) names.add(source);
   });
 
   records.filter(isSourceValueRecord).forEach((record) => {
     const source = canonicalSourceName(record.channel);
-    if (!source || meta.hidden.has(source.toLowerCase())) return;
+    if (!source || isSuppressedLeadSource(source) || meta.hidden.has(source.toLowerCase())) return;
     if (record.fact > 0 || record.plan > 0 || record.forecast > 0 || record.recommendations > 0 || record.omQualified > 0) {
       const existing = [...names].find((item) => sourceNameEquals(item, source));
       names.add(existing ?? source);
