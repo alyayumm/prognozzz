@@ -83,6 +83,7 @@ type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type SourceMetricDraft = Record<Metric, number>;
 type SourcePeriodMode = "day" | "week" | "month";
 type SourceCityFilter = "Все" | "МСК" | "СПБ";
+type EditableSourceCity = Exclude<SourceCityFilter, "Все">;
 type SourceChartBucket = {
   key: string;
   label: string;
@@ -633,6 +634,8 @@ export default function App() {
                 records={records}
                 selectedMonthConfig={selectedMonthConfig}
                 monthConfigs={monthConfigs}
+                selectedScope={selectedScope}
+                setSelectedScope={setSelectedScope}
               />
             )}
             {mode === "events" && (
@@ -1309,13 +1312,17 @@ function SourcesAnalyticsDashboard({
   records,
   selectedMonthConfig,
   monthConfigs,
+  selectedScope,
+  setSelectedScope,
 }: {
   records: DailyRecord[];
   selectedMonthConfig: MonthConfig;
   monthConfigs: MonthConfig[];
+  selectedScope: ReportScope;
+  setSelectedScope: (scope: ReportScope) => void;
 }) {
   const [periodMode, setPeriodMode] = useState<SourcePeriodMode>("day");
-  const [sourceCityFilter, setSourceCityFilter] = useState<SourceCityFilter>("Все");
+  const sourceCityFilter: SourceCityFilter = selectedScope;
   const cityFilteredRecords = useMemo(
     () => getSourceRecordsForCity(records, sourceCityFilter),
     [records, sourceCityFilter],
@@ -1395,7 +1402,7 @@ function SourcesAnalyticsDashboard({
                 key={option}
                 type="button"
                 className={sourceCityFilter === option ? "active" : ""}
-                onClick={() => setSourceCityFilter(option)}
+                onClick={() => setSelectedScope(option)}
               >
                 {option === "Все" ? "Все" : option}
               </button>
@@ -1843,9 +1850,10 @@ function SourceAdminPanel({
 }) {
   const firstDate = monthDates[0] ?? `${selectedMonthConfig.monthKey}-01`;
   const [selectedDate, setSelectedDate] = useState(firstDate);
+  const [sourceCity, setSourceCity] = useState<EditableSourceCity>("МСК");
   const [newSourceName, setNewSourceName] = useState("");
   const activeSources = useMemo(() => getActiveLeadSources(records), [records]);
-  const [draft, setDraft] = useState<Record<string, SourceMetricDraft>>(() => createSourceDraft(records, selectedDate, activeSources));
+  const [draft, setDraft] = useState<Record<string, SourceMetricDraft>>(() => createSourceDraft(records, selectedDate, activeSources, sourceCity));
 
   useEffect(() => {
     if (!monthDates.includes(selectedDate)) {
@@ -1854,8 +1862,8 @@ function SourceAdminPanel({
   }, [firstDate, monthDates, selectedDate]);
 
   useEffect(() => {
-    setDraft(createSourceDraft(records, selectedDate, activeSources));
-  }, [activeSources, records, selectedDate]);
+    setDraft(createSourceDraft(records, selectedDate, activeSources, sourceCity));
+  }, [activeSources, records, selectedDate, sourceCity]);
 
   function updateSourceValue(source: string, metric: Metric, value: number) {
     setDraft((current) => ({
@@ -1869,9 +1877,9 @@ function SourceAdminPanel({
 
   async function saveSourceDay() {
     const values = activeSources.flatMap((source) =>
-      metrics.map((metric) => sourceDailyUpdate(selectedDate, source, metric, draft[source]?.[metric] ?? 0)),
+      metrics.map((metric) => sourceDailyUpdate(selectedDate, source, metric, draft[source]?.[metric] ?? 0, sourceCity)),
     );
-    await onSaveDailyValues(values, `Источники за ${formatDay(selectedDate)} сохранены.`);
+    await onSaveDailyValues(values, `Источники ${sourceCity} за ${formatDay(selectedDate)} сохранены.`);
   }
 
   async function addSource() {
@@ -1899,6 +1907,13 @@ function SourceAdminPanel({
             {monthDates.map((date) => (
               <option key={date} value={date}>{formatDay(date)} · {weekdayLabel(date)}</option>
             ))}
+          </select>
+        </label>
+        <label>
+          Город
+          <select value={sourceCity} onChange={(event) => setSourceCity(event.target.value as EditableSourceCity)}>
+            <option value="МСК">МСК</option>
+            <option value="СПБ">СПБ</option>
           </select>
         </label>
         <div className="source-add">
@@ -4598,9 +4613,13 @@ function findSourceLabel(source: string, sources: string[]): string | null {
   return sources.find((item) => sourceNameEquals(item, source)) ?? null;
 }
 
-function getSourceRecordCityScope(record: DailyRecord): SourceCityFilter | null {
+function getSourceRecordCityScope(record: DailyRecord | DailyValueUpdate): SourceCityFilter | null {
   const match = (record.comment ?? "").match(sourceCityCommentPattern);
-  return match ? (match[1].toUpperCase() as SourceCityFilter) : null;
+  if (match) return match[1].toUpperCase() as SourceCityFilter;
+
+  const idMatch = String(record.id ?? "").match(/source-(?:recalc-)?(msk|spb)-/i);
+  if (!idMatch) return null;
+  return sourceCityFromCode(idMatch[1]);
 }
 
 function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter): DailyRecord[] {
@@ -4747,10 +4766,10 @@ function emptySourceMetricDraft(): SourceMetricDraft {
   return { Лиды: 0, Квалы: 0, Продажи: 0 };
 }
 
-function createSourceDraft(records: DailyRecord[], date: string, sources: string[]): Record<string, SourceMetricDraft> {
+function createSourceDraft(records: DailyRecord[], date: string, sources: string[], sourceCity: EditableSourceCity): Record<string, SourceMetricDraft> {
   return sources.reduce<Record<string, SourceMetricDraft>>((acc, source) => {
     acc[source] = metrics.reduce<SourceMetricDraft>((metricAcc, metric) => {
-      metricAcc[metric] = findDailyRecord(records, date, sourceRecordCity, metric, source)?.fact ?? 0;
+      metricAcc[metric] = findSourceDailyRecord(records, date, source, metric, sourceCity)?.fact ?? 0;
       return metricAcc;
     }, emptySourceMetricDraft());
     return acc;
@@ -4766,9 +4785,44 @@ function getSourceMetricTotals(records: DailyRecord[], source: string): Record<M
   }, {} as Record<Metric, number>);
 }
 
-function sourceDailyUpdate(date: string, source: string, metric: Metric, fact: number): DailyValueUpdate {
+function findSourceDailyRecord(
+  records: DailyRecord[],
+  date: string,
+  source: string,
+  metric: Metric,
+  sourceCity: EditableSourceCity,
+): DailyRecord | undefined {
+  return records.find((record) =>
+    record.date === date &&
+    record.city === sourceRecordCity &&
+    record.metric === metric &&
+    sourceNameEquals(record.channel, source) &&
+    getSourceRecordCityScope(record) === sourceCity,
+  );
+}
+
+function sourceCityCode(city: EditableSourceCity): string {
+  return city === "МСК" ? "msk" : "spb";
+}
+
+function sourceCityFromCode(code: string): EditableSourceCity | null {
+  const normalized = code.toLowerCase();
+  if (normalized === "msk") return "МСК";
+  if (normalized === "spb") return "СПБ";
+  return null;
+}
+
+function sourceCityComment(city: EditableSourceCity): string {
+  return `[SOURCE_CITY=${city}]`;
+}
+
+function sourceRecordId(date: string, source: string, metric: Metric, sourceCity: EditableSourceCity): string {
+  return `${date}-source-${sourceCityCode(sourceCity)}-${sourceKey(source)}-${metric}`;
+}
+
+function sourceDailyUpdate(date: string, source: string, metric: Metric, fact: number, sourceCity: EditableSourceCity): DailyValueUpdate {
   return {
-    id: dailyRecordKey(date, sourceRecordCity, metric, source),
+    id: sourceRecordId(date, source, metric, sourceCity),
     date,
     city: sourceRecordCity,
     channel: source,
@@ -4778,7 +4832,7 @@ function sourceDailyUpdate(date: string, source: string, metric: Metric, fact: n
     forecast: 0,
     recommendations: 0,
     omQualified: 0,
-    comment: "",
+    comment: sourceCityComment(sourceCity),
   };
 }
 
@@ -4865,9 +4919,9 @@ async function verifySharedDailySave(values: DailyValueUpdate[]) {
     }
 
     const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
-    const recordMap = new Map(snapshot.records.map((record) => [dailyRecordKey(record.date, record.city, record.metric, record.channel), record]));
+    const recordMap = new Map(snapshot.records.map((record) => [dailyRecordLookupKey(record), record]));
     const allSaved = importantValues.every((value) => {
-      const record = recordMap.get(dailyRecordKey(value.date, value.city, value.metric, value.channel));
+      const record = recordMap.get(dailyValueLookupKey(value));
       if (!record) return false;
       if (value.fact !== undefined && record.fact !== Math.max(0, Number(value.fact) || 0)) return false;
       if (value.recommendations !== undefined && record.recommendations !== Math.max(0, Number(value.recommendations) || 0)) return false;
@@ -4897,10 +4951,10 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
 }
 
 function applyDailyValuesToRecords(current: DailyRecord[], values: DailyValueUpdate[]): DailyRecord[] {
-  const byKey = new Map(current.map((record) => [dailyRecordKey(record.date, record.city, record.metric, record.channel), record]));
+  const byKey = new Map(current.map((record) => [dailyRecordLookupKey(record), record]));
 
   values.forEach((value) => {
-    const key = dailyRecordKey(value.date, value.city, value.metric, value.channel);
+    const key = dailyValueLookupKey(value);
     const previous = byKey.get(key);
     byKey.set(key, mergeDailyRecord(previous, value));
   });
@@ -4963,6 +5017,22 @@ function dailyRecordKey(date: string, city: DailyRecordCity, metric: Metric, cha
     return `${date}-${city}-${channel}-${metric}`;
   }
   return `${date}-${city}-${metric}`;
+}
+
+function dailyRecordLookupKey(record: DailyRecord): string {
+  const baseKey = dailyRecordKey(record.date, record.city, record.metric, record.channel);
+  if (record.city === sourceRecordCity && isSourceValueRecord(record)) {
+    return `${baseKey}-${getSourceRecordCityScope(record) ?? "all"}`;
+  }
+  return baseKey;
+}
+
+function dailyValueLookupKey(value: DailyValueUpdate): string {
+  const baseKey = dailyRecordKey(value.date, value.city, value.metric, value.channel);
+  if (value.city === sourceRecordCity && value.channel && !value.channel.startsWith(sourceMetaChannelPrefix)) {
+    return `${baseKey}-${getSourceRecordCityScope(value) ?? "all"}`;
+  }
+  return baseKey;
 }
 
 function validateAggregates(records: DailyRecord[]): string | null {
