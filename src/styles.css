@@ -1123,6 +1123,35 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .leads-daily-panel {
   overflow: hidden;
 }
+.leads-daily-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.leads-daily-panel-head .panel-heading {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+}
+.weekend-filter-button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--muted-strong);
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: var(--glass-highlight);
+}
+.weekend-filter-button.active {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(28, 70, 245, 0.22), var(--glass-highlight);
+}
 .leads-daily-month-stack {
   display: grid;
   gap: 14px;
@@ -1176,6 +1205,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .leads-daily-scroll::-webkit-scrollbar-thumb { background: rgba(127, 167, 255, 0.52); border-radius: 999px; }
 .leads-daily-svg {
   display: block;
+  width: 100%;
+  height: auto;
   min-width: 100%;
 }
 .lead-chart-bg {
@@ -1200,6 +1231,12 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   stroke: rgba(127, 167, 255, 0.2);
   stroke-width: 1;
 }
+.lead-empty-slot {
+  fill: rgba(247, 249, 255, 0.66);
+  stroke: rgba(154, 180, 234, 0.28);
+  stroke-dasharray: 4 5;
+  stroke-width: 1;
+}
 .lead-grid-line {
   stroke: rgba(154, 180, 234, 0.42);
   stroke-width: 1;
@@ -1221,10 +1258,10 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .lead-series path {
   fill: none;
-  stroke-width: 4.5;
+  stroke-width: 3.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 12px 16px rgba(19, 27, 47, 0.14));
+  filter: drop-shadow(0 10px 14px rgba(28, 70, 245, 0.14));
   vector-effect: non-scaling-stroke;
 }
 .lead-series circle {
@@ -1234,10 +1271,14 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .lead-series-msk path { stroke: var(--blue); }
 .lead-series-msk circle { fill: var(--blue); }
-.lead-series-spb path { stroke: var(--navy); }
-.lead-series-spb circle { fill: var(--navy); }
+.lead-series-spb path { stroke: var(--soft-blue); }
+.lead-series-spb circle { fill: var(--soft-blue); }
 .lead-series-all path { stroke: var(--black); }
 .lead-series-all circle { fill: var(--black); }
+.lead-hover-zone {
+  fill: transparent;
+  pointer-events: all;
+}
 .leads-daily-legend {
   display: flex;
   align-items: center;
@@ -1260,7 +1301,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   display: inline-block;
 }
 .leads-daily-legend .msk i { background: var(--blue); }
-.leads-daily-legend .spb i { background: var(--navy); }
+.leads-daily-legend .spb i { background: var(--soft-blue); }
 .leads-daily-legend .all i { background: var(--black); }
 .leads-daily-legend .weekend i {
   width: 18px;

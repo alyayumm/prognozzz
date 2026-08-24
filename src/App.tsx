@@ -803,7 +803,7 @@ function Sidebar({
       <button className={mode === "leadDaily" ? "designer-report-button active" : "designer-report-button"} type="button" onClick={() => setMode("leadDaily")}>
         <TrendingUp size={16} />
         <span>
-          <strong>Лиды по выходным</strong>
+          <strong>Лиды по дням</strong>
           <small>дизайнерский отчет</small>
         </span>
       </button>
@@ -1140,7 +1140,11 @@ function LeadsWeekendReport({
   monthConfigs: MonthConfig[];
   selectedScope: ReportScope;
 }) {
-  const chartMonths = useMemo(() => buildWeekendLeadChartMonths(records, monthConfigs, selectedScope), [monthConfigs, records, selectedScope]);
+  const [onlyWeekends, setOnlyWeekends] = useState(false);
+  const chartMonths = useMemo(
+    () => buildLeadChartMonths(records, monthConfigs, selectedScope, onlyWeekends),
+    [monthConfigs, onlyWeekends, records, selectedScope],
+  );
   const totalLeads = chartMonths.reduce((sum, month) => sum + month.series.reduce((seriesSum, item) => seriesSum + item.values.reduce((valueSum, value) => valueSum + value, 0), 0), 0);
   const activeDays = chartMonths.reduce((sum, month) => sum + month.dates.filter((_, index) => month.series.some((item) => item.values[index] > 0)).length, 0);
   const rangeLabel = chartMonths.length
@@ -1150,23 +1154,33 @@ function LeadsWeekendReport({
   return (
     <div className="page-stack leads-daily-report">
       <ExecutiveSummary
-        status={{ label: "выходные", tone: "good" }}
+        status={{ label: onlyWeekends ? "только выходные" : "все дни", tone: "good" }}
         eyebrow={rangeLabel}
-        title="Лиды по выходным"
-        subtitle="Дизайнерский отчет только по субботам и воскресеньям. Каждый месяц идет отдельным графиком, городские линии контрастные и без точек."
+        title="Лиды по дням"
+        subtitle="Январь–март собраны только по выходным из отдельной таблицы; остальные месяцы показывают все дни, если не включен фильтр выходных."
         facts={[
           `Город: ${selectedScope === "Все" ? "МСК + СПБ / общий срез" : selectedScope}`,
           `Месяцев: ${chartMonths.length}`,
-          `Выходных с FACT: ${activeDays}`,
+          `Дней с FACT: ${activeDays}`,
           `Лидов: ${formatNumber(totalLeads)}`,
         ]}
       />
 
       <section className="analytics-panel leads-daily-panel">
-        <PanelHead
-          title="Weekend lead curve"
-          description="В графиках оставлены только выходные дни. При выборе всех городов МСК и СПБ показаны разными контрастными кривыми."
-        />
+        <div className="leads-daily-panel-head">
+          <PanelHead
+            title="Lead curve"
+            description="Наведи на любой день графика, чтобы увидеть конкретное количество лидов за дату. Линии без точек."
+          />
+          <button
+            type="button"
+            className={onlyWeekends ? "weekend-filter-button active" : "weekend-filter-button"}
+            onClick={() => setOnlyWeekends((current) => !current)}
+            aria-pressed={onlyWeekends}
+          >
+            Только выходные
+          </button>
+        </div>
         <div className="leads-daily-month-stack">
           {chartMonths.map((month) => (
             <LeadsWeekendMonthChart key={month.key} month={month} />
@@ -1183,16 +1197,17 @@ function LeadsWeekendMonthChart({
   month: WeekendLeadChartMonth;
 }) {
   const { dates, series } = month;
-  const chartWidth = 920;
+  const isWeekendOnlyMonth = dates.length > 0 && dates.every(isWeekend);
+  const slotCount = isWeekendOnlyMonth ? 10 : 31;
+  const chartWidth = 1000;
   const svgHeight = 382;
   const plot = { left: 54, right: 24, top: 54, height: 232, bottom: 62 };
   const plotWidth = chartWidth - plot.left - plot.right;
-  const xForIndex = (index: number) => plot.left + (dates.length <= 1 ? plotWidth / 2 : (plotWidth / Math.max(dates.length - 1, 1)) * index);
-  const rawMax = Math.max(...series.flatMap((item) => item.values), 1);
-  const chartMax = getNiceAxisMax(rawMax * 1.14);
-  const yForValue = (value: number) => plot.top + plot.height - (Math.max(value, 0) / chartMax) * plot.height;
-  const axisLabels = getAxisLabels(chartMax);
-  const dayStep = plotWidth / Math.max(dates.length - 1, 1);
+  const xForIndex = (index: number) => plot.left + (slotCount <= 1 ? plotWidth / 2 : (plotWidth / Math.max(slotCount - 1, 1)) * index);
+  const chartMax = 200;
+  const yForValue = (value: number) => plot.top + plot.height - (Math.min(Math.max(value, 0), chartMax) / chartMax) * plot.height;
+  const axisLabels = [200, 150, 100, 50, 0];
+  const dayStep = plotWidth / Math.max(slotCount - 1, 1);
 
   if (!dates.length) {
     return (
@@ -1230,12 +1245,26 @@ function LeadsWeekendMonthChart({
         <rect x="0" y="0" width={chartWidth} height="40" className="lead-month-band" />
         <text x="18" y="25" className="lead-month-title">{month.label}</text>
 
-        {dates.map((date, index) => {
-          if (!isWeekend(date)) return null;
+        {Array.from({ length: slotCount }).map((_, index) => {
+          const date = dates[index];
           const centerX = xForIndex(index);
+          if (!date) {
+            return (
+              <rect
+                key={`empty-slot-${index}`}
+                x={centerX - Math.max(10, dayStep * 0.42)}
+                y={plot.top - 8}
+                width={Math.max(20, dayStep * 0.84)}
+                height={plot.height + 76}
+                rx="12"
+                className="lead-empty-slot"
+              />
+            );
+          }
+          if (date && !isWeekend(date)) return null;
           return (
             <rect
-              key={date}
+              key={`slot-${index}`}
               x={centerX - Math.max(10, dayStep * 0.42)}
               y={plot.top - 8}
               width={Math.max(20, dayStep * 0.84)}
@@ -1285,6 +1314,23 @@ function LeadsWeekendMonthChart({
                 </text>
               )}
             </g>
+          );
+        })}
+
+        {dates.map((date, index) => {
+          const centerX = xForIndex(index);
+          const width = Math.max(22, dayStep * 0.86);
+          return (
+            <rect
+              key={`hover-${date}`}
+              x={centerX - width / 2}
+              y={plot.top - 14}
+              width={width}
+              height={plot.height + 120}
+              className="lead-hover-zone"
+            >
+              <title>{leadDayTooltip(date, series, index)}</title>
+            </rect>
           );
         })}
       </svg>
@@ -4251,12 +4297,13 @@ function getLeadFactForCity(records: DailyRecord[], date: string, city: City): n
     .reduce((sum, record) => sum + netFact(record), 0);
 }
 
-function buildWeekendLeadChartMonths(records: DailyRecord[], monthConfigs: MonthConfig[], selectedScope: ReportScope): WeekendLeadChartMonth[] {
+function buildLeadChartMonths(records: DailyRecord[], monthConfigs: MonthConfig[], selectedScope: ReportScope, onlyWeekends: boolean): WeekendLeadChartMonth[] {
   const sortedMonths = [...monthConfigs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   const manualMonths = selectedScope === "Все" ? weekendLeadManualMonths : [];
   const configuredMonths = sortedMonths
     .map((config) => {
-      const dates = getMonthDates(config.year, config.monthIndex, config.daysInMonth).filter(isWeekend);
+      const allDates = getMonthDates(config.year, config.monthIndex, config.daysInMonth);
+      const dates = onlyWeekends ? allDates.filter(isWeekend) : allDates;
       const citySeries = selectedScope === "Все"
         ? [
             { label: "МСК", className: "msk", values: dates.map((date) => getLeadFactForCity(records, date, "МСК")) },
@@ -4276,6 +4323,16 @@ function buildWeekendLeadChartMonths(records: DailyRecord[], monthConfigs: Month
     .filter((month) => month.dates.length && month.series.some((item) => item.values.some((value) => value > 0)));
 
   return [...manualMonths, ...configuredMonths];
+}
+
+function leadDayTooltip(date: string, series: WeekendLeadChartSeries[], index: number): string {
+  const rows = [
+    `${formatLongDate(date)}, ${weekdayLabel(date)}`,
+    ...series.map((item) => `${item.label}: ${formatNumber(item.values[index] ?? 0)} лидов`),
+  ];
+  const total = series.length > 1 ? series.reduce((sum, item) => sum + (item.values[index] ?? 0), 0) : null;
+  if (total !== null) rows.push(`Итого: ${formatNumber(total)} лидов`);
+  return rows.join("\n");
 }
 
 function isWeekend(dateIso: string): boolean {
@@ -4581,8 +4638,8 @@ function getPageCopy(mode: Mode) {
       subtitle: "Дневная динамика факта, прогнозный коридор Optima и события выбранного месяца.",
     },
     leadDaily: {
-      title: "Лиды по выходным",
-      subtitle: "Дизайнерский отчет по субботам и воскресеньям: месяцы отдельными графиками, города раздельными кривыми.",
+      title: "Лиды по дням",
+      subtitle: "Дизайнерский отчет по лидам: месяцы отдельными графиками, города раздельными кривыми.",
     },
     week: {
       title: "Неделя",
