@@ -93,6 +93,8 @@ type SourceChartBucket = {
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
+type WeekendLeadChartSeries = { label: string; className: string; values: number[] };
+type WeekendLeadChartMonth = { key: string; label: string; dates: string[]; series: WeekendLeadChartSeries[] };
 type DailyMetricKey = "leads" | "qualifiedLeads" | "sales";
 type DailyForecastPoint = {
   date: string;
@@ -166,6 +168,26 @@ const planRingItems: Array<{ metric: Metric; label: string; className: string; r
   { metric: "Лиды", label: "Лиды", className: "leads", radius: 58 },
   { metric: "Квалы", label: "Квалы", className: "qualified", radius: 46 },
   { metric: "Продажи", label: "Продажи", className: "sales", radius: 34 },
+];
+const weekendLeadManualMonths: WeekendLeadChartMonth[] = [
+  {
+    key: "2026-01-weekend",
+    label: "Январь 2026",
+    dates: ["2026-01-03", "2026-01-04", "2026-01-10", "2026-01-11", "2026-01-17", "2026-01-18", "2026-01-24", "2026-01-25", "2026-01-31"],
+    series: [{ label: "Все", className: "all", values: [68, 75, 76, 76, 108, 102, 86, 88, 101] }],
+  },
+  {
+    key: "2026-02-weekend",
+    label: "Февраль 2026",
+    dates: ["2026-02-01", "2026-02-07", "2026-02-08", "2026-02-14", "2026-02-15", "2026-02-21", "2026-02-22", "2026-02-28"],
+    series: [{ label: "Все", className: "all", values: [90, 96, 82, 100, 97, 112, 84, 98] }],
+  },
+  {
+    key: "2026-03-weekend",
+    label: "Март 2026",
+    dates: ["2026-03-01", "2026-03-07", "2026-03-08", "2026-03-14", "2026-03-15", "2026-03-21", "2026-03-22", "2026-03-28", "2026-03-29"],
+    series: [{ label: "Все", className: "all", values: [124, 110, 66, 135, 133, 142, 106, 144, 156] }],
+  },
 ];
 const dailyChartMeta: Array<{ metric: DailyMetricKey; sourceMetric: Metric; title: string }> = [
   { metric: "leads", sourceMetric: "Лиды", title: "Лиды" },
@@ -614,7 +636,7 @@ export default function App() {
               />
             )}
             {mode === "leadDaily" && (
-              <LeadsDailyReport
+              <LeadsWeekendReport
                 records={records}
                 monthConfigs={monthConfigs}
                 selectedScope={selectedScope}
@@ -724,7 +746,6 @@ function Sidebar({
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
     { mode: "month", label: "Обзор месяца", icon: <LayoutDashboard /> },
     { mode: "monthDaily", label: "Месяц по дням", icon: <TrendingUp /> },
-    { mode: "leadDaily", label: "Лиды по дням", icon: <TrendingUp /> },
     { mode: "week", label: "Неделя", icon: <CalendarDays /> },
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "sources", label: "Источники", icon: <Target /> },
@@ -777,6 +798,14 @@ function Sidebar({
       <button className="ghost-button" type="button" onClick={() => setMode("admin")}>
         <Settings size={16} />
         Настройки
+      </button>
+
+      <button className={mode === "leadDaily" ? "designer-report-button active" : "designer-report-button"} type="button" onClick={() => setMode("leadDaily")}>
+        <TrendingUp size={16} />
+        <span>
+          <strong>Лиды по выходным</strong>
+          <small>дизайнерский отчет</small>
+        </span>
       </button>
     </aside>
   );
@@ -1102,7 +1131,7 @@ function MonthDailyDashboard({
   );
 }
 
-function LeadsDailyReport({
+function LeadsWeekendReport({
   records,
   monthConfigs,
   selectedScope,
@@ -1111,64 +1140,49 @@ function LeadsDailyReport({
   monthConfigs: MonthConfig[];
   selectedScope: ReportScope;
 }) {
-  const sortedMonths = useMemo(() => [...monthConfigs].sort((a, b) => a.monthKey.localeCompare(b.monthKey)), [monthConfigs]);
-  const dates = useMemo(() => sortedMonths.flatMap((config) => getMonthDates(config.year, config.monthIndex, config.daysInMonth)), [sortedMonths]);
-  const seriesCities: City[] = selectedScope === "Все" ? ["МСК", "СПБ"] : selectedScope === "МСК" || selectedScope === "СПБ" ? [selectedScope] : ["МСК", "СПБ"];
-  const series = useMemo(() => buildLeadDailySeries(records, dates, seriesCities), [dates, records, seriesCities]);
-  const totalLeads = series.reduce((sum, item) => sum + item.values.reduce((citySum, value) => citySum + value, 0), 0);
-  const activeDays = dates.filter((_, index) => series.some((item) => item.values[index] > 0)).length;
-  const rangeLabel = sortedMonths.length
-    ? `${sortedMonths[0].label} → ${sortedMonths[sortedMonths.length - 1].label}`
+  const chartMonths = useMemo(() => buildWeekendLeadChartMonths(records, monthConfigs, selectedScope), [monthConfigs, records, selectedScope]);
+  const totalLeads = chartMonths.reduce((sum, month) => sum + month.series.reduce((seriesSum, item) => seriesSum + item.values.reduce((valueSum, value) => valueSum + value, 0), 0), 0);
+  const activeDays = chartMonths.reduce((sum, month) => sum + month.dates.filter((_, index) => month.series.some((item) => item.values[index] > 0)).length, 0);
+  const rangeLabel = chartMonths.length
+    ? `${chartMonths[0].label} → ${chartMonths[chartMonths.length - 1].label}`
     : "нет месяцев";
 
   return (
     <div className="page-stack leads-daily-report">
       <ExecutiveSummary
-        status={{ label: "только лиды", tone: "good" }}
+        status={{ label: "выходные", tone: "good" }}
         eyebrow={rangeLabel}
-        title="Лиды по дням"
-        subtitle="Каждый месяц показан отдельным дневным графиком ниже предыдущего. Выходные выделены фоном, города не суммируются."
+        title="Лиды по выходным"
+        subtitle="Дизайнерский отчет только по субботам и воскресеньям. Каждый месяц идет отдельным графиком, городские линии контрастные и без точек."
         facts={[
-          `Город: ${selectedScope === "Все" ? "МСК + СПБ раздельно" : selectedScope}`,
-          `Месяцев: ${sortedMonths.length}`,
-          `Дней в ленте: ${dates.length}`,
-          `Дней с FACT: ${activeDays}`,
+          `Город: ${selectedScope === "Все" ? "МСК + СПБ / общий срез" : selectedScope}`,
+          `Месяцев: ${chartMonths.length}`,
+          `Выходных с FACT: ${activeDays}`,
           `Лидов: ${formatNumber(totalLeads)}`,
         ]}
       />
 
       <section className="analytics-panel leads-daily-panel">
         <PanelHead
-          title="Дневная динамика лидов"
-          description="Суббота и воскресенье подсвечены голубым фоном; если выбран режим Все, МСК и СПБ идут двумя линиями на каждом месяце."
+          title="Weekend lead curve"
+          description="В графиках оставлены только выходные дни. При выборе всех городов МСК и СПБ показаны разными контрастными кривыми."
         />
         <div className="leads-daily-month-stack">
-          {sortedMonths.map((month) => {
-            const monthDates = getMonthDates(month.year, month.monthIndex, month.daysInMonth);
-            return (
-              <LeadsDailyMonthChart
-                key={month.monthKey}
-                month={month}
-                dates={monthDates}
-                series={buildLeadDailySeries(records, monthDates, seriesCities)}
-              />
-            );
-          })}
+          {chartMonths.map((month) => (
+            <LeadsWeekendMonthChart key={month.key} month={month} />
+          ))}
         </div>
       </section>
     </div>
   );
 }
 
-function LeadsDailyMonthChart({
+function LeadsWeekendMonthChart({
   month,
-  dates,
-  series,
 }: {
-  month: MonthConfig;
-  dates: string[];
-  series: Array<{ city: City; values: number[] }>;
+  month: WeekendLeadChartMonth;
 }) {
+  const { dates, series } = month;
   const chartWidth = 920;
   const svgHeight = 382;
   const plot = { left: 54, right: 24, top: 54, height: 232, bottom: 62 };
@@ -1198,9 +1212,9 @@ function LeadsDailyMonthChart({
         </div>
         <div className="leads-daily-legend">
           {series.map((item) => (
-            <span key={item.city} className={item.city === "МСК" ? "msk" : "spb"}>
+            <span key={item.label} className={item.className}>
               <i />
-              {item.city}
+              {item.label}
             </span>
           ))}
           <span className="weekend"><i /> выходные</span>
@@ -1247,7 +1261,7 @@ function LeadsDailyMonthChart({
             value <= 0 ? null : { x: xForIndex(index), y: yForValue(value) },
           );
           return (
-            <g key={item.city} className={`lead-series lead-series-${item.city === "МСК" ? "msk" : "spb"}`}>
+            <g key={item.label} className={`lead-series lead-series-${item.className}`}>
               {segments.map((path, index) => <path key={index} d={path} />)}
             </g>
           );
@@ -4237,11 +4251,31 @@ function getLeadFactForCity(records: DailyRecord[], date: string, city: City): n
     .reduce((sum, record) => sum + netFact(record), 0);
 }
 
-function buildLeadDailySeries(records: DailyRecord[], dates: string[], cities: City[]): Array<{ city: City; values: number[] }> {
-  return cities.map((city) => ({
-    city,
-    values: dates.map((date) => getLeadFactForCity(records, date, city)),
-  }));
+function buildWeekendLeadChartMonths(records: DailyRecord[], monthConfigs: MonthConfig[], selectedScope: ReportScope): WeekendLeadChartMonth[] {
+  const sortedMonths = [...monthConfigs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const manualMonths = selectedScope === "Все" ? weekendLeadManualMonths : [];
+  const configuredMonths = sortedMonths
+    .map((config) => {
+      const dates = getMonthDates(config.year, config.monthIndex, config.daysInMonth).filter(isWeekend);
+      const citySeries = selectedScope === "Все"
+        ? [
+            { label: "МСК", className: "msk", values: dates.map((date) => getLeadFactForCity(records, date, "МСК")) },
+            { label: "СПБ", className: "spb", values: dates.map((date) => getLeadFactForCity(records, date, "СПБ")) },
+          ]
+        : selectedScope === "МСК" || selectedScope === "СПБ"
+          ? [{ label: selectedScope, className: selectedScope === "МСК" ? "msk" : "spb", values: dates.map((date) => getLeadFactForCity(records, date, selectedScope)) }]
+          : [];
+
+      return {
+        key: config.monthKey,
+        label: config.label,
+        dates,
+        series: citySeries,
+      };
+    })
+    .filter((month) => month.dates.length && month.series.some((item) => item.values.some((value) => value > 0)));
+
+  return [...manualMonths, ...configuredMonths];
 }
 
 function isWeekend(dateIso: string): boolean {
@@ -4547,8 +4581,8 @@ function getPageCopy(mode: Mode) {
       subtitle: "Дневная динамика факта, прогнозный коридор Optima и события выбранного месяца.",
     },
     leadDaily: {
-      title: "Лиды по дням",
-      subtitle: "Отдельный дневной отчет по лидам: все месяцы подряд, выходные выделены, города показаны раздельно.",
+      title: "Лиды по выходным",
+      subtitle: "Дизайнерский отчет по субботам и воскресеньям: месяцы отдельными графиками, города раздельными кривыми.",
     },
     week: {
       title: "Неделя",
