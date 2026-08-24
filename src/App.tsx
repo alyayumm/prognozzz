@@ -2361,37 +2361,93 @@ function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSumma
 }
 
 function BrandComparePanel({ performance, sourceFilter }: { performance: BrandPerformanceWeekly[]; sourceFilter: string }) {
-  const rows = comparedTwoCityBrands.map((brand) => ({
-    brand,
-    msk: aggregateBrandPerformance(performance.filter((row) => normalizeBrandDashboardKey(row.brand) === normalizeBrandDashboardKey(brand) && row.city === "МСК" && (sourceFilter === "Все источники" || row.source === sourceFilter))),
-    spb: aggregateBrandPerformance(performance.filter((row) => normalizeBrandDashboardKey(row.brand) === normalizeBrandDashboardKey(brand) && row.city === "СПБ" && (sourceFilter === "Все источники" || row.source === sourceFilter))),
-  }));
+  const availableBrands = useMemo(() => {
+    const withData = comparedTwoCityBrands.filter((brand) => {
+      const rows = performance.filter((row) => {
+        return normalizeBrandDashboardKey(row.brand) === normalizeBrandDashboardKey(brand)
+          && (sourceFilter === "Все источники" || row.source === sourceFilter);
+      });
+      const cities = new Set(rows.map((row) => row.city));
+      return cities.has("МСК") && cities.has("СПБ");
+    });
+    return withData.length ? withData : comparedTwoCityBrands;
+  }, [performance, sourceFilter]);
+  const [selectedCompareBrand, setSelectedCompareBrand] = useState(availableBrands[0] ?? comparedTwoCityBrands[0]);
+
+  useEffect(() => {
+    if (!availableBrands.includes(selectedCompareBrand)) {
+      setSelectedCompareBrand(availableBrands[0] ?? comparedTwoCityBrands[0]);
+    }
+  }, [availableBrands, selectedCompareBrand]);
+
+  const activeBrand = availableBrands.includes(selectedCompareBrand)
+    ? selectedCompareBrand
+    : availableBrands[0] ?? comparedTwoCityBrands[0];
+  const cityRows = (city: BrandCity) => performance.filter((row) => {
+    return normalizeBrandDashboardKey(row.brand) === normalizeBrandDashboardKey(activeBrand)
+      && row.city === city
+      && (sourceFilter === "Все источники" || row.source === sourceFilter);
+  });
+  const msk = aggregateBrandPerformance(cityRows("МСК"));
+  const spb = aggregateBrandPerformance(cityRows("СПБ"));
 
   return (
     <section className="analytics-panel brand-compare-panel">
-      <PanelHead
-        title="Бренды в двух городах"
-        description="Сравнение МСК и СПБ по ключевым показателям. Бюджет и стоимость берутся только из выбранного источника, если он выбран."
-      />
-      <div className="brand-compare-grid">
-        {rows.map((row) => (
-          <article key={row.brand} className="brand-compare-card">
-            <h2>{row.brand}</h2>
-            <div className="brand-compare-bars">
-              <BrandCompareBars label="Лиды" msk={row.msk.leads} spb={row.spb.leads} />
-              <BrandCompareBars label="КВАЛ" msk={row.msk.qualified} spb={row.spb.qualified} />
-              <BrandCompareBars label="Продажи" msk={row.msk.sales} spb={row.spb.sales} />
-            </div>
-            <div className="brand-compare-numbers">
-              <span>МСК CPQL <strong>{formatNumber(Math.round(row.msk.cpql))} ₽</strong></span>
-              <span>СПБ CPQL <strong>{formatNumber(Math.round(row.spb.cpql))} ₽</strong></span>
-              <span>МСК ROAS <strong>{row.msk.roas === null ? "—" : `${formatCompactDecimal(row.msk.roas)}x`}</strong></span>
-              <span>СПБ ROAS <strong>{row.spb.roas === null ? "—" : `${formatCompactDecimal(row.spb.roas)}x`}</strong></span>
-            </div>
-          </article>
-        ))}
+      <div className="brand-compare-head">
+        <PanelHead
+          title="Сравнение одного бренда"
+          description="Выбери бренд, который есть в двух городах: на экране будет только его подробное сравнение МСК и СПБ."
+        />
+        <label>
+          <span>Бренд</span>
+          <select value={activeBrand} onChange={(event) => setSelectedCompareBrand(event.target.value)}>
+            {availableBrands.map((brand) => (
+              <option key={brand} value={brand}>{brand}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <article className="brand-compare-card brand-compare-card-focused">
+        <div className="brand-compare-title">
+          <div>
+            <span>МСК vs СПБ</span>
+            <h2>{activeBrand}</h2>
+          </div>
+          <strong>{sourceFilter}</strong>
+        </div>
+        <div className="brand-compare-bars brand-compare-bars-focused">
+          <BrandCompareBars label="Лиды" msk={msk.leads} spb={spb.leads} />
+          <BrandCompareBars label="КВАЛ" msk={msk.qualified} spb={spb.qualified} />
+          <BrandCompareBars label="Продажи" msk={msk.sales} spb={spb.sales} />
+          <BrandCompareBars label="Выручка" msk={msk.revenue} spb={spb.revenue} />
+        </div>
+        <div className="brand-compare-numbers brand-compare-numbers-focused">
+          <BrandCompareMetric label="Лид → КВАЛ" msk={`${msk.leadToQualified}%`} spb={`${spb.leadToQualified}%`} />
+          <BrandCompareMetric label="КВАЛ → продажа" msk={`${msk.qualifiedToSales}%`} spb={`${spb.qualifiedToSales}%`} />
+          <BrandCompareMetric label="CPL" msk={`${formatNumber(Math.round(msk.cpl))} ₽`} spb={`${formatNumber(Math.round(spb.cpl))} ₽`} />
+          <BrandCompareMetric label="CPQL" msk={`${formatNumber(Math.round(msk.cpql))} ₽`} spb={`${formatNumber(Math.round(spb.cpql))} ₽`} />
+          <BrandCompareMetric label="Цена продажи" msk={`${formatNumber(Math.round(msk.saleCost))} ₽`} spb={`${formatNumber(Math.round(spb.saleCost))} ₽`} />
+          <BrandCompareMetric label="Средний чек" msk={`${formatNumber(Math.round(msk.avgCheck))} ₽`} spb={`${formatNumber(Math.round(spb.avgCheck))} ₽`} />
+          <BrandCompareMetric label="ROAS" msk={msk.roas === null ? "—" : `${formatCompactDecimal(msk.roas)}x`} spb={spb.roas === null ? "—" : `${formatCompactDecimal(spb.roas)}x`} />
+          <BrandCompareMetric label="Бюджет" msk={`${formatNumber(Math.round(msk.budget))} ₽`} spb={`${formatNumber(Math.round(spb.budget))} ₽`} />
+        </div>
+      </article>
+      <div className="brand-compare-legend">
+        <span><i className="msk" /> МСК</span>
+        <span><i className="spb" /> СПБ</span>
       </div>
     </section>
+  );
+}
+
+function BrandCompareMetric({ label, msk, spb }: { label: string; msk: string; spb: string }) {
+  return (
+    <div className="brand-compare-metric">
+      <span>{label}</span>
+      <strong>МСК <b>{msk}</b></strong>
+      <strong>СПБ <b>{spb}</b></strong>
+    </div>
   );
 }
 
