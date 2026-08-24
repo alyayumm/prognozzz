@@ -1082,6 +1082,43 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .leads-daily-panel {
   overflow: hidden;
 }
+.leads-daily-month-stack {
+  display: grid;
+  gap: 14px;
+}
+.leads-daily-month-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--glass-highlight);
+  overflow: hidden;
+}
+.leads-daily-month-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(154, 180, 234, 0.34);
+  background: rgba(234, 241, 255, 0.58);
+}
+.leads-daily-month-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.leads-daily-month-head strong {
+  color: var(--navy);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 850;
+}
+.leads-daily-month-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+}
 .leads-daily-scroll {
   position: relative;
   width: 100%;
@@ -1089,7 +1126,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   overflow-x: auto;
   overflow-y: hidden;
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-width: 0;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.74);
   box-shadow: var(--glass-highlight);
 }
@@ -1158,18 +1196,10 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .lead-series-spb path { stroke: var(--soft-blue); }
 .lead-series-spb circle { fill: var(--soft-blue); }
 .leads-daily-legend {
-  position: sticky;
-  left: 0;
-  bottom: 0;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 18px;
-  width: max-content;
-  min-width: 100%;
-  padding: 12px 18px;
-  border-top: 1px solid rgba(154, 180, 234, 0.34);
-  background: rgba(247, 249, 255, 0.88);
+  flex-wrap: wrap;
   color: var(--muted-strong);
   font-size: 12px;
   font-weight: 850;
