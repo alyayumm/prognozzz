@@ -15,6 +15,12 @@ type ApiAction =
   | "deleteEvent"
   | "getForecastCoefficients"
   | "updateForecastCoefficients"
+  | "getBrandDashboard"
+  | "getBrandPerformance"
+  | "getBrandBranches"
+  | "getBrandAliases"
+  | "upsertBrandPerformance"
+  | "upsertBrandBranches"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

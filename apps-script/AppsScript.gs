@@ -7,6 +7,9 @@ const CONFIG = {
     weekly: 'Weekly_Summary',
     events: 'Event_Map',
     coefficients: 'Forecast_Coefficients',
+    brandPerformance: 'Brand_Performance_Weekly',
+    brandBranches: 'Brand_Branches_Weekly',
+    brandAliases: 'Brand_Aliases',
   },
 };
 
@@ -84,6 +87,42 @@ const HEADERS = {
     'coefficient',
     'updatedAt',
   ],
+  Brand_Performance_Weekly: [
+    'id',
+    'weekStart',
+    'monthKey',
+    'city',
+    'brand',
+    'domain',
+    'source',
+    'leads',
+    'qualified',
+    'sales',
+    'revenue',
+    'budget',
+    'roas',
+    'cpl',
+    'cpql',
+    'saleCost',
+    'avgCheck',
+    'updatedAt',
+  ],
+  Brand_Branches_Weekly: [
+    'id',
+    'weekStart',
+    'monthKey',
+    'city',
+    'platform',
+    'brand',
+    'rawBrand',
+    'branches',
+    'updatedAt',
+  ],
+  Brand_Aliases: [
+    'raw',
+    'brand',
+    'updatedAt',
+  ],
 };
 
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
@@ -120,13 +159,19 @@ function doPost(e) {
       deleteEvent: deleteEvent_,
       getForecastCoefficients: getForecastCoefficients_,
       updateForecastCoefficients: updateForecastCoefficients_,
+      getBrandDashboard: getBrandDashboard_,
+      getBrandPerformance: getBrandPerformance_,
+      getBrandBranches: getBrandBranches_,
+      getBrandAliases: getBrandAliases_,
+      upsertBrandPerformance: upsertBrandPerformance_,
+      upsertBrandBranches: upsertBrandBranches_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -177,6 +222,10 @@ function formatServiceSheetKeys_() {
     { sheet: CONFIG.sheets.plans, column: 1 },
     { sheet: CONFIG.sheets.daily, column: 3 },
     { sheet: CONFIG.sheets.weekly, column: 1 },
+    { sheet: CONFIG.sheets.brandPerformance, column: 2 },
+    { sheet: CONFIG.sheets.brandPerformance, column: 3 },
+    { sheet: CONFIG.sheets.brandBranches, column: 2 },
+    { sheet: CONFIG.sheets.brandBranches, column: 3 },
   ].forEach((entry) => {
     const sheet = ss.getSheetByName(entry.sheet);
     if (!sheet) return;
@@ -199,6 +248,36 @@ function getMonthData_(payload) {
       return String(event.startDate).slice(0, 7) <= monthKey && String(event.endDate).slice(0, 7) >= monthKey;
     }).map(normalizeEventForClient_),
   };
+}
+
+function getBrandDashboard_() {
+  return {
+    performance: getBrandPerformance_(),
+    branches: getBrandBranches_(),
+    aliases: getBrandAliases_(),
+  };
+}
+
+function getBrandPerformance_() {
+  return readObjects_(CONFIG.sheets.brandPerformance);
+}
+
+function getBrandBranches_() {
+  return readObjects_(CONFIG.sheets.brandBranches);
+}
+
+function getBrandAliases_() {
+  return readObjects_(CONFIG.sheets.brandAliases);
+}
+
+function upsertBrandPerformance_(payload) {
+  const records = Array.isArray(payload.records) ? payload.records : (Array.isArray(payload.rows) ? payload.rows : []);
+  return upsertRowsById_(CONFIG.sheets.brandPerformance, HEADERS.Brand_Performance_Weekly, records, brandPerformanceRow_);
+}
+
+function upsertBrandBranches_(payload) {
+  const records = Array.isArray(payload.records) ? payload.records : (Array.isArray(payload.rows) ? payload.rows : []);
+  return upsertRowsById_(CONFIG.sheets.brandBranches, HEADERS.Brand_Branches_Weekly, records, brandBranchRow_);
 }
 
 function createMonth_(payload) {
@@ -396,8 +475,32 @@ function readObjects_(sheetName) {
       if (object.endDate !== undefined) {
         object.endDate = stringifyDate_(object.endDate);
       }
+      if (object.weekStart !== undefined) {
+        object.weekStart = stringifyDate_(object.weekStart);
+      }
       return object;
     });
+}
+
+function upsertRowsById_(sheetName, headers, records, mapRow) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  const existing = readObjects_(sheetName);
+  const rowById = {};
+  existing.forEach((row, index) => {
+    rowById[row.id] = index + 2;
+  });
+
+  records.forEach((record) => {
+    const values = mapRow(record);
+    const id = values[0];
+    if (rowById[id]) {
+      sheet.getRange(rowById[id], 1, 1, headers.length).setValues([values]);
+    } else {
+      sheet.appendRow(values);
+    }
+  });
+
+  return { updated: records.length };
 }
 
 function dailyRow_(record) {
@@ -437,6 +540,52 @@ function eventRow_(event) {
     stripLeadSourceFromDescription_(event.description || ''),
     new Date(),
     leadSource,
+  ];
+}
+
+function brandPerformanceRow_(record) {
+  const weekStart = stringifyDate_(record.weekStart);
+  const monthKey = normalizeMonthKey_(record.monthKey || String(weekStart).slice(0, 7));
+  const leads = Number(record.leads || 0);
+  const qualified = Number(record.qualified || record.kval || record.ql || 0);
+  const sales = Number(record.sales || 0);
+  const revenue = Number(record.revenue || 0);
+  const budget = Number(record.budget || 0);
+  return [
+    record.id || [weekStart, record.city, record.brand, record.source || 'Все источники'].join('|'),
+    weekStart,
+    monthKey,
+    record.city,
+    record.brand,
+    record.domain || '',
+    record.source || 'Все источники',
+    leads,
+    qualified,
+    sales,
+    revenue,
+    budget,
+    Number(record.roas || (budget > 0 ? revenue / budget : 0)),
+    Number(record.cpl || (leads > 0 ? budget / leads : 0)),
+    Number(record.cpql || (qualified > 0 ? budget / qualified : 0)),
+    Number(record.saleCost || (sales > 0 ? budget / sales : 0)),
+    Number(record.avgCheck || (sales > 0 ? revenue / sales : 0)),
+    new Date(),
+  ];
+}
+
+function brandBranchRow_(record) {
+  const weekStart = stringifyDate_(record.weekStart);
+  const monthKey = normalizeMonthKey_(record.monthKey || String(weekStart).slice(0, 7));
+  return [
+    record.id || [weekStart, record.city, record.platform, record.brand].join('|'),
+    weekStart,
+    monthKey,
+    record.city,
+    record.platform,
+    record.brand,
+    record.rawBrand || record.brand,
+    Number(record.branches || 0),
+    new Date(),
   ];
 }
 

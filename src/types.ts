@@ -109,3 +109,52 @@ export interface WeekSummary {
   close: number;
   events: EventItem[];
 }
+
+export type BrandCity = Extract<City, "МСК" | "СПБ">;
+export type BrandBranchPlatform = "Яндекс Карты" | "Google Карты" | "2ГИС";
+
+export interface BrandPerformanceWeekly {
+  id: string;
+  weekStart: string;
+  monthKey: string;
+  city: BrandCity;
+  brand: string;
+  domain: string;
+  source: string;
+  leads: number;
+  qualified: number;
+  sales: number;
+  revenue: number;
+  budget: number;
+  roas: number | null;
+  cpl: number;
+  cpql: number;
+  saleCost: number;
+  avgCheck: number;
+}
+
+export interface BrandBranchWeekly {
+  id: string;
+  weekStart: string;
+  monthKey: string;
+  city: BrandCity;
+  platform: BrandBranchPlatform;
+  brand: string;
+  rawBrand: string;
+  branches: number;
+}
+
+export interface BrandAlias {
+  raw: string;
+  brand: string;
+}
+
+export interface BrandEvent {
+  id: string;
+  brand: string;
+  city: BrandCity | "Все";
+  weekStart: string;
+  metric: string;
+  direction: "рост" | "падение";
+  percent: number;
+}
