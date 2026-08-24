@@ -1271,8 +1271,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .lead-series-msk path { stroke: var(--blue); }
 .lead-series-msk circle { fill: var(--blue); }
-.lead-series-spb path { stroke: var(--soft-blue); }
-.lead-series-spb circle { fill: var(--soft-blue); }
+.lead-series-spb path { stroke: #22c55e; }
+.lead-series-spb circle { fill: #22c55e; }
 .lead-series-all path { stroke: var(--black); }
 .lead-series-all circle { fill: var(--black); }
 .lead-hover-zone {
@@ -1301,7 +1301,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   display: inline-block;
 }
 .leads-daily-legend .msk i { background: var(--blue); }
-.leads-daily-legend .spb i { background: var(--soft-blue); }
+.leads-daily-legend .spb i { background: #22c55e; }
 .leads-daily-legend .all i { background: var(--black); }
 .leads-daily-legend .weekend i {
   width: 18px;

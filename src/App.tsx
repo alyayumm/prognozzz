@@ -1264,8 +1264,8 @@ function LeadsWeekendMonthChart({
   const isWeekendOnlyMonth = dates.length > 0 && dates.every(isWeekend);
   const slotCount = isWeekendOnlyMonth ? 10 : 31;
   const chartWidth = 1000;
-  const svgHeight = 382;
-  const plot = { left: 54, right: 24, top: 54, height: 232, bottom: 62 };
+  const svgHeight = 318;
+  const plot = { left: 54, right: 24, top: 48, height: 178, bottom: 54 };
   const plotWidth = chartWidth - plot.left - plot.right;
   const xForIndex = (index: number) => plot.left + (slotCount <= 1 ? plotWidth / 2 : (plotWidth / Math.max(slotCount - 1, 1)) * index);
   const chartMax = 200;
@@ -1319,7 +1319,7 @@ function LeadsWeekendMonthChart({
                 x={centerX - Math.max(10, dayStep * 0.42)}
                 y={plot.top - 8}
                 width={Math.max(20, dayStep * 0.84)}
-                height={plot.height + 76}
+                height={plot.height + 64}
                 rx="12"
                 className="lead-empty-slot"
               />
@@ -1332,7 +1332,7 @@ function LeadsWeekendMonthChart({
               x={centerX - Math.max(10, dayStep * 0.42)}
               y={plot.top - 8}
               width={Math.max(20, dayStep * 0.84)}
-              height={plot.height + 76}
+              height={plot.height + 64}
               rx="12"
               className="lead-weekend-band"
             />
@@ -1390,7 +1390,7 @@ function LeadsWeekendMonthChart({
               x={centerX - width / 2}
               y={plot.top - 14}
               width={width}
-              height={plot.height + 120}
+              height={plot.height + 96}
               className="lead-hover-zone"
             >
               <title>{leadDayTooltip(date, series, index)}</title>
