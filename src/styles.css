@@ -3018,6 +3018,346 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   border-radius: 3px;
 }
 
+.brands-dashboard { min-width: 0; }
+.brand-control-panel {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(240px, 360px) minmax(260px, 1fr);
+  gap: 14px;
+  align-items: end;
+}
+.brand-control-panel > div,
+.brand-control-panel label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+.brand-control-panel select {
+  height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--navy);
+  padding: 0 14px;
+  font: inherit;
+  font-weight: 900;
+}
+.brand-load-note {
+  min-height: 46px;
+  align-content: center;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(234, 241, 255, 0.56);
+  color: var(--muted-strong);
+}
+.brand-ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.brand-ranking-card {
+  min-height: 250px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: var(--glass-highlight);
+  display: grid;
+  gap: 14px;
+}
+.brand-ranking-card h2 {
+  color: var(--navy);
+  font-size: 18px;
+  line-height: 1.1;
+  font-weight: 950;
+}
+.brand-ranking-card div > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.brand-ranking-card ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-ranking-card li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid rgba(127, 167, 255, 0.18);
+}
+.brand-ranking-card li:first-child { border-top: 0; }
+.brand-ranking-card li span {
+  overflow: hidden;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand-ranking-card li strong {
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 950;
+}
+.brand-detail-panel {
+  display: grid;
+  gap: 14px;
+}
+.brand-detail-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.brand-detail-head span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.brand-detail-head h2 {
+  margin-top: 5px;
+  color: var(--navy);
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 950;
+}
+.brand-detail-head p {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+.brand-detail-head > strong {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 16px;
+  background: linear-gradient(135deg, var(--blue), #2d6bff);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 950;
+  box-shadow: 0 12px 26px rgba(28, 70, 245, 0.22);
+}
+.brand-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+.brand-kpi-card {
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(247, 249, 255, 0.74);
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+.brand-kpi-card span {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 950;
+}
+.brand-kpi-card strong {
+  color: var(--navy);
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 950;
+}
+.brand-kpi-card small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+}
+.brand-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.55fr);
+  gap: 12px;
+}
+.brand-chart-card,
+.brand-city-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--glass-highlight);
+}
+.brand-chart-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.brand-chart-head span,
+.brand-city-card > div > span {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 950;
+}
+.brand-chart-head strong,
+.brand-city-card > div > strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--navy);
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 950;
+}
+.brand-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.brand-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(247, 249, 255, 0.82);
+  color: var(--muted-strong);
+}
+.brand-chart-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.brand-chart-legend .sales { background: var(--blue); }
+.brand-chart-legend .roas { background: var(--navy); }
+.brand-chart-card svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.brand-grid-line {
+  stroke: rgba(127, 167, 255, 0.28);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.brand-axis-label,
+.brand-x-label,
+.brand-value-label {
+  fill: var(--muted-strong);
+  font-family: var(--font-ui);
+  font-weight: 900;
+}
+.brand-axis-label {
+  font-size: 10px;
+  text-anchor: end;
+}
+.brand-x-label {
+  font-size: 11px;
+  text-anchor: middle;
+}
+.brand-value-label {
+  fill: var(--navy);
+  font-size: 11px;
+  text-anchor: middle;
+}
+.brand-sales-bar {
+  fill: var(--blue);
+  filter: drop-shadow(0 10px 18px rgba(28, 70, 245, 0.18));
+}
+.brand-roas-line {
+  fill: none;
+  stroke: var(--navy);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 7 6;
+}
+.brand-roas-dot {
+  fill: var(--navy);
+  stroke: #fff;
+  stroke-width: 2;
+}
+.brand-city-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+.brand-city-list {
+  display: grid;
+  gap: 10px;
+}
+.brand-city-list div {
+  display: grid;
+  grid-template-columns: 46px repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(127, 167, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(234, 241, 255, 0.46);
+}
+.brand-city-list strong {
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 950;
+}
+.brand-city-list span {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 880;
+}
+.brand-events-panel {
+  display: grid;
+  gap: 14px;
+}
+.brand-event-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+.brand-event-card {
+  min-height: 88px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--muted);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  display: grid;
+  align-content: center;
+  gap: 7px;
+}
+.brand-event-card.positive {
+  border-left-color: var(--positive);
+  background: linear-gradient(90deg, rgba(48, 188, 103, 0.1), rgba(255, 255, 255, 0.82));
+}
+.brand-event-card.negative {
+  border-left-color: var(--negative);
+  background: linear-gradient(90deg, rgba(251, 98, 88, 0.1), rgba(255, 255, 255, 0.82));
+}
+.brand-event-card strong {
+  color: var(--navy);
+  font-size: 14px;
+  line-height: 1.22;
+  font-weight: 950;
+}
+.brand-event-card span {
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .events-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 330px;
@@ -3323,9 +3663,17 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .source-control-panel,
   .source-pie-grid,
   .source-toolbar,
+  .brand-control-panel,
+  .brand-ranking-grid,
+  .brand-kpi-grid,
+  .brand-detail-grid,
   .admin-total-strip,
   .admin-plan-grid,
   .admin-plan-preview { grid-template-columns: 1fr; }
+  .brand-detail-head,
+  .brand-chart-head { display: grid; }
+  .brand-chart-legend { justify-content: flex-start; }
+  .brand-city-list div { grid-template-columns: 1fr; }
   .source-pie-body { grid-template-columns: 1fr; justify-items: center; }
   .source-line-head { display: grid; }
   .source-line-legend { justify-content: flex-start; }

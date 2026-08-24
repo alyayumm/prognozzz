@@ -28,6 +28,7 @@ import {
 } from "./data/dashboardMock";
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
+import { loadBrandAnalyticsSnapshot, type BrandAnalyticsRecord, type BrandCity } from "./api/brandAnalyticsApi";
 import type { CSSProperties } from "react";
 import { buildAttentionItems } from "./lib/insights";
 import {
@@ -73,7 +74,7 @@ import type {
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "messages" | "events" | "admin";
+type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "brands" | "messages" | "events" | "admin";
 type AdminTab = "day" | "month" | "sources" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
@@ -95,6 +96,34 @@ type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
 type WeekendLeadChartSeries = { label: string; className: string; values: number[] };
 type WeekendLeadChartMonth = { key: string; label: string; dates: string[]; series: WeekendLeadChartSeries[] };
+type BrandSummary = {
+  brand: string;
+  domain: string;
+  cityLabel: string;
+  records: BrandAnalyticsRecord[];
+  leads: number;
+  qualified: number;
+  sales: number;
+  revenue: number;
+  budget: number;
+  leadToQualified: number;
+  qualifiedToSales: number;
+  cpl: number;
+  cpql: number;
+  saleCost: number;
+  roas: number | null;
+  avgCheck: number;
+  monthly: Array<{ month: string; sales: number; roas: number | null }>;
+};
+type BrandTrendEvent = {
+  id: string;
+  brand: string;
+  city: BrandCity;
+  month: string;
+  metric: string;
+  direction: "рост" | "падение";
+  percent: number;
+};
 type DailyMetricKey = "leads" | "qualifiedLeads" | "sales";
 type DailyForecastPoint = {
   date: string;
@@ -223,6 +252,8 @@ export default function App() {
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
   const [eventCategoryFilter, setEventCategoryFilter] = useState<EventCategoryFilter>("all");
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
+  const [brandRecords, setBrandRecords] = useState<BrandAnalyticsRecord[]>([]);
+  const [brandLoadMessage, setBrandLoadMessage] = useState("Бренды загружаются из Google Sheets...");
   const [auth, setAuth] = useState(loadAdminPassword);
   const [isSavingDaily, setIsSavingDaily] = useState(false);
   const [savedMessage, setSavedMessage] = useState(
@@ -309,6 +340,30 @@ export default function App() {
   useEffect(() => {
     latestRecordDateRef.current = getLatestActualRecordDate(records);
   }, [records]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadBrandAnalyticsSnapshot()
+      .then((snapshot) => {
+        if (cancelled) return;
+        setBrandRecords(snapshot);
+        setBrandLoadMessage(
+          snapshot.length
+            ? `Бренды загружены из Google Sheets: ${snapshot.length} строк.`
+            : "В таблице брендов пока нет строк для отображения.",
+        );
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setBrandLoadMessage(`Бренды пока не загрузились: ${getErrorMessage(error)}.`);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -587,7 +642,7 @@ export default function App() {
           {savedMessage}
         </section>
 
-        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
+        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
               <AllMonthsDashboard
@@ -667,6 +722,14 @@ export default function App() {
                 setSelectedScope={setSelectedScope}
               />
             )}
+            {mode === "brands" && (
+              <BrandsDashboard
+                records={brandRecords}
+                selectedScope={selectedScope}
+                setSelectedScope={setSelectedScope}
+                loadMessage={brandLoadMessage}
+              />
+            )}
             {mode === "events" && (
               <EventsDashboard
                 dates={monthDates}
@@ -714,7 +777,7 @@ export default function App() {
             />
           )}
 
-          {mode !== "events" && mode !== "messages" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
+          {mode !== "events" && mode !== "messages" && mode !== "brands" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -749,6 +812,7 @@ function Sidebar({
     { mode: "week", label: "Неделя", icon: <CalendarDays /> },
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "sources", label: "Источники", icon: <Target /> },
+    { mode: "brands", label: "Бренды", icon: <TrendingUp /> },
     { mode: "messages", label: "Сообщения", icon: <MessageSquare /> },
     { mode: "events", label: "События", icon: <TriangleAlert /> },
   ];
@@ -1939,6 +2003,273 @@ function SourceEfficiencyTable({
       })}
       {rows.length === 0 && <p className="empty-state">Нет включенных источников для таблицы.</p>}
     </div>
+  );
+}
+
+function BrandsDashboard({
+  records,
+  selectedScope,
+  setSelectedScope,
+  loadMessage,
+}: {
+  records: BrandAnalyticsRecord[];
+  selectedScope: ReportScope;
+  setSelectedScope: (scope: ReportScope) => void;
+  loadMessage: string;
+}) {
+  const scopedRecords = useMemo(
+    () => records.filter((record) => selectedScope === "Все" || record.city === selectedScope),
+    [records, selectedScope],
+  );
+  const summaries = useMemo(() => buildBrandSummaries(scopedRecords), [scopedRecords]);
+  const [selectedBrandKey, setSelectedBrandKey] = useState("");
+
+  useEffect(() => {
+    if (!summaries.length) {
+      setSelectedBrandKey("");
+      return;
+    }
+    setSelectedBrandKey((current) => summaries.some((summary) => brandSummaryKey(summary) === current)
+      ? current
+      : brandSummaryKey(summaries[0]));
+  }, [summaries]);
+
+  const selectedBrand = summaries.find((summary) => brandSummaryKey(summary) === selectedBrandKey) ?? summaries[0] ?? null;
+  const trendEvents = useMemo(() => buildBrandTrendEvents(scopedRecords), [scopedRecords]);
+  const totals = useMemo(() => ({
+    leads: summaries.reduce((sum, item) => sum + item.leads, 0),
+    qualified: summaries.reduce((sum, item) => sum + item.qualified, 0),
+    sales: summaries.reduce((sum, item) => sum + item.sales, 0),
+    revenue: summaries.reduce((sum, item) => sum + item.revenue, 0),
+  }), [summaries]);
+
+  return (
+    <div className="page-stack brands-dashboard">
+      <ExecutiveSummary
+        status={{ label: records.length ? "бренды из sheets" : "жду данные", tone: records.length ? "good" : "warning" }}
+        eyebrow="Аналитика брендов"
+        title="Бренды"
+        facts={[
+          `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
+          `Брендов: ${summaries.length}`,
+          `QL: ${formatNumber(totals.qualified)}`,
+          `Продаж: ${formatNumber(totals.sales)}`,
+          `Автособытий: ${trendEvents.length}`,
+        ]}
+      />
+
+      <section className="analytics-panel brand-control-panel">
+        <div>
+          <span>Город</span>
+          <div className="source-period-toggle source-city-toggle" role="group" aria-label="Переключить город брендов">
+            {sourceCityOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={selectedScope === option ? "active" : ""}
+                onClick={() => setSelectedScope(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label>
+          <span>Бренд</span>
+          <select value={selectedBrand ? brandSummaryKey(selectedBrand) : ""} onChange={(event) => setSelectedBrandKey(event.target.value)}>
+            {summaries.map((summary) => (
+              <option key={brandSummaryKey(summary)} value={brandSummaryKey(summary)}>
+                {summary.brand}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="brand-load-note">{loadMessage}</div>
+      </section>
+
+      {summaries.length === 0 ? (
+        <section className="messages-placeholder">
+          <div className="placeholder-icon"><Target size={28} /></div>
+          <h2>Нет данных по брендам</h2>
+          <p>Проверь доступ к таблице брендов и наличие листов МСК / СПБ с детальной таблицей.</p>
+        </section>
+      ) : (
+        <>
+          {selectedScope === "Все" && (
+            <section className="brand-ranking-grid">
+              <BrandRankingCard title="Топ по стоимости КВАЛ" caption="Ниже CPQL — лучше" rows={rankBrandSummaries(summaries, "cpql", "asc")} formatValue={(value) => `${formatNumber(value)} ₽`} />
+              <BrandRankingCard title="Топ по среднему чеку" caption="Выше чек — лучше" rows={rankBrandSummaries(summaries, "avgCheck", "desc")} formatValue={(value) => `${formatNumber(value)} ₽`} />
+              <BrandRankingCard title="Топ по продажам" caption="Сумма МСК + СПБ" rows={rankBrandSummaries(summaries, "sales", "desc")} formatValue={formatNumber} />
+              <BrandRankingCard title="Топ по ROAS" caption="Выручка / бюджет" rows={rankBrandSummaries(summaries, "roas", "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
+            </section>
+          )}
+
+          {selectedBrand && (
+            <section className="analytics-panel brand-detail-panel">
+              <div className="brand-detail-head">
+                <div>
+                  <span>{selectedBrand.domain}</span>
+                  <h2>{selectedBrand.brand}</h2>
+                  <p>{selectedBrand.cityLabel}</p>
+                </div>
+                <strong>{formatNumber(selectedBrand.sales)} продаж</strong>
+              </div>
+              <div className="brand-kpi-grid">
+                <BrandKpiCard label="Заявки" value={selectedBrand.leads} />
+                <BrandKpiCard label="КВАЛ" value={selectedBrand.qualified} helper={`${selectedBrand.leadToQualified}% из заявки`} />
+                <BrandKpiCard label="Продажи" value={selectedBrand.sales} helper={`${selectedBrand.qualifiedToSales}% из КВАЛ`} />
+                <BrandKpiCard label="CPQL" value={selectedBrand.cpql} suffix=" ₽" />
+                <BrandKpiCard label="Средний чек" value={selectedBrand.avgCheck} suffix=" ₽" />
+                <BrandKpiCard label="ROAS" value={selectedBrand.roas ?? 0} suffix="x" decimal />
+              </div>
+              <div className="brand-detail-grid">
+                <BrandMonthlyChart summary={selectedBrand} />
+                <BrandCityBreakdown records={selectedBrand.records} />
+              </div>
+            </section>
+          )}
+
+          <section className="analytics-panel brand-events-panel">
+            <PanelHead
+              title="Автособытия брендов"
+              description="Рост или падение фиксируется, если показатель изменился больше чем на 16% к предыдущему месяцу."
+            />
+            <div className="brand-event-list">
+              {trendEvents.slice(0, 18).map((event) => (
+                <article key={event.id} className={`brand-event-card ${event.direction === "рост" ? "positive" : "negative"}`}>
+                  <strong>{event.brand}: {event.direction} {event.metric}</strong>
+                  <span>{event.city} · {event.month} · {event.percent > 0 ? "+" : ""}{event.percent}%</span>
+                </article>
+              ))}
+              {trendEvents.length === 0 && <p className="empty-state">Изменений больше 16% в помесячных колонках продаж и ROAS не найдено.</p>}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BrandRankingCard({
+  title,
+  caption,
+  rows,
+  formatValue,
+}: {
+  title: string;
+  caption: string;
+  rows: Array<{ summary: BrandSummary; value: number }>;
+  formatValue: (value: number) => string;
+}) {
+  return (
+    <article className="brand-ranking-card">
+      <div>
+        <h2>{title}</h2>
+        <span>{caption}</span>
+      </div>
+      <ol>
+        {rows.slice(0, 5).map((row) => (
+          <li key={`${title}-${brandSummaryKey(row.summary)}`}>
+            <span>{row.summary.brand}</span>
+            <strong>{formatValue(row.value)}</strong>
+          </li>
+        ))}
+      </ol>
+    </article>
+  );
+}
+
+function BrandKpiCard({ label, value, suffix = "", helper, decimal = false }: { label: string; value: number; suffix?: string; helper?: string; decimal?: boolean }) {
+  return (
+    <article className="brand-kpi-card">
+      <span>{label}</span>
+      <strong>{decimal ? formatCompactDecimal(value) : formatNumber(Math.round(value))}{suffix}</strong>
+      {helper && <small>{helper}</small>}
+    </article>
+  );
+}
+
+function BrandMonthlyChart({ summary }: { summary: BrandSummary }) {
+  const width = 620;
+  const height = 250;
+  const plot = { left: 46, right: 24, top: 28, bottom: 44 };
+  const plotWidth = width - plot.left - plot.right;
+  const plotHeight = height - plot.top - plot.bottom;
+  const maxSales = Math.max(1, ...summary.monthly.map((point) => point.sales));
+  const roasValues = summary.monthly.map((point) => point.roas ?? 0);
+  const maxRoas = Math.max(1, ...roasValues);
+  const xFor = (index: number) => plot.left + (summary.monthly.length <= 1 ? plotWidth / 2 : (index / (summary.monthly.length - 1)) * plotWidth);
+  const ySales = (value: number) => plot.top + plotHeight - (value / maxSales) * plotHeight;
+  const yRoas = (value: number) => plot.top + plotHeight - (value / maxRoas) * plotHeight;
+  const barWidth = 48;
+  const roasPath = summary.monthly
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yRoas(point.roas ?? 0)}`)
+    .join(" ");
+
+  return (
+    <article className="brand-chart-card">
+      <div className="brand-chart-head">
+        <div>
+          <span>динамика бренда</span>
+          <strong>Продажи и ROAS</strong>
+        </div>
+        <div className="brand-chart-legend">
+          <span><i className="sales" /> продажи</span>
+          <span><i className="roas" /> ROAS</span>
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Динамика бренда ${summary.brand}`}>
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+          const y = plot.top + plotHeight - ratio * plotHeight;
+          return (
+            <g key={ratio}>
+              <line x1={plot.left} x2={width - plot.right} y1={y} y2={y} className="brand-grid-line" />
+              <text x={plot.left - 10} y={y + 4} className="brand-axis-label">{formatNumber(Math.round(maxSales * ratio))}</text>
+            </g>
+          );
+        })}
+        {summary.monthly.map((point, index) => {
+          const x = xFor(index);
+          const barHeight = plot.top + plotHeight - ySales(point.sales);
+          return (
+            <g key={point.month}>
+              <rect x={x - barWidth / 2} y={ySales(point.sales)} width={barWidth} height={barHeight} rx="10" className="brand-sales-bar">
+                <title>{point.month}: продажи {formatNumber(point.sales)}, ROAS {point.roas === null ? "нет данных" : formatCompactDecimal(point.roas)}</title>
+              </rect>
+              <text x={x} y={height - 20} className="brand-x-label">{point.month.slice(0, 3)}</text>
+              <text x={x} y={ySales(point.sales) - 8} className="brand-value-label">{formatNumber(point.sales)}</text>
+            </g>
+          );
+        })}
+        <path d={roasPath} className="brand-roas-line" />
+        {summary.monthly.map((point, index) => (
+          <circle key={`roas-${point.month}`} cx={xFor(index)} cy={yRoas(point.roas ?? 0)} r="4" className="brand-roas-dot">
+            <title>{point.month}: ROAS {point.roas === null ? "нет данных" : formatCompactDecimal(point.roas)}</title>
+          </circle>
+        ))}
+      </svg>
+    </article>
+  );
+}
+
+function BrandCityBreakdown({ records }: { records: BrandAnalyticsRecord[] }) {
+  return (
+    <article className="brand-city-card">
+      <div>
+        <span>разделение по городам</span>
+        <strong>МСК / СПБ</strong>
+      </div>
+      <div className="brand-city-list">
+        {records.map((record) => (
+          <div key={record.id}>
+            <strong>{record.city}</strong>
+            <span>КВАЛ {formatNumber(record.qualified)}</span>
+            <span>Продажи {formatNumber(record.sales)}</span>
+            <span>CPQL {formatNumber(record.cpql)} ₽</span>
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 
@@ -4623,6 +4954,124 @@ function buildSmoothPath(segment: ChartLineSegment): string {
   }, "");
 }
 
+function buildBrandSummaries(records: BrandAnalyticsRecord[]): BrandSummary[] {
+  const groups = new Map<string, BrandAnalyticsRecord[]>();
+  records.forEach((record) => {
+    const key = record.brand.toLowerCase();
+    groups.set(key, [...(groups.get(key) ?? []), record]);
+  });
+
+  return [...groups.values()]
+    .map((group) => {
+      const leads = group.reduce((sum, record) => sum + record.leads, 0);
+      const qualified = group.reduce((sum, record) => sum + record.qualified, 0);
+      const sales = group.reduce((sum, record) => sum + record.sales, 0);
+      const revenue = group.reduce((sum, record) => sum + record.revenue, 0);
+      const budget = group.reduce((sum, record) => sum + record.budget, 0);
+      const monthly = combineBrandMonthly(group);
+      return {
+        brand: group[0].brand,
+        domain: group.map((record) => record.domain).filter(Boolean).join(" · "),
+        cityLabel: group.map((record) => record.city).join(" + "),
+        records: group,
+        leads,
+        qualified,
+        sales,
+        revenue,
+        budget,
+        leadToQualified: percent(qualified, leads),
+        qualifiedToSales: percent(sales, qualified),
+        cpl: leads > 0 ? budget / leads : 0,
+        cpql: qualified > 0 ? budget / qualified : 0,
+        saleCost: sales > 0 ? budget / sales : 0,
+        roas: budget > 0 ? revenue / budget : averageNullable(group.map((record) => record.roas)),
+        avgCheck: sales > 0 ? revenue / sales : averagePositive(group.map((record) => record.avgCheck)),
+        monthly,
+      };
+    })
+    .sort((a, b) => b.sales - a.sales || b.qualified - a.qualified || a.brand.localeCompare(b.brand, "ru"));
+}
+
+function combineBrandMonthly(records: BrandAnalyticsRecord[]): BrandSummary["monthly"] {
+  const monthOrder = records[0]?.monthly.map((point) => point.month) ?? [];
+  return monthOrder.map((month) => {
+    const points = records.map((record) => record.monthly.find((point) => point.month === month));
+    return {
+      month,
+      sales: points.reduce((sum, point) => sum + (point?.sales ?? 0), 0),
+      roas: averageNullable(points.map((point) => point?.roas ?? null)),
+    };
+  });
+}
+
+function brandSummaryKey(summary: BrandSummary): string {
+  return `${summary.brand}-${summary.cityLabel}`.toLowerCase();
+}
+
+function rankBrandSummaries(
+  summaries: BrandSummary[],
+  field: keyof Pick<BrandSummary, "cpql" | "avgCheck" | "sales" | "roas">,
+  direction: "asc" | "desc",
+): Array<{ summary: BrandSummary; value: number }> {
+  return summaries
+    .map((summary) => ({ summary, value: Number(summary[field] ?? 0) }))
+    .filter((row) => row.value > 0)
+    .sort((a, b) => direction === "asc" ? a.value - b.value : b.value - a.value)
+    .slice(0, 8);
+}
+
+function buildBrandTrendEvents(records: BrandAnalyticsRecord[]): BrandTrendEvent[] {
+  return records.flatMap((record) => {
+    const events: BrandTrendEvent[] = [];
+    record.monthly.forEach((point, index) => {
+      const previous = record.monthly[index - 1];
+      if (!previous) return;
+      const salesDelta = percentChange(point.sales, previous.sales);
+      if (salesDelta !== null && Math.abs(salesDelta) >= 16) {
+        events.push({
+          id: `${record.id}-sales-${point.month}`,
+          brand: record.brand,
+          city: record.city,
+          month: point.month,
+          metric: "продаж",
+          direction: salesDelta > 0 ? "рост" : "падение",
+          percent: Math.round(salesDelta),
+        });
+      }
+      const roasDelta = point.roas !== null && previous.roas !== null ? percentChange(point.roas, previous.roas) : null;
+      if (roasDelta !== null && Math.abs(roasDelta) >= 16) {
+        events.push({
+          id: `${record.id}-roas-${point.month}`,
+          brand: record.brand,
+          city: record.city,
+          month: point.month,
+          metric: "ROAS",
+          direction: roasDelta > 0 ? "рост" : "падение",
+          percent: Math.round(roasDelta),
+        });
+      }
+    });
+    return events;
+  }).sort((a, b) => Math.abs(b.percent) - Math.abs(a.percent));
+}
+
+function percentChange(current: number, previous: number): number | null {
+  if (!previous) return null;
+  return ((current - previous) / previous) * 100;
+}
+
+function averageNullable(values: Array<number | null | undefined>): number | null {
+  const safeValues = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  if (!safeValues.length) return null;
+  return safeValues.reduce((sum, value) => sum + value, 0) / safeValues.length;
+}
+
+function averagePositive(values: number[]): number {
+  const safeValues = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (!safeValues.length) return 0;
+  return safeValues.reduce((sum, value) => sum + value, 0) / safeValues.length;
+}
+
 function getPageCopy(mode: Mode) {
   const copy: Record<Mode, { title: string; subtitle: string }> = {
     allMonths: {
@@ -4656,6 +5105,10 @@ function getPageCopy(mode: Mode) {
     sources: {
       title: "Источники",
       subtitle: "Лиды, КВАЛ и продажи по каналам привлечения без смешивания с городами и сообщениями.",
+    },
+    brands: {
+      title: "Бренды",
+      subtitle: "Динамика брендов по городам, рейтинги эффективности и автособытия по заметным изменениям.",
     },
     events: {
       title: "События",
@@ -5622,6 +6075,10 @@ function getTodayIso(): string {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.round(value));
+}
+
+function formatCompactDecimal(value: number): string {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value);
 }
 
 function effectClass(effect: Effect) {
