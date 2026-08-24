@@ -35,7 +35,7 @@ import {
   type BrandAnalyticsRecord,
   type BrandCity,
 } from "./api/brandAnalyticsApi";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { buildAttentionItems } from "./lib/insights";
 import {
   applyTrafficModeToTotals,
@@ -2390,13 +2390,17 @@ function BrandComparePanel({ performance, sourceFilter }: { performance: BrandPe
   });
   const msk = aggregateBrandPerformance(cityRows("МСК"));
   const spb = aggregateBrandPerformance(cityRows("СПБ"));
+  const efficiencyCity = pickBrandEfficiencyCity(msk, spb);
+  const volumeCity = pickBrandVolumeCity(msk, spb);
+  const efficiency = efficiencyCity === "МСК" ? msk : spb;
+  const volume = volumeCity === "МСК" ? msk : spb;
 
   return (
-    <section className="analytics-panel brand-compare-panel">
-      <div className="brand-compare-head">
+    <section className="analytics-panel brand-compare-panel brand-compare-focused-panel">
+      <div className="brand-compare-head brand-compare-head-v2">
         <PanelHead
           title="Сравнение одного бренда"
-          description="Выбери бренд, который есть в двух городах: на экране будет только его подробное сравнение МСК и СПБ."
+          description="Сравните один и тот же бренд в Москве и Санкт-Петербурге."
         />
         <label>
           <span>Бренд</span>
@@ -2408,60 +2412,250 @@ function BrandComparePanel({ performance, sourceFilter }: { performance: BrandPe
         </label>
       </div>
 
-      <article className="brand-compare-card brand-compare-card-focused">
-        <div className="brand-compare-title">
-          <div>
-            <span>МСК vs СПБ</span>
-            <h2>{activeBrand}</h2>
-          </div>
-          <strong>{sourceFilter}</strong>
-        </div>
-        <div className="brand-compare-bars brand-compare-bars-focused">
-          <BrandCompareBars label="Лиды" msk={msk.leads} spb={spb.leads} />
-          <BrandCompareBars label="КВАЛ" msk={msk.qualified} spb={spb.qualified} />
-          <BrandCompareBars label="Продажи" msk={msk.sales} spb={spb.sales} />
-          <BrandCompareBars label="Выручка" msk={msk.revenue} spb={spb.revenue} />
-        </div>
-        <div className="brand-compare-numbers brand-compare-numbers-focused">
-          <BrandCompareMetric label="Лид → КВАЛ" msk={`${msk.leadToQualified}%`} spb={`${spb.leadToQualified}%`} />
-          <BrandCompareMetric label="КВАЛ → продажа" msk={`${msk.qualifiedToSales}%`} spb={`${spb.qualifiedToSales}%`} />
-          <BrandCompareMetric label="CPL" msk={`${formatNumber(Math.round(msk.cpl))} ₽`} spb={`${formatNumber(Math.round(spb.cpl))} ₽`} />
-          <BrandCompareMetric label="CPQL" msk={`${formatNumber(Math.round(msk.cpql))} ₽`} spb={`${formatNumber(Math.round(spb.cpql))} ₽`} />
-          <BrandCompareMetric label="Цена продажи" msk={`${formatNumber(Math.round(msk.saleCost))} ₽`} spb={`${formatNumber(Math.round(spb.saleCost))} ₽`} />
-          <BrandCompareMetric label="Средний чек" msk={`${formatNumber(Math.round(msk.avgCheck))} ₽`} spb={`${formatNumber(Math.round(spb.avgCheck))} ₽`} />
-          <BrandCompareMetric label="ROAS" msk={msk.roas === null ? "—" : `${formatCompactDecimal(msk.roas)}x`} spb={spb.roas === null ? "—" : `${formatCompactDecimal(spb.roas)}x`} />
-          <BrandCompareMetric label="Бюджет" msk={`${formatNumber(Math.round(msk.budget))} ₽`} spb={`${formatNumber(Math.round(spb.budget))} ₽`} />
-        </div>
-      </article>
-      <div className="brand-compare-legend">
-        <span><i className="msk" /> МСК</span>
-        <span><i className="spb" /> СПБ</span>
+      <div className="brand-compare-filter-strip">
+        <span><CalendarDays size={14} /> Период: неделя</span>
+        <span><Target size={14} /> {sourceFilter}</span>
+        <span><CheckCircle2 size={14} /> Обновлено сегодня</span>
       </div>
+
+      <div className="brand-compare-insight-grid">
+        <BrandCompareInsightCard
+          tone="msk"
+          icon={<TrendingUp size={26} />}
+          title={`${efficiencyCity} эффективнее`}
+          badge="Эффективность"
+          metrics={[
+            { label: "продаж", value: formatNumber(efficiency.sales) },
+            { label: "КВАЛ → продажа", value: `${efficiency.qualifiedToSales}%` },
+            { label: "стоимость продажи", value: formatBrandCurrency(efficiency.saleCost) },
+            { label: "ROAS", value: formatBrandRoas(efficiency.roas) },
+          ]}
+        />
+        <BrandCompareInsightCard
+          tone="spb"
+          icon={<BarChart3 size={26} />}
+          title={`${volumeCity} сильнее по объёму`}
+          badge="Объём"
+          metrics={[
+            { label: "лида", value: formatNumber(volume.leads) },
+            { label: "КВАЛ", value: formatNumber(volume.qualified) },
+            { label: "выручка", value: formatBrandCurrency(volume.revenue) },
+            { label: "средний чек", value: formatBrandCurrency(volume.avgCheck) },
+          ]}
+        />
+      </div>
+
+      <BrandCompareMirrorPanel msk={msk} spb={spb} />
+      <BrandCompareDetailTable msk={msk} spb={spb} />
     </section>
   );
 }
 
-function BrandCompareMetric({ label, msk, spb }: { label: string; msk: string; spb: string }) {
+function BrandCompareInsightCard({
+  tone,
+  icon,
+  title,
+  badge,
+  metrics,
+}: {
+  tone: "msk" | "spb";
+  icon: ReactNode;
+  title: string;
+  badge: string;
+  metrics: Array<{ label: string; value: string }>;
+}) {
   return (
-    <div className="brand-compare-metric">
-      <span>{label}</span>
-      <strong>МСК <b>{msk}</b></strong>
-      <strong>СПБ <b>{spb}</b></strong>
+    <article className={`brand-compare-insight-card ${tone}`}>
+      <div className="brand-compare-insight-icon">{icon}</div>
+      <div className="brand-compare-insight-body">
+        <div className="brand-compare-insight-title">
+          <h3>{title}</h3>
+          <span>{badge}</span>
+        </div>
+        <div className="brand-compare-insight-metrics">
+          {metrics.map((metric) => (
+            <div key={metric.label}>
+              <strong>{metric.value}</strong>
+              <span>{metric.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function BrandCompareMirrorPanel({
+  msk,
+  spb,
+}: {
+  msk: ReturnType<typeof aggregateBrandPerformance>;
+  spb: ReturnType<typeof aggregateBrandPerformance>;
+}) {
+  const leadToSaleMsk = percent(msk.sales, msk.leads);
+  const leadToSaleSpb = percent(spb.sales, spb.leads);
+  return (
+    <article className="brand-compare-mirror-card">
+      <div className="brand-compare-mirror-head">
+        <strong>Москва (МСК)</strong>
+        <strong>Санкт-Петербург (СПБ)</strong>
+      </div>
+      <div className="brand-compare-mirror-grid">
+        <BrandCompareMirrorRow label="Лиды" marker="Л" msk={msk.leads} spb={spb.leads} formatter={formatNumber} />
+        <BrandCompareMirrorRow label="КВАЛ" marker="К" msk={msk.qualified} spb={spb.qualified} formatter={formatNumber} />
+        <BrandCompareMirrorRow label="Продажи" marker="П" msk={msk.sales} spb={spb.sales} formatter={formatNumber} />
+        <BrandCompareMirrorRow label="Лид → продажа" marker="%" msk={leadToSaleMsk} spb={leadToSaleSpb} formatter={(value) => `${value}%`} />
+      </div>
+    </article>
+  );
+}
+
+function BrandCompareMirrorRow({
+  label,
+  marker,
+  msk,
+  spb,
+  formatter,
+}: {
+  label: string;
+  marker: string;
+  msk: number;
+  spb: number;
+  formatter: (value: number) => string;
+}) {
+  const max = Math.max(1, msk, spb);
+  const mskWidth = `${Math.max(msk > 0 ? 6 : 0, (msk / max) * 100)}%`;
+  const spbWidth = `${Math.max(spb > 0 ? 6 : 0, (spb / max) * 100)}%`;
+  return (
+    <div className="brand-compare-mirror-row">
+      <div className="brand-compare-mirror-label">
+        <span>{marker}</span>
+        <strong>{label}</strong>
+      </div>
+      <b className="msk-value">{formatter(msk)}</b>
+      <i className="brand-compare-mirror-track msk-track"><em style={{ width: mskWidth }} /></i>
+      <i className="brand-compare-center-line" />
+      <i className="brand-compare-mirror-track spb-track"><em style={{ width: spbWidth }} /></i>
+      <b className="spb-value">{formatter(spb)}</b>
     </div>
   );
 }
 
-function BrandCompareBars({ label, msk, spb }: { label: string; msk: number; spb: number }) {
-  const max = Math.max(1, msk, spb);
+type BrandCompareDetailRow = {
+  label: string;
+  msk: number | null;
+  spb: number | null;
+  mode: "percent-point" | "currency" | "roas" | "percent";
+  higherBetter: boolean;
+};
+
+function BrandCompareDetailTable({
+  msk,
+  spb,
+}: {
+  msk: ReturnType<typeof aggregateBrandPerformance>;
+  spb: ReturnType<typeof aggregateBrandPerformance>;
+}) {
+  const rows: BrandCompareDetailRow[] = [
+    { label: "Лид → КВАЛ", msk: msk.leadToQualified, spb: spb.leadToQualified, mode: "percent-point", higherBetter: true },
+    { label: "КВАЛ → продажа", msk: msk.qualifiedToSales, spb: spb.qualifiedToSales, mode: "percent-point", higherBetter: true },
+    { label: "CPL", msk: msk.cpl, spb: spb.cpl, mode: "currency", higherBetter: false },
+    { label: "CPQL", msk: msk.cpql, spb: spb.cpql, mode: "currency", higherBetter: false },
+    { label: "Стоимость продажи", msk: msk.saleCost, spb: spb.saleCost, mode: "currency", higherBetter: false },
+    { label: "Средний чек", msk: msk.avgCheck, spb: spb.avgCheck, mode: "currency", higherBetter: true },
+    { label: "ROAS", msk: msk.roas, spb: spb.roas, mode: "roas", higherBetter: true },
+    { label: "Бюджет", msk: msk.budget, spb: spb.budget, mode: "currency", higherBetter: false },
+    { label: "Выручка", msk: msk.revenue, spb: spb.revenue, mode: "currency", higherBetter: true },
+  ];
+
   return (
-    <div className="brand-compare-bar-row">
-      <span>{label}</span>
-      <i><em className="msk" style={{ width: `${Math.max(4, (msk / max) * 100)}%` }} /></i>
-      <strong>{formatNumber(msk)}</strong>
-      <i><em className="spb" style={{ width: `${Math.max(4, (spb / max) * 100)}%` }} /></i>
-      <strong>{formatNumber(spb)}</strong>
-    </div>
+    <article className="brand-compare-detail-table">
+      <div className="brand-compare-detail-row head">
+        <span>Показатель</span>
+        <span>МСК</span>
+        <span>Разница</span>
+        <span>СПБ</span>
+      </div>
+      {rows.map((row) => {
+        const diff = buildBrandCompareDifference(row);
+        return (
+          <div className="brand-compare-detail-row" key={row.label}>
+            <span>{row.label}</span>
+            <strong>{formatBrandCompareDetailValue(row.msk, row.mode)}</strong>
+            <em className={diff.tone}>{diff.label}</em>
+            <strong>{formatBrandCompareDetailValue(row.spb, row.mode)}</strong>
+          </div>
+        );
+      })}
+    </article>
   );
+}
+
+function pickBrandEfficiencyCity(
+  msk: ReturnType<typeof aggregateBrandPerformance>,
+  spb: ReturnType<typeof aggregateBrandPerformance>,
+): BrandCity {
+  const mskRoas = msk.roas ?? 0;
+  const spbRoas = spb.roas ?? 0;
+  if (mskRoas || spbRoas) {
+    return mskRoas >= spbRoas ? "МСК" : "СПБ";
+  }
+  if (msk.saleCost || spb.saleCost) {
+    const mskCost = msk.saleCost || Number.MAX_SAFE_INTEGER;
+    const spbCost = spb.saleCost || Number.MAX_SAFE_INTEGER;
+    return mskCost <= spbCost ? "МСК" : "СПБ";
+  }
+  return msk.qualifiedToSales >= spb.qualifiedToSales ? "МСК" : "СПБ";
+}
+
+function pickBrandVolumeCity(
+  msk: ReturnType<typeof aggregateBrandPerformance>,
+  spb: ReturnType<typeof aggregateBrandPerformance>,
+): BrandCity {
+  const mskVolume = msk.revenue || msk.leads + msk.qualified + msk.sales;
+  const spbVolume = spb.revenue || spb.leads + spb.qualified + spb.sales;
+  return mskVolume >= spbVolume ? "МСК" : "СПБ";
+}
+
+function formatBrandCurrency(value: number) {
+  return `${formatNumber(Math.round(value))} ₽`;
+}
+
+function formatBrandRoas(value: number | null) {
+  return value === null ? "—" : `${formatCompactDecimal(value)}x`;
+}
+
+function formatBrandCompareDetailValue(value: number | null, mode: BrandCompareDetailRow["mode"]) {
+  if (value === null) return "—";
+  if (mode === "currency") return formatBrandCurrency(value);
+  if (mode === "roas") return formatBrandRoas(value);
+  return `${formatCompactDecimal(value)}%`;
+}
+
+function buildBrandCompareDifference(row: BrandCompareDetailRow) {
+  const msk = row.msk ?? 0;
+  const spb = row.spb ?? 0;
+  if (!msk && !spb) return { label: "—", tone: "neutral" };
+  if (Math.abs(msk - spb) < 0.01) return { label: "на одном уровне", tone: "neutral" };
+
+  const mskWins = row.higherBetter ? msk > spb : msk < spb;
+  const winner: BrandCity = mskWins ? "МСК" : "СПБ";
+  const winnerValue = mskWins ? msk : spb;
+  const loserValue = mskWins ? spb : msk;
+
+  if (row.mode === "percent-point") {
+    return {
+      label: `↑ ${winner} +${formatCompactDecimal(Math.abs(msk - spb))} п.п.`,
+      tone: "positive",
+    };
+  }
+
+  const base = Math.max(1, Math.abs(loserValue));
+  const delta = Math.round((Math.abs(winnerValue - loserValue) / base) * 100);
+  const label = row.higherBetter
+    ? `↑ ${winner} +${delta}%`
+    : `↑ ${winner} лучше на ${delta}%`;
+  return { label, tone: "positive" };
 }
 
 function BrandDetailPanel({
