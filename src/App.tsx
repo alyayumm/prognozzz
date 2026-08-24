@@ -73,7 +73,7 @@ import type {
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "monthDaily" | "week" | "sources" | "messages" | "events" | "admin";
+type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "messages" | "events" | "admin";
 type AdminTab = "day" | "month" | "sources" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
@@ -565,7 +565,7 @@ export default function App() {
           {savedMessage}
         </section>
 
-        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "admin" ? "content-single" : "content-grid"}>
+        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
               <AllMonthsDashboard
@@ -611,6 +611,13 @@ export default function App() {
                 trafficMode={trafficMode}
                 todayIso={todayIso}
                 highlightedEventId={highlightedDailyEventId}
+              />
+            )}
+            {mode === "leadDaily" && (
+              <LeadsDailyReport
+                records={records}
+                monthConfigs={monthConfigs}
+                selectedScope={selectedScope}
               />
             )}
             {mode === "week" && activeWeek && (
@@ -685,7 +692,7 @@ export default function App() {
             />
           )}
 
-          {mode !== "events" && mode !== "messages" && mode !== "admin" && mode !== "monthDaily" && (
+          {mode !== "events" && mode !== "messages" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -717,6 +724,7 @@ function Sidebar({
     { mode: "allMonths", label: "Все месяцы", icon: <BarChart3 /> },
     { mode: "month", label: "Обзор месяца", icon: <LayoutDashboard /> },
     { mode: "monthDaily", label: "Месяц по дням", icon: <TrendingUp /> },
+    { mode: "leadDaily", label: "Лиды по дням", icon: <TrendingUp /> },
     { mode: "week", label: "Неделя", icon: <CalendarDays /> },
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "sources", label: "Источники", icon: <Target /> },
@@ -1090,6 +1098,187 @@ function MonthDailyDashboard({
           <DailyForecastChart key={chart.metric} data={chart} highlightedEventId={highlightedEventId} />
         ))}
       </section>
+    </div>
+  );
+}
+
+function LeadsDailyReport({
+  records,
+  monthConfigs,
+  selectedScope,
+}: {
+  records: DailyRecord[];
+  monthConfigs: MonthConfig[];
+  selectedScope: ReportScope;
+}) {
+  const sortedMonths = useMemo(() => [...monthConfigs].sort((a, b) => a.monthKey.localeCompare(b.monthKey)), [monthConfigs]);
+  const dates = useMemo(() => sortedMonths.flatMap((config) => getMonthDates(config.year, config.monthIndex, config.daysInMonth)), [sortedMonths]);
+  const seriesCities: City[] = selectedScope === "Все" ? ["МСК", "СПБ"] : selectedScope === "МСК" || selectedScope === "СПБ" ? [selectedScope] : ["МСК", "СПБ"];
+  const series = useMemo(
+    () => seriesCities.map((city) => ({
+      city,
+      values: dates.map((date) => getLeadFactForCity(records, date, city)),
+    })),
+    [dates, records, seriesCities],
+  );
+  const totalLeads = series.reduce((sum, item) => sum + item.values.reduce((citySum, value) => citySum + value, 0), 0);
+  const activeDays = dates.filter((date) => series.some((item) => item.values[dates.indexOf(date)] > 0)).length;
+  const rangeLabel = sortedMonths.length
+    ? `${sortedMonths[0].label} → ${sortedMonths[sortedMonths.length - 1].label}`
+    : "нет месяцев";
+
+  return (
+    <div className="page-stack leads-daily-report">
+      <ExecutiveSummary
+        status={{ label: "только лиды", tone: "good" }}
+        eyebrow={rangeLabel}
+        title="Лиды по дням"
+        subtitle="Все месяцы идут подряд, выходные выделены фоном. При выборе всех городов МСК и СПБ показаны двумя отдельными кривыми."
+        facts={[
+          `Город: ${selectedScope === "Все" ? "МСК + СПБ раздельно" : selectedScope}`,
+          `Месяцев: ${sortedMonths.length}`,
+          `Дней в ленте: ${dates.length}`,
+          `Дней с FACT: ${activeDays}`,
+          `Лидов: ${formatNumber(totalLeads)}`,
+        ]}
+      />
+
+      <section className="analytics-panel leads-daily-panel">
+        <PanelHead
+          title="Дневная динамика лидов"
+          description="Суббота и воскресенье подсвечены голубым фоном; линии не суммируются между городами."
+        />
+        <LeadsDailyContinuousChart dates={dates} months={sortedMonths} series={series} />
+      </section>
+    </div>
+  );
+}
+
+function LeadsDailyContinuousChart({
+  dates,
+  months,
+  series,
+}: {
+  dates: string[];
+  months: MonthConfig[];
+  series: Array<{ city: City; values: number[] }>;
+}) {
+  const dayWidth = 34;
+  const chartWidth = Math.max(1120, dates.length * dayWidth + 92);
+  const svgHeight = 382;
+  const plot = { left: 54, right: 24, top: 54, height: 232, bottom: 62 };
+  const plotWidth = chartWidth - plot.left - plot.right;
+  const xForIndex = (index: number) => plot.left + (dates.length <= 1 ? plotWidth / 2 : (plotWidth / Math.max(dates.length - 1, 1)) * index);
+  const rawMax = Math.max(...series.flatMap((item) => item.values), 1);
+  const chartMax = getNiceAxisMax(rawMax * 1.14);
+  const yForValue = (value: number) => plot.top + plot.height - (Math.max(value, 0) / chartMax) * plot.height;
+  const axisLabels = getAxisLabels(chartMax);
+  const monthRanges = buildDailyMonthRanges(months, dates);
+
+  if (!dates.length) {
+    return (
+      <div className="leads-daily-empty">
+        <strong>Пока нет дней для графика</strong>
+        <span>Создай месяц или дождись загрузки Google Sheets.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="leads-daily-scroll" aria-label="График лидов по дням за все месяцы">
+      <svg className="leads-daily-svg" viewBox={`0 0 ${chartWidth} ${svgHeight}`} width={chartWidth} height={svgHeight} role="img">
+        <title>Лиды по дням</title>
+        <desc>Дневной график лидов по всем месяцам. Выходные выделены фоном.</desc>
+
+        <rect x="0" y="0" width={chartWidth} height={svgHeight} rx="22" className="lead-chart-bg" />
+
+        {monthRanges.map((range) => (
+          <g key={range.key}>
+            <rect
+              x={xForIndex(range.startIndex) - dayWidth / 2}
+              y="0"
+              width={Math.max(1, xForIndex(range.endIndex) - xForIndex(range.startIndex) + dayWidth)}
+              height="40"
+              className="lead-month-band"
+            />
+            <text x={xForIndex(range.startIndex) - dayWidth / 2 + 12} y="25" className="lead-month-title">{range.label}</text>
+            <line x1={xForIndex(range.endIndex) + dayWidth / 2} y1="0" x2={xForIndex(range.endIndex) + dayWidth / 2} y2={svgHeight - 34} className="lead-month-divider" />
+          </g>
+        ))}
+
+        {dates.map((date, index) => {
+          if (!isWeekend(date)) return null;
+          const centerX = xForIndex(index);
+          return (
+            <rect
+              key={date}
+              x={centerX - dayWidth / 2}
+              y={plot.top - 8}
+              width={dayWidth}
+              height={plot.height + 76}
+              rx="12"
+              className="lead-weekend-band"
+            />
+          );
+        })}
+
+        {axisLabels.map((label) => {
+          const y = yForValue(label);
+          return (
+            <g key={label}>
+              <line x1={plot.left} y1={y} x2={chartWidth - plot.right} y2={y} className="lead-grid-line" />
+              <text x={plot.left - 12} y={y + 4} textAnchor="end" className="lead-axis-label">{formatNumber(label)}</text>
+            </g>
+          );
+        })}
+
+        {series.map((item) => {
+          const segments = buildDailyPathSegments(item.values, (value, index) =>
+            value <= 0 ? null : { x: xForIndex(index), y: yForValue(value) },
+          );
+          return (
+            <g key={item.city} className={`lead-series lead-series-${item.city === "МСК" ? "msk" : "spb"}`}>
+              {segments.map((path, index) => <path key={index} d={path} />)}
+              {item.values.map((value, index) => value > 0 ? (
+                <circle key={`${item.city}-${dates[index]}`} cx={xForIndex(index)} cy={yForValue(value)} r="4.5">
+                  <title>{item.city}: {formatDay(dates[index])} · {formatNumber(value)} лидов</title>
+                </circle>
+              ) : null)}
+            </g>
+          );
+        })}
+
+        {dates.map((date, index) => {
+          const showLabel = index === 0 || date.endsWith("-01") || isWeekend(date) || index === dates.length - 1;
+          return (
+            <g key={`label-${date}`}>
+              <text
+                x={xForIndex(index)}
+                y={svgHeight - 36}
+                textAnchor="middle"
+                className={isWeekend(date) ? "lead-day-label weekend" : "lead-day-label"}
+              >
+                {Number(date.slice(8, 10))}
+              </text>
+              {showLabel && (
+                <text x={xForIndex(index)} y={svgHeight - 18} textAnchor="middle" className="lead-weekday-label">
+                  {weekdayLabel(date)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      <div className="leads-daily-legend">
+        {series.map((item) => (
+          <span key={item.city} className={item.city === "МСК" ? "msk" : "spb"}>
+            <i />
+            {item.city}
+          </span>
+        ))}
+        <span className="weekend"><i /> выходные</span>
+      </div>
     </div>
   );
 }
@@ -4045,6 +4234,33 @@ function getSourceMonthRangeLabel(configs: MonthConfig[]): string {
   return first === last ? first : `${first} → ${last}`;
 }
 
+function getLeadFactForCity(records: DailyRecord[], date: string, city: City): number {
+  if (city === "сообщения") return 0;
+  return records
+    .filter((record) => record.date === date && record.city === city && record.metric === "Лиды")
+    .reduce((sum, record) => sum + netFact(record), 0);
+}
+
+function isWeekend(dateIso: string): boolean {
+  const day = new Date(`${dateIso}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function buildDailyMonthRanges(months: MonthConfig[], dates: string[]): Array<{ key: string; label: string; startIndex: number; endIndex: number }> {
+  return months
+    .map((month) => {
+      const startIndex = dates.findIndex((date) => date.startsWith(month.monthKey));
+      const endIndex = dates.length - 1 - [...dates].reverse().findIndex((date) => date.startsWith(month.monthKey));
+      return {
+        key: month.monthKey,
+        label: month.label,
+        startIndex,
+        endIndex,
+      };
+    })
+    .filter((range) => range.startIndex >= 0 && range.endIndex >= range.startIndex);
+}
+
 function getMonthMetricTitle(metric: Metric, trafficMode: TrafficMode = "op"): string {
   if (metric === "Квалы") return trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП";
   return metric.toUpperCase();
@@ -4341,6 +4557,10 @@ function getPageCopy(mode: Mode) {
     monthDaily: {
       title: "Месяц по дням",
       subtitle: "Дневная динамика факта, прогнозный коридор Optima и события выбранного месяца.",
+    },
+    leadDaily: {
+      title: "Лиды по дням",
+      subtitle: "Отдельный дневной отчет по лидам: все месяцы подряд, выходные выделены, города показаны раздельно.",
     },
     week: {
       title: "Неделя",
