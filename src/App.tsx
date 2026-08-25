@@ -2494,6 +2494,7 @@ function BrandCompareMirrorPanel({
 }) {
   const leadToSaleMsk = percent(msk.sales, msk.leads);
   const leadToSaleSpb = percent(spb.sales, spb.leads);
+  const funnelMax = Math.max(1, msk.leads, spb.leads, msk.qualified, spb.qualified, msk.sales, spb.sales);
   return (
     <article className="brand-compare-mirror-card">
       <div className="brand-compare-mirror-head">
@@ -2501,10 +2502,19 @@ function BrandCompareMirrorPanel({
         <strong>Санкт-Петербург (СПБ)</strong>
       </div>
       <div className="brand-compare-mirror-grid">
-        <BrandCompareMirrorRow label="Лиды" marker="Л" msk={msk.leads} spb={spb.leads} formatter={formatNumber} />
-        <BrandCompareMirrorRow label="КВАЛ" marker="К" msk={msk.qualified} spb={spb.qualified} formatter={formatNumber} />
-        <BrandCompareMirrorRow label="Продажи" marker="П" msk={msk.sales} spb={spb.sales} formatter={formatNumber} />
-        <BrandCompareMirrorRow label="Лид → продажа" marker="%" msk={leadToSaleMsk} spb={leadToSaleSpb} formatter={(value) => `${value}%`} />
+        <BrandCompareMirrorRow label="Лиды" marker="Л" msk={msk.leads} spb={spb.leads} max={funnelMax} formatter={formatNumber} />
+        <BrandCompareMirrorRow label="КВАЛ" marker="К" msk={msk.qualified} spb={spb.qualified} max={funnelMax} formatter={formatNumber} />
+        <BrandCompareMirrorRow label="Продажи" marker="П" msk={msk.sales} spb={spb.sales} max={funnelMax} formatter={formatNumber} />
+        <BrandCompareMirrorRow
+          label="Лид → продажа"
+          marker="%"
+          msk={leadToSaleMsk}
+          spb={leadToSaleSpb}
+          scaleMsk={msk.sales}
+          scaleSpb={spb.sales}
+          max={funnelMax}
+          formatter={(value) => `${value}%`}
+        />
       </div>
     </article>
   );
@@ -2515,17 +2525,22 @@ function BrandCompareMirrorRow({
   marker,
   msk,
   spb,
+  scaleMsk = msk,
+  scaleSpb = spb,
+  max,
   formatter,
 }: {
   label: string;
   marker: string;
   msk: number;
   spb: number;
+  scaleMsk?: number;
+  scaleSpb?: number;
+  max: number;
   formatter: (value: number) => string;
 }) {
-  const max = Math.max(1, msk, spb);
-  const mskWidth = `${Math.max(msk > 0 ? 6 : 0, (msk / max) * 100)}%`;
-  const spbWidth = `${Math.max(spb > 0 ? 6 : 0, (spb / max) * 100)}%`;
+  const mskWidth = `${Math.max(scaleMsk > 0 ? 5 : 0, (scaleMsk / max) * 100)}%`;
+  const spbWidth = `${Math.max(scaleSpb > 0 ? 5 : 0, (scaleSpb / max) * 100)}%`;
   return (
     <div className="brand-compare-mirror-row">
       <div className="brand-compare-mirror-label">
@@ -2581,9 +2596,9 @@ function BrandCompareDetailTable({
         return (
           <div className="brand-compare-detail-row" key={row.label}>
             <span>{row.label}</span>
-            <strong>{formatBrandCompareDetailValue(row.msk, row.mode)}</strong>
-            <em className={diff.tone}>{diff.label}</em>
-            <strong>{formatBrandCompareDetailValue(row.spb, row.mode)}</strong>
+            <strong className={diff.winner === "МСК" ? "best" : ""}>{formatBrandCompareDetailValue(row.msk, row.mode)}</strong>
+            <em>{diff.label}</em>
+            <strong className={diff.winner === "СПБ" ? "best" : ""}>{formatBrandCompareDetailValue(row.spb, row.mode)}</strong>
           </div>
         );
       })}
@@ -2635,8 +2650,8 @@ function formatBrandCompareDetailValue(value: number | null, mode: BrandCompareD
 function buildBrandCompareDifference(row: BrandCompareDetailRow) {
   const msk = row.msk ?? 0;
   const spb = row.spb ?? 0;
-  if (!msk && !spb) return { label: "—", tone: "neutral" };
-  if (Math.abs(msk - spb) < 0.01) return { label: "на одном уровне", tone: "neutral" };
+  if (!msk && !spb) return { label: "—", winner: null };
+  if (Math.abs(msk - spb) < 0.01) return { label: "на одном уровне", winner: null };
 
   const mskWins = row.higherBetter ? msk > spb : msk < spb;
   const winner: BrandCity = mskWins ? "МСК" : "СПБ";
@@ -2645,17 +2660,14 @@ function buildBrandCompareDifference(row: BrandCompareDetailRow) {
 
   if (row.mode === "percent-point") {
     return {
-      label: `↑ ${winner} +${formatCompactDecimal(Math.abs(msk - spb))} п.п.`,
-      tone: "positive",
+      label: `${formatCompactDecimal(Math.abs(msk - spb))} п.п.`,
+      winner,
     };
   }
 
   const base = Math.max(1, Math.abs(loserValue));
   const delta = Math.round((Math.abs(winnerValue - loserValue) / base) * 100);
-  const label = row.higherBetter
-    ? `↑ ${winner} +${delta}%`
-    : `↑ ${winner} лучше на ${delta}%`;
-  return { label, tone: "positive" };
+  return { label: `${delta}%`, winner };
 }
 
 function BrandDetailPanel({

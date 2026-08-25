@@ -3890,7 +3890,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .brand-compare-detail-row {
   min-height: 36px;
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(110px, 0.7fr) minmax(150px, 0.9fr) minmax(110px, 0.7fr);
+  grid-template-columns: minmax(190px, 1fr) minmax(130px, 0.62fr) minmax(130px, 0.62fr) minmax(130px, 0.62fr);
   align-items: center;
   border-top: 1px solid rgba(127, 167, 255, 0.16);
   color: var(--navy);
@@ -3911,32 +3911,34 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   min-width: 0;
   padding: 0 14px;
 }
+.brand-compare-detail-row > span:first-child {
+  text-align: left;
+}
+.brand-compare-detail-row.head span:not(:first-child) {
+  text-align: center;
+}
 .brand-compare-detail-row strong {
   color: var(--navy);
   font-weight: 950;
   text-align: center;
 }
-.brand-compare-detail-row em {
+.brand-compare-detail-row strong.best {
   width: fit-content;
   justify-self: center;
   border-radius: 999px;
-  padding: 5px 12px;
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 950;
-  white-space: nowrap;
-}
-.brand-compare-detail-row em.positive {
   background: rgba(55, 190, 111, 0.13);
   color: #238244;
+  padding: 5px 12px;
 }
-.brand-compare-detail-row em.negative {
-  background: rgba(251, 98, 88, 0.12);
-  color: #b9271d;
-}
-.brand-compare-detail-row em.neutral {
-  background: rgba(15, 32, 64, 0.06);
-  color: var(--muted-strong);
+.brand-compare-detail-row em {
+  width: auto;
+  justify-self: center;
+  color: var(--navy);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 950;
+  text-align: center;
+  white-space: nowrap;
 }
 .brand-mode-tabs {
   width: fit-content;
