@@ -68,9 +68,10 @@ type BrandServiceDashboard = {
 
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
-  const [legacyRecords, servicePerformance, serviceBranches, serviceAliases] = await Promise.all([
+  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases] = await Promise.all([
     loadLegacyBrandRecords(),
     loadOptionalBrandGvizSheet(brandServiceSheets.performance).then(parseBrandPerformanceSheet).catch(() => []),
+    loadPublicBrandPerformanceCsv().catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.branches).then(parseBrandBranchesSheet).catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.aliases).then(parseBrandAliasesSheet).catch(() => []),
   ]);
@@ -79,7 +80,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
   const appsPerformance = normalizeBrandPerformanceObjects(appsScriptSnapshot?.performance ?? []);
   const appsBranches = normalizeBrandBranchObjects(appsScriptSnapshot?.branches ?? []);
   const aliases = mergeAliases(importedBrandAliases, mergeAliases(serviceAliases, appsAliases));
-  const performance = appsPerformance.length ? appsPerformance : servicePerformance;
+  const performance = appsPerformance.length ? appsPerformance : servicePerformance.length ? servicePerformance : publicPerformance;
   const branches = appsBranches.length ? appsBranches : serviceBranches;
   return {
     records: legacyRecords.map((record) => ({ ...record, brand: canonicalBrandName(record.brand, aliases) })),
@@ -107,6 +108,15 @@ async function loadBrandServiceFromAppsScript(): Promise<BrandServiceDashboard |
   }
 }
 
+async function loadPublicBrandPerformanceCsv(): Promise<BrandPerformanceWeekly[]> {
+  if (typeof fetch === "undefined") return [];
+  const baseUrl = import.meta.env.BASE_URL || "./";
+  const response = await fetch(`${baseUrl}data/brand-performance-weekly.csv?v=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) return [];
+  const csv = await response.text();
+  return normalizeBrandPerformanceObjects(parseCsvObjects(csv));
+}
+
 async function loadLegacyBrandRecords(): Promise<BrandAnalyticsRecord[]> {
   const tables = await Promise.all(
     legacyBrandSheets.map(async (city) => ({
@@ -115,6 +125,57 @@ async function loadLegacyBrandRecords(): Promise<BrandAnalyticsRecord[]> {
     })),
   );
   return tables.flatMap(({ city, table }) => parseLegacyBrandSheet(table, city));
+}
+
+function parseCsvObjects(csv: string): Array<Record<string, string>> {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < csv.length; index += 1) {
+    const char = csv[index];
+    const next = csv[index + 1];
+    if (quoted) {
+      if (char === "\"" && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else if (char === "\"") {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  const headers = (rows.shift() ?? []).map((header) => header.replace(/^\uFEFF/, "").trim());
+  return rows.flatMap((values) => {
+    if (!values.some((value) => value.trim())) return [];
+    const object: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      object[header] = values[index] ?? "";
+    });
+    return [object];
+  });
 }
 
 function loadOptionalBrandGvizSheet(sheetName: string): Promise<GvizTable> {
@@ -369,7 +430,14 @@ function canonicalSourceName(value: string): string {
   const lower = normalized.toLowerCase();
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites" || lower.includes("seo")) return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис")) return "2ГИС";
-  if (lower.includes("google") || lower.includes("гугл")) return "Гугл Карты";
+  if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /^go$/i.test(lower)) return "Гугл Карты";
+  if (
+    lower.includes("ykart")
+    || lower.includes("ykar")
+    || /^yk$/i.test(lower)
+    || /^ya$/i.test(lower)
+    || lower.includes("geoadv_maps")
+  ) return "Яндекс Карты";
   if (lower.includes("директ")) return "Яндекс Директ";
   if (lower.includes("яндекс") && lower.includes("карт")) return "Яндекс Карты";
   if (lower.includes("прям")) return "Прямые визиты";

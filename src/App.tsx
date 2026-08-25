@@ -6424,6 +6424,9 @@ function canonicalSourceName(value: string): string {
   const normalized = normalizeSourceName(value);
   const lower = normalized.toLowerCase();
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites") return "SEO";
+  if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис") || lower.includes("link.2gis")) return "2ГИС";
+  if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || lower === "go") return "Гугл Карты";
+  if (lower.includes("ykart") || lower.includes("ykar") || lower === "yk" || lower === "ya" || lower.includes("geoadv_maps")) return "Яндекс Карты";
   if (lower === "прямой" || lower === "прямые" || lower === "прямые визиты" || lower === "direct visits") return "Прямые визиты";
   if (lower === "основные" || lower === "другое" || lower === "другие") return "Другие";
   return normalized;
