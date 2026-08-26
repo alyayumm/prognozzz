@@ -430,12 +430,12 @@ function canonicalSourceName(value: string): string {
   const lower = normalized.toLowerCase();
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites" || lower.includes("seo")) return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис")) return "2ГИС";
-  if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /^go$/i.test(lower)) return "Гугл Карты";
+  if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return "Гугл Карты";
   if (
     lower.includes("ykart")
     || lower.includes("ykar")
-    || /^yk$/i.test(lower)
-    || /^ya$/i.test(lower)
+    || /(^|[:_\s-])yk($|[:_\s-])/.test(lower)
+    || /(^|[:_\s-])ya($|[:_\s-])/.test(lower)
     || lower.includes("geoadv_maps")
   ) return "Яндекс Карты";
   if (lower.includes("директ")) return "Яндекс Директ";
