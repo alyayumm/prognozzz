@@ -157,6 +157,12 @@ def id_key(value: str) -> str:
     return re.sub(r"[^0-9a-zа-я]+", "-", text_key(value)).strip("-") or "unknown"
 
 
+def brand_id_key(value: str) -> str:
+    if value == "изи-драйв.рф":
+        return "izi-drive-rf"
+    return id_key(value)
+
+
 def number(value: Any) -> float:
     if value is None:
         return 0.0
@@ -277,6 +283,11 @@ def normalize_domain(value: Any) -> str:
 
 
 def infer_brand(row: pd.Series) -> str:
+    raw_domain = clean_text(row.get("Домен", "")).lower().replace("ё", "е").strip().strip("/")
+    raw_domain = raw_domain.replace("https://", "").replace("http://", "")
+    if raw_domain == "изи-драйв.рф":
+        return "изи-драйв.рф"
+
     domain = normalize_domain(row.get("Домен", ""))
     source_text = " ".join(clean_text(row.get(column, "")) for column in SOURCE_COLUMNS)
     source_key = text_key(source_text)
@@ -346,7 +357,7 @@ def build_records(files: list[Path]) -> tuple[list[dict[str, Any]], dict[str, An
             key = (week_start, city, brand, source)
             if key not in groups:
                 groups[key] = {
-                    "id": f"brandperf-{week_start}-{id_key(city)}-{id_key(brand)}-{id_key(source)}",
+                    "id": f"brandperf-{week_start}-{id_key(city)}-{brand_id_key(brand)}-{id_key(source)}",
                     "weekStart": week_start,
                     "monthKey": month_key,
                     "city": city,
