@@ -98,6 +98,8 @@ type SourceCityFilter = "Все" | "МСК" | "СПБ";
 type EditableSourceCity = Exclude<SourceCityFilter, "Все">;
 type BrandTab = "overview" | "compare" | "brand" | "free";
 type BrandViewMode = "overall" | "sources";
+type BrandCompareMetricKey = "leads" | "qualified" | "sales" | "roas" | "roasFact" | "saleCost" | "avgCheck";
+type BrandCompareChartMode = "values" | "index";
 type SourceChartBucket = {
   key: string;
   label: string;
@@ -125,6 +127,7 @@ type BrandSummary = {
   cpql: number;
   saleCost: number;
   roas: number | null;
+  roasFact: number | null;
   avgCheck: number;
   monthly: BrandAnalyticsRecord["monthly"];
 };
@@ -146,6 +149,7 @@ type BrandDashboardSummary = {
   cpql: number;
   saleCost: number;
   roas: number | null;
+  roasFact: number | null;
   avgCheck: number;
   latestBranches: Record<BrandBranchPlatform, number>;
   totalBranches: number;
@@ -164,6 +168,10 @@ type BrandWeeklyPoint = {
   sales: number;
   revenue: number;
   budget: number;
+  saleCost: number;
+  roas: number | null;
+  roasFact: number | null;
+  avgCheck: number;
 };
 type BrandSourceSummary = {
   source: string;
@@ -173,6 +181,7 @@ type BrandSourceSummary = {
   revenue: number;
   budget: number;
   roas: number | null;
+  roasFact: number | null;
 };
 type BrandTopBadge = {
   label: string;
@@ -264,6 +273,16 @@ const brandViewOptions: Array<{ value: BrandViewMode; label: string }> = [
   { value: "overall", label: "Общая динамика" },
   { value: "sources", label: "Динамика по источникам" },
 ];
+const brandCompareMetricOptions: Array<{ value: BrandCompareMetricKey; label: string; lowerIsBetter?: boolean; suffix?: string }> = [
+  { value: "leads", label: "Лиды" },
+  { value: "qualified", label: "КВАЛ" },
+  { value: "sales", label: "Продажи" },
+  { value: "roas", label: "ROAS", suffix: "x" },
+  { value: "roasFact", label: "ROAS факт", suffix: "x" },
+  { value: "saleCost", label: "Стоимость продажи", lowerIsBetter: true, suffix: " ₽" },
+  { value: "avgCheck", label: "Средний чек", suffix: " ₽" },
+];
+const brandCompareColors = ["#1C46F5", "#14B86A", "#7F5CFF", "#EAA900", "#111B2F", "#2CB8C5"];
 const branchPlatforms: BrandBranchPlatform[] = ["Яндекс Карты", "Google Карты", "2ГИС"];
 const comparedTwoCityBrands = ["Рулевой", "Автодрайв", "Изи Драйв", "Гермес", "Пора за руль"];
 const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
@@ -2107,6 +2126,9 @@ function BrandsDashboardV2({
   const [platformFilter, setPlatformFilter] = useState<BrandBranchPlatform>("Яндекс Карты");
   const [selectedBrandKey, setSelectedBrandKey] = useState("");
   const [brandViewMode, setBrandViewMode] = useState<BrandViewMode>("overall");
+  const [compareMetric, setCompareMetric] = useState<BrandCompareMetricKey>("sales");
+  const [compareMode, setCompareMode] = useState<BrandCompareChartMode>("values");
+  const [selectedCompareBrandKeys, setSelectedCompareBrandKeys] = useState<string[]>([]);
 
   const performanceRows = useMemo(
     () => data.performance.length ? data.performance : legacyBrandRecordsToPerformance(data.records),
@@ -2139,20 +2161,42 @@ function BrandsDashboardV2({
     () => data.branches.filter((row) => selectedScope === "Все" || row.city === selectedScope),
     [data.branches, selectedScope],
   );
+  const scopedAllPerformance = useMemo(
+    () => performanceRows.filter((row) => selectedScope === "Все" || row.city === selectedScope),
+    [performanceRows, selectedScope],
+  );
+  const filteredAllPerformance = useMemo(
+    () => sourceFilter === "Все источники"
+      ? scopedAllPerformance
+      : scopedAllPerformance.filter((row) => row.source === sourceFilter),
+    [scopedAllPerformance, sourceFilter],
+  );
   const summaries = useMemo(
     () => buildBrandDashboardSummaries(data.records, filteredPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey),
     [data.records, filteredPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey],
+  );
+  const unfilteredSummaries = useMemo(
+    () => buildBrandDashboardSummaries(data.records, scopedMonthPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey),
+    [data.records, scopedMonthPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey],
+  );
+  const allPeriodSummaries = useMemo(
+    () => buildBrandDashboardSummaries(data.records, filteredAllPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey),
+    [data.records, filteredAllPerformance, scopedBranches, selectedScope, selectedMonthConfig.monthKey],
   );
   const topSummaries = useMemo(() => summaries.slice(0, 16), [summaries]);
   const totals = useMemo(() => buildBrandTotals(summaries), [summaries]);
   const trendEvents = useMemo(() => buildBrandDashboardEvents(monthPerformance, selectedScope), [monthPerformance, selectedScope]);
   const selectedBrand = useMemo(
-    () => summaries.find((summary) => brandDashboardSummaryKey(summary) === selectedBrandKey) ?? topSummaries[0] ?? summaries[0] ?? null,
-    [selectedBrandKey, summaries, topSummaries],
+    () => allPeriodSummaries.find((summary) => brandDashboardSummaryKey(summary) === selectedBrandKey)
+      ?? topSummaries[0]
+      ?? allPeriodSummaries[0]
+      ?? summaries[0]
+      ?? null,
+    [allPeriodSummaries, selectedBrandKey, summaries, topSummaries],
   );
   const freeSummaries = useMemo(
-    () => summaries.filter((summary) => summary.budget === 0 && summary.sales > 0).sort((a, b) => b.sales - a.sales),
-    [summaries],
+    () => unfilteredSummaries.filter((summary) => summary.budget === 0 && summary.sales > 0).sort((a, b) => b.sales - a.sales),
+    [unfilteredSummaries],
   );
 
   useEffect(() => {
@@ -2160,10 +2204,19 @@ function BrandsDashboardV2({
       setSelectedBrandKey("");
       return;
     }
-    setSelectedBrandKey((current) => summaries.some((summary) => brandDashboardSummaryKey(summary) === current)
+    setSelectedBrandKey((current) => allPeriodSummaries.some((summary) => brandDashboardSummaryKey(summary) === current)
       ? current
-      : brandDashboardSummaryKey(summaries[0]));
-  }, [summaries]);
+      : brandDashboardSummaryKey(allPeriodSummaries[0] ?? summaries[0]));
+  }, [allPeriodSummaries, summaries]);
+
+  useEffect(() => {
+    const availableKeys = new Set(allPeriodSummaries.map(brandDashboardSummaryKey));
+    const defaultKeys = allPeriodSummaries.slice(0, 5).map(brandDashboardSummaryKey);
+    setSelectedCompareBrandKeys((current) => {
+      const kept = current.filter((key) => availableKeys.has(key)).slice(0, 6);
+      return kept.length ? kept : defaultKeys;
+    });
+  }, [allPeriodSummaries]);
 
   return (
     <div className="page-stack brands-dashboard brands-dashboard-v2">
@@ -2226,7 +2279,18 @@ function BrandsDashboardV2({
       ) : (
         <>
           {activeTab === "overview" && (
-            <BrandOverviewPanel summaries={topSummaries} totals={totals} platform={platformFilter} />
+            <BrandOverviewPanel
+              summaries={topSummaries}
+              comparisonSummaries={allPeriodSummaries}
+              totals={totals}
+              platform={platformFilter}
+              selectedCompareBrandKeys={selectedCompareBrandKeys}
+              setSelectedCompareBrandKeys={setSelectedCompareBrandKeys}
+              compareMetric={compareMetric}
+              setCompareMetric={setCompareMetric}
+              compareMode={compareMode}
+              setCompareMode={setCompareMode}
+            />
           )}
           {activeTab === "compare" && (
             <BrandComparePanel performance={monthPerformance} sourceFilter={sourceFilter} />
@@ -2256,12 +2320,26 @@ function BrandsDashboardV2({
 
 function BrandOverviewPanel({
   summaries,
+  comparisonSummaries,
   totals,
   platform,
+  selectedCompareBrandKeys,
+  setSelectedCompareBrandKeys,
+  compareMetric,
+  setCompareMetric,
+  compareMode,
+  setCompareMode,
 }: {
   summaries: BrandDashboardSummary[];
+  comparisonSummaries: BrandDashboardSummary[];
   totals: ReturnType<typeof buildBrandTotals>;
   platform: BrandBranchPlatform;
+  selectedCompareBrandKeys: string[];
+  setSelectedCompareBrandKeys: (keys: string[]) => void;
+  compareMetric: BrandCompareMetricKey;
+  setCompareMetric: (metric: BrandCompareMetricKey) => void;
+  compareMode: BrandCompareChartMode;
+  setCompareMode: (mode: BrandCompareChartMode) => void;
 }) {
   return (
     <>
@@ -2272,14 +2350,31 @@ function BrandOverviewPanel({
         <BrandMetricCard label="Продажи" value={totals.sales} helper={`${percent(totals.sales, totals.qualified)}% из КВАЛ`} />
         <BrandMetricCard label="Выручка" value={totals.revenue} suffix=" ₽" />
         <BrandMetricCard label="ROAS" value={totals.roas ?? 0} suffix="x" decimal />
+        <BrandMetricCard label="ROAS факт" value={totals.roasFact ?? 0} suffix="x" decimal />
       </section>
 
       <section className="brand-ranking-grid brand-ranking-grid-v2">
         <BrandTopListCard title="Топ по продажам" caption="Топ-16 выбранного периода" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.sales, "desc")} formatValue={formatNumber} />
-        <BrandTopListCard title="Топ по выручке" caption="Бренды с максимальной выручкой" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.revenue, "desc")} formatValue={(value) => `${formatNumber(value)} ₽`} />
-        <BrandTopListCard title="Цена КВАЛ" caption="Чем ниже, тем лучше" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.cpql, "asc")} formatValue={(value) => `${formatNumber(value)} ₽`} />
+        <BrandTopListCard title="Топ по выручке" caption="Бренды с максимальной выручкой" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.revenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
+        <BrandTopListCard title="Цена КВАЛ" caption="Чем ниже, тем лучше" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.cpql, "asc")} formatValue={(value) => formatBrandCurrency(value)} />
         <BrandTopListCard title={`Продаж на филиал: ${platform}`} caption="Только внутри выбранной площадки" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.salesPerBranch[platform], "desc")} formatValue={(value) => formatCompactDecimal(value)} />
+        <BrandTopListCard title="Топ по ROAS" caption="Выручка / бюджет ДРР" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roas ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
+        <BrandTopListCard title="Топ по ROAS факт" caption="ROAS / 2" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roasFact ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
+        <BrandTopListCard title="Лид → КВАЛ" caption="Лучшая конверсия в КВАЛ" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.leadToQualified, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}%`} />
+        <BrandTopListCard title="КВАЛ → продажа" caption="Лучшая конверсия в продажу" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.qualifiedToSales, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}%`} />
+        <BrandTopListCard title="Средний чек" caption="Топ по среднему чеку" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.avgCheck, "desc")} formatValue={(value) => formatBrandCurrency(value)} />
+        <BrandTopListCard title="Стоимость продажи" caption="Ниже — лучше" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.saleCost, "asc")} formatValue={(value) => formatBrandCurrency(value)} />
       </section>
+
+      <BrandCustomComparePanel
+        summaries={comparisonSummaries}
+        selectedKeys={selectedCompareBrandKeys}
+        setSelectedKeys={setSelectedCompareBrandKeys}
+        metric={compareMetric}
+        setMetric={setCompareMetric}
+        mode={compareMode}
+        setMode={setCompareMode}
+      />
 
       <section className="analytics-panel">
         <PanelHead
@@ -2331,6 +2426,155 @@ function BrandTopListCard({
   );
 }
 
+function BrandCustomComparePanel({
+  summaries,
+  selectedKeys,
+  setSelectedKeys,
+  metric,
+  setMetric,
+  mode,
+  setMode,
+}: {
+  summaries: BrandDashboardSummary[];
+  selectedKeys: string[];
+  setSelectedKeys: (keys: string[]) => void;
+  metric: BrandCompareMetricKey;
+  setMetric: (metric: BrandCompareMetricKey) => void;
+  mode: BrandCompareChartMode;
+  setMode: (mode: BrandCompareChartMode) => void;
+}) {
+  const selectedSet = new Set(selectedKeys);
+  const selectedSummaries = selectedKeys
+    .map((key) => summaries.find((summary) => brandDashboardSummaryKey(summary) === key))
+    .filter((summary): summary is BrandDashboardSummary => Boolean(summary));
+  const availableToAdd = summaries.filter((summary) => !selectedSet.has(brandDashboardSummaryKey(summary)));
+  const series = buildBrandCompareSeries(selectedSummaries, metric, mode);
+  const metricMeta = getBrandCompareMetricMeta(metric);
+  const activeValues = series.flatMap((item) => item.values.filter((value): value is number => value !== null));
+  const max = getNiceAxisMax(Math.max(mode === "index" ? 100 : 1, ...activeValues));
+  const width = 1040;
+  const height = 340;
+  const plot = { left: 58, right: 26, top: 34, bottom: 52 };
+  const plotWidth = width - plot.left - plot.right;
+  const plotHeight = height - plot.top - plot.bottom;
+  const weekKeys = series[0]?.weekKeys ?? [];
+  const xFor = (index: number) => weekKeys.length <= 1
+    ? plot.left + plotWidth / 2
+    : plot.left + (plotWidth / (weekKeys.length - 1)) * index;
+  const yFor = (value: number) => plot.top + plotHeight - (value / max) * plotHeight;
+
+  function toggleKey(key: string) {
+    if (selectedSet.has(key)) {
+      setSelectedKeys(selectedKeys.filter((item) => item !== key));
+      return;
+    }
+    if (selectedKeys.length >= 6) return;
+    setSelectedKeys([...selectedKeys, key]);
+  }
+
+  return (
+    <section className="analytics-panel brand-custom-compare">
+      <div className="brand-custom-compare-head">
+        <PanelHead
+          title="Сравнить бренды"
+          description="Выберите до 6 брендов и одну метрику: так можно сравнить любые бренды без огромной стены графиков."
+        />
+        <div className="brand-compare-builder">
+          <label>
+            <span>Метрика</span>
+            <select value={metric} onChange={(event) => setMetric(event.target.value as BrandCompareMetricKey)}>
+              {brandCompareMetricOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="source-period-toggle brand-compare-mode" role="group" aria-label="Режим сравнения">
+            <button type="button" className={mode === "values" ? "active" : ""} onClick={() => setMode("values")}>Значения</button>
+            <button type="button" className={mode === "index" ? "active" : ""} onClick={() => setMode("index")}>Динамика %</button>
+          </div>
+          <label>
+            <span>Добавить бренд</span>
+            <select value="" onChange={(event) => {
+              if (!event.target.value) return;
+              toggleKey(event.target.value);
+            }}>
+              <option value="">Выбрать</option>
+              {availableToAdd.map((summary) => (
+                <option key={brandDashboardSummaryKey(summary)} value={brandDashboardSummaryKey(summary)}>
+                  {summary.brand}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="brand-compare-chip-row">
+        {summaries.slice(0, 24).map((summary) => {
+          const key = brandDashboardSummaryKey(summary);
+          return (
+            <button
+              type="button"
+              key={key}
+              className={selectedSet.has(key) ? "active" : ""}
+              onClick={() => toggleKey(key)}
+            >
+              {summary.brand}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="brand-compare-chart-shell">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Сравнение брендов: ${metricMeta.label}`}>
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+            const y = plot.top + plotHeight - ratio * plotHeight;
+            return (
+              <g key={ratio}>
+                <line x1={plot.left} x2={width - plot.right} y1={y} y2={y} className="brand-grid-line" />
+                <text x={plot.left - 12} y={y + 4} className="brand-axis-label">
+                  {formatBrandCompareMetricValue(max * ratio, metric, mode, { allowZero: true })}
+                </text>
+              </g>
+            );
+          })}
+          {weekKeys.map((week, index) => (
+            <text key={week} x={xFor(index)} y={height - 18} className="brand-x-label">
+              {formatWeekStartLabel(week)}
+            </text>
+          ))}
+          {series.map((item) => {
+            const segments = buildBrandComparePathSegments(item.values, xFor, yFor);
+            return segments.map((segment, segmentIndex) => (
+              <path
+                key={`${item.key}-${segmentIndex}`}
+                d={pointsToSvgPath(segment)}
+                className="brand-compare-line"
+                style={{ stroke: item.color }}
+              />
+            ));
+          })}
+          {series.map((item) => item.values.map((value, index) => {
+            if (value === null) return null;
+            return (
+              <circle key={`${item.key}-${weekKeys[index]}`} cx={xFor(index)} cy={yFor(value)} r="10" className="brand-compare-hit">
+                <title>{item.label} · {formatWeekStartLabel(weekKeys[index])}: {formatBrandCompareMetricValue(item.rawValues[index], metric, "values")}</title>
+              </circle>
+            );
+          }))}
+        </svg>
+      </div>
+
+      <div className="brand-compare-legend brand-custom-legend">
+        {series.map((item) => (
+          <span key={item.key}><i style={{ background: item.color }} /> {item.label}</span>
+        ))}
+        {!series.length && <span>Выберите хотя бы один бренд.</span>}
+      </div>
+    </section>
+  );
+}
+
 function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSummary[]; platform: BrandBranchPlatform }) {
   return (
     <div className="brand-table-wrap">
@@ -2341,7 +2585,9 @@ function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSumma
         <span>Продажи</span>
         <span>Выручка</span>
         <span>ROAS</span>
+        <span>ROAS факт</span>
         <span>CPQL</span>
+        <span>Стоимость продажи</span>
         <span>Продаж/филиал</span>
       </div>
       {summaries.map((summary) => (
@@ -2352,7 +2598,9 @@ function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSumma
           <span>{formatNumber(summary.sales)}</span>
           <span>{formatNumber(summary.revenue)} ₽</span>
           <span>{summary.roas === null ? "—" : `${formatCompactDecimal(summary.roas)}x`}</span>
+          <span>{summary.roasFact === null ? "—" : `${formatCompactDecimal(summary.roasFact)}x`}</span>
           <span>{formatNumber(Math.round(summary.cpql))} ₽</span>
+          <span>{formatBrandCurrency(summary.saleCost)}</span>
           <span>{summary.latestBranches[platform] ? formatCompactDecimal(summary.salesPerBranch[platform]) : "нет филиалов"}</span>
         </div>
       ))}
@@ -2429,6 +2677,7 @@ function BrandComparePanel({ performance, sourceFilter }: { performance: BrandPe
             { label: "КВАЛ → продажа", value: `${efficiency.qualifiedToSales}%` },
             { label: "стоимость продажи", value: formatBrandCurrency(efficiency.saleCost) },
             { label: "ROAS", value: formatBrandRoas(efficiency.roas) },
+            { label: "ROAS факт", value: formatBrandRoas(efficiency.roasFact) },
           ]}
         />
         <BrandCompareInsightCard
@@ -2579,6 +2828,7 @@ function BrandCompareDetailTable({
     { label: "Стоимость продажи", msk: msk.saleCost, spb: spb.saleCost, mode: "currency", higherBetter: false },
     { label: "Средний чек", msk: msk.avgCheck, spb: spb.avgCheck, mode: "currency", higherBetter: true },
     { label: "ROAS", msk: msk.roas, spb: spb.roas, mode: "roas", higherBetter: true },
+    { label: "ROAS факт", msk: msk.roasFact, spb: spb.roasFact, mode: "roas", higherBetter: true },
     { label: "Бюджет", msk: msk.budget, spb: spb.budget, mode: "currency", higherBetter: false },
     { label: "Выручка", msk: msk.revenue, spb: spb.revenue, mode: "currency", higherBetter: true },
   ];
@@ -2632,7 +2882,8 @@ function pickBrandVolumeCity(
   return mskVolume >= spbVolume ? "МСК" : "СПБ";
 }
 
-function formatBrandCurrency(value: number) {
+function formatBrandCurrency(value: number | null, options: { allowZero?: boolean } = {}) {
+  if (value === null || !Number.isFinite(value) || (!options.allowZero && value <= 0)) return "—";
   return `${formatNumber(Math.round(value))} ₽`;
 }
 
@@ -2668,6 +2919,77 @@ function buildBrandCompareDifference(row: BrandCompareDetailRow) {
   const base = Math.max(1, Math.abs(loserValue));
   const delta = Math.round((Math.abs(winnerValue - loserValue) / base) * 100);
   return { label: `${delta}%`, winner };
+}
+
+function getBrandCompareMetricMeta(metric: BrandCompareMetricKey) {
+  return brandCompareMetricOptions.find((option) => option.value === metric) ?? brandCompareMetricOptions[0];
+}
+
+function brandWeeklyMetricValue(point: BrandWeeklyPoint | undefined, metric: BrandCompareMetricKey): number | null {
+  if (!point) return null;
+  if (metric === "roas" || metric === "roasFact") return point[metric];
+  if (metric === "saleCost") return point.sales > 0 && point.saleCost > 0 ? point.saleCost : null;
+  if (metric === "avgCheck") return point.sales > 0 && point.avgCheck > 0 ? point.avgCheck : null;
+  return point[metric];
+}
+
+function formatBrandCompareMetricValue(value: number | null, metric: BrandCompareMetricKey, mode: BrandCompareChartMode, options: { allowZero?: boolean } = {}) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  if (mode === "index") return `${formatCompactDecimal(value)}%`;
+  if (metric === "roas" || metric === "roasFact") return `${formatCompactDecimal(value)}x`;
+  if (metric === "saleCost" || metric === "avgCheck") return formatBrandCurrency(value, options);
+  return formatNumber(Math.round(value));
+}
+
+function buildBrandCompareSeries(
+  summaries: BrandDashboardSummary[],
+  metric: BrandCompareMetricKey,
+  mode: BrandCompareChartMode,
+) {
+  const weekKeys = [...new Set(summaries.flatMap((summary) => summary.weekly.map((week) => week.weekStart)))]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  return summaries.slice(0, 6).map((summary, index) => {
+    const byWeek = new Map(summary.weekly.map((week) => [week.weekStart, week]));
+    const rawValues = weekKeys.map((weekKey) => brandWeeklyMetricValue(byWeek.get(weekKey), metric));
+    const base = rawValues.find((value): value is number => value !== null && value > 0) ?? null;
+    const values = mode === "index"
+      ? rawValues.map((value) => (value === null || base === null ? null : (value / base) * 100))
+      : rawValues;
+    return {
+      key: brandDashboardSummaryKey(summary),
+      label: summary.brand,
+      color: brandCompareColors[index % brandCompareColors.length],
+      weekKeys,
+      rawValues,
+      values,
+    };
+  });
+}
+
+function buildBrandComparePathSegments(
+  values: Array<number | null>,
+  xFor: (index: number) => number,
+  yFor: (value: number) => number,
+): ChartLineSegment[] {
+  const segments: ChartLineSegment[] = [];
+  let current: ChartLineSegment = [];
+  values.forEach((value, index) => {
+    if (value === null) {
+      if (current.length) segments.push(current);
+      current = [];
+      return;
+    }
+    current.push({ x: xFor(index), y: yFor(value) });
+  });
+  if (current.length) segments.push(current);
+  return segments.filter((segment) => segment.length > 1);
+}
+
+function formatWeekStartLabel(weekStart: string) {
+  if (!weekStart) return "";
+  const [, month, day] = weekStart.match(/^\d{4}-(\d{2})-(\d{2})/) ?? [];
+  return month && day ? `${day}.${month}` : weekStart;
 }
 
 function BrandDetailPanel({
@@ -2752,14 +3074,26 @@ function BrandWeeklyBarsV2({ summary }: { summary: BrandDashboardSummary }) {
   const plot = { left: 52, right: 24, top: 32, bottom: 56 };
   const plotWidth = width - plot.left - plot.right;
   const plotHeight = height - plot.top - plot.bottom;
-  const weeks = summary.weekly.length ? summary.weekly : [{ weekStart: "", label: "нет недель", leads: 0, qualified: 0, sales: 0, revenue: 0, budget: 0 }];
+  const weeks = summary.weekly.length ? summary.weekly : [{
+    weekStart: "",
+    label: "нет недель",
+    leads: 0,
+    qualified: 0,
+    sales: 0,
+    revenue: 0,
+    budget: 0,
+    saleCost: 0,
+    roas: null,
+    roasFact: null,
+    avgCheck: 0,
+  }];
   const max = getNiceAxisMax(Math.max(1, ...weeks.flatMap((week) => [week.leads, week.qualified, week.sales])));
   const groupWidth = plotWidth / weeks.length;
   const barWidth = Math.max(8, Math.min(24, groupWidth / 5));
   const yFor = (value: number) => plot.top + plotHeight - (value / max) * plotHeight;
   const bars = [
     { key: "leads", label: "Лиды", color: "var(--primary-blue)" },
-    { key: "qualified", label: "КВАЛ", color: "var(--soft-blue)" },
+    { key: "qualified", label: "КВАЛ", color: "#7fa7ff" },
     { key: "sales", label: "Продажи", color: "var(--deep-navy)" },
   ] as const;
 
@@ -2790,11 +3124,16 @@ function BrandWeeklyBarsV2({ summary }: { summary: BrandDashboardSummary }) {
             <g key={`${week.weekStart}-${index}`}>
               {bars.map((bar, barIndex) => {
                 const value = week[bar.key];
+                const previous = weeks[index - 1]?.[bar.key] ?? null;
+                const opacity = previous === null ? 0.68 : value > previous * 1.01 ? 1 : value < previous * 0.99 ? 0.42 : 0.68;
                 const x = center + (barIndex - 1) * (barWidth + 4);
                 const y = yFor(value);
                 return (
-                  <rect key={bar.key} x={x - barWidth / 2} y={y} width={barWidth} height={plot.top + plotHeight - y} rx="7" fill={bar.color}>
-                    <title>{week.label}: {bar.label} {formatNumber(value)}</title>
+                  <rect key={bar.key} x={x - barWidth / 2} y={y} width={barWidth} height={plot.top + plotHeight - y} rx="7" fill={bar.color} opacity={opacity}>
+                    <title>
+                      {week.label}: {bar.label} {formatNumber(value)}
+                      {previous === null ? "" : `, ${value >= previous ? "рост" : "спад"} к прошлой неделе`}
+                    </title>
                   </rect>
                 );
               })}
@@ -2819,12 +3158,20 @@ function BrandSourceBreakdownV2({ summary }: { summary: BrandDashboardSummary })
         </div>
       </div>
       <div className="brand-source-bars">
+        {rows.length > 0 && (
+          <div className="brand-source-row brand-source-row-head">
+            <strong>Источник</strong>
+            <b>Лиды</b>
+            <b>КВАЛ</b>
+            <b>Продажи</b>
+          </div>
+        )}
         {rows.map((row) => (
           <div className="brand-source-row" key={row.source}>
             <strong>{row.source}</strong>
-            <span><i style={{ width: `${(row.leads / max) * 100}%` }} />Лиды {formatNumber(row.leads)}</span>
-            <span><i style={{ width: `${(row.qualified / max) * 100}%` }} />КВАЛ {formatNumber(row.qualified)}</span>
-            <span><i style={{ width: `${(row.sales / max) * 100}%` }} />Продажи {formatNumber(row.sales)}</span>
+            <span><i style={{ width: `${(row.leads / max) * 100}%` }} />{formatNumber(row.leads)}</span>
+            <span><i style={{ width: `${(row.qualified / max) * 100}%` }} />{formatNumber(row.qualified)}</span>
+            <span><i style={{ width: `${(row.sales / max) * 100}%` }} />{formatNumber(row.sales)}</span>
           </div>
         ))}
         {!rows.length && <p className="empty-state">По источникам пока нет данных.</p>}
@@ -5837,6 +6184,7 @@ function buildBrandSummaries(records: BrandAnalyticsRecord[]): BrandSummary[] {
         cpql: qualified > 0 ? budget / qualified : 0,
         saleCost: sales > 0 ? budget / sales : 0,
         roas: budget > 0 ? revenue / budget : averageNullable(group.map((record) => record.roas)),
+        roasFact: budget > 0 ? (revenue / budget) / 2 : averageNullable(group.map((record) => record.roasFact)),
         avgCheck: sales > 0 ? revenue / sales : averagePositive(group.map((record) => record.avgCheck)),
         monthly,
       };
@@ -5976,6 +6324,7 @@ function buildBrandDashboardSummaries(
         cpql: totals.cpql,
         saleCost: totals.saleCost,
         roas: totals.roas,
+        roasFact: totals.roasFact,
         avgCheck: totals.avgCheck,
         latestBranches,
         totalBranches,
@@ -6011,6 +6360,7 @@ function aggregateBrandPerformance(rows: BrandPerformanceWeekly[]) {
     cpql: qualified > 0 ? budget / qualified : 0,
     saleCost: sales > 0 ? budget / sales : 0,
     roas: budget > 0 ? revenue / budget : averageNullable(rows.map((row) => row.roas)),
+    roasFact: budget > 0 ? (revenue / budget) / 2 : averageNullable(rows.map((row) => row.roasFact)),
     avgCheck: sales > 0 ? revenue / sales : averagePositive(rows.map((row) => row.avgCheck)),
   };
 }
@@ -6028,6 +6378,7 @@ function buildBrandTotals(summaries: BrandDashboardSummary[]) {
     revenue,
     budget,
     roas: budget > 0 ? revenue / budget : null,
+    roasFact: budget > 0 ? (revenue / budget) / 2 : null,
   };
 }
 
@@ -6048,6 +6399,10 @@ function buildBrandWeeklyPoints(rows: BrandPerformanceWeekly[]): BrandWeeklyPoin
         sales: totals.sales,
         revenue: totals.revenue,
         budget: totals.budget,
+        saleCost: totals.saleCost,
+        roas: totals.roas,
+        roasFact: totals.roasFact,
+        avgCheck: totals.avgCheck,
       };
     });
 }
@@ -6068,6 +6423,7 @@ function buildBrandSourceBreakdown(rows: BrandPerformanceWeekly[]): BrandSourceS
         revenue: totals.revenue,
         budget: totals.budget,
         roas: totals.roas,
+        roasFact: totals.roasFact,
       };
     })
     .sort((a, b) => b.sales - a.sales || b.qualified - a.qualified || b.leads - a.leads);
@@ -6104,8 +6460,10 @@ function attachBrandTopBadges(summaries: BrandDashboardSummary[]): BrandDashboar
     { label: "продажи", direction: "desc", getValue: (summary) => summary.sales, format: formatNumber },
     { label: "выручка", direction: "desc", getValue: (summary) => summary.revenue, format: (value) => `${formatNumber(value)} ₽` },
     { label: "ROAS", direction: "desc", getValue: (summary) => summary.roas ?? 0, format: (value) => `${formatCompactDecimal(value)}x` },
+    { label: "ROAS факт", direction: "desc", getValue: (summary) => summary.roasFact ?? 0, format: (value) => `${formatCompactDecimal(value)}x` },
     { label: "средний чек", direction: "desc", getValue: (summary) => summary.avgCheck, format: (value) => `${formatNumber(value)} ₽` },
     { label: "цена КВАЛ", direction: "asc", getValue: (summary) => summary.cpql, format: (value) => `${formatNumber(value)} ₽` },
+    { label: "стоимость продажи", direction: "asc", getValue: (summary) => summary.saleCost, format: (value) => `${formatNumber(value)} ₽` },
   ];
 
   const badgesByKey = new Map<string, BrandTopBadge[]>();

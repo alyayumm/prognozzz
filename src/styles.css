@@ -3414,7 +3414,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   box-shadow: 0 14px 28px rgba(28, 70, 245, 0.2);
 }
 .brand-kpi-grid-wide {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 .brand-metric-card {
   min-height: 104px;
@@ -3423,7 +3423,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
     rgba(255, 255, 255, 0.86);
 }
 .brand-ranking-grid-v2 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 .brand-top-list-card {
   min-height: 224px;
@@ -3434,9 +3434,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 8px;
 }
 .brand-table {
-  min-width: 980px;
+  min-width: 1180px;
   display: grid;
-  grid-template-columns: minmax(190px, 1.2fr) repeat(7, minmax(90px, 1fr));
+  grid-template-columns: minmax(190px, 1.2fr) repeat(9, minmax(90px, 1fr));
   gap: 10px;
   align-items: center;
   padding: 12px 14px;
@@ -3762,7 +3762,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .brand-compare-insight-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 10px;
 }
 .brand-compare-insight-metrics div {
@@ -3940,6 +3940,99 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   text-align: center;
   white-space: nowrap;
 }
+.brand-custom-compare {
+  display: grid;
+  gap: 14px;
+}
+.brand-custom-compare-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 0.74fr);
+  gap: 16px;
+  align-items: end;
+}
+.brand-compare-builder {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+.brand-compare-builder label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 950;
+}
+.brand-compare-builder select {
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--navy);
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 900;
+}
+.brand-compare-mode {
+  align-self: end;
+  min-height: 42px;
+  border-radius: 14px;
+}
+.brand-compare-mode button {
+  min-height: 32px;
+}
+.brand-compare-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.brand-compare-chip-row button {
+  min-height: 32px;
+  border: 1px solid rgba(127, 167, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--muted-strong);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.brand-compare-chip-row button.active {
+  border-color: rgba(28, 70, 245, 0.42);
+  background: linear-gradient(135deg, var(--blue), #7fa7ff);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(28, 70, 245, 0.18);
+}
+.brand-compare-chart-shell {
+  overflow-x: auto;
+  border: 1px solid rgba(127, 167, 255, 0.22);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(234, 241, 255, 0.52)),
+    rgba(255, 255, 255, 0.82);
+  padding: 8px 10px 4px;
+}
+.brand-compare-chart-shell svg {
+  width: 100%;
+  min-width: 840px;
+  height: auto;
+  display: block;
+}
+.brand-compare-line {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.brand-compare-hit {
+  fill: transparent;
+  stroke: transparent;
+  pointer-events: all;
+}
+.brand-custom-legend {
+  margin-top: 0;
+}
 .brand-mode-tabs {
   width: fit-content;
 }
@@ -4006,6 +4099,17 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-size: 13px;
   font-weight: 950;
 }
+.brand-source-row b {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+.brand-source-row-head {
+  min-height: 34px;
+  padding-block: 8px;
+  background: rgba(232, 240, 255, 0.68);
+}
 .brand-source-row span {
   position: relative;
   min-height: 30px;
@@ -4016,6 +4120,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-size: 12px;
   font-weight: 900;
   overflow: hidden;
+}
+.brand-source-row span > * {
+  position: relative;
 }
 .brand-source-row i {
   position: absolute;
@@ -4315,6 +4422,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .events-layout,
   .brand-toolbar,
   .brand-compare-head,
+  .brand-custom-compare-head,
+  .brand-compare-builder,
   .brand-compare-grid,
   .brand-compare-insight-grid,
   .brand-detail-grid-v2 { grid-template-columns: 1fr; }
@@ -4395,6 +4504,10 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .brand-tabs { display: grid; }
   .brand-tabs button { width: 100%; }
   .brand-compare-filter-strip { grid-template-columns: 1fr; }
+  .brand-custom-compare-head,
+  .brand-compare-builder {
+    grid-template-columns: 1fr;
+  }
   .brand-compare-filter-strip span {
     min-height: 38px;
     border-right: 0;

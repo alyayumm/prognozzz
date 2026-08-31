@@ -394,6 +394,7 @@ def build_records(files: list[Path]) -> tuple[list[dict[str, Any]], dict[str, An
         revenue = record["revenue"]
         budget = record["budget"]
         record["roas"] = revenue / budget if budget > 0 else None
+        record["roasFact"] = record["roas"] / 2 if record["roas"] is not None else None
         record["cpl"] = budget / leads if leads > 0 else 0
         record["cpql"] = budget / qualified if qualified > 0 else 0
         record["saleCost"] = budget / sales if sales > 0 else 0
@@ -404,6 +405,8 @@ def build_records(files: list[Path]) -> tuple[list[dict[str, Any]], dict[str, An
             record[field] = round(record[field], 2)
         if record["roas"] is not None:
             record["roas"] = round(record["roas"], 4)
+        if record["roasFact"] is not None:
+            record["roasFact"] = round(record["roasFact"], 4)
         records.append(record)
 
     records.sort(key=lambda item: (item["weekStart"], item["city"], item["brand"], item["source"], item["domain"]))
@@ -456,6 +459,7 @@ def write_csv(path: Path, records: list[dict[str, Any]]) -> None:
         "revenue",
         "budget",
         "roas",
+        "roasFact",
         "cpl",
         "cpql",
         "saleCost",

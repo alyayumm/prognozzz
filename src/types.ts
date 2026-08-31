@@ -127,6 +127,7 @@ export interface BrandPerformanceWeekly {
   revenue: number;
   budget: number;
   roas: number | null;
+  roasFact: number | null;
   cpl: number;
   cpql: number;
   saleCost: number;

@@ -101,6 +101,7 @@ const HEADERS = {
     'revenue',
     'budget',
     'roas',
+    'roasFact',
     'cpl',
     'cpql',
     'saleCost',
@@ -551,6 +552,7 @@ function brandPerformanceRow_(record) {
   const sales = Number(record.sales || 0);
   const revenue = Number(record.revenue || 0);
   const budget = Number(record.budget || 0);
+  const roas = Number(record.roas || (budget > 0 ? revenue / budget : 0));
   return [
     record.id || [weekStart, record.city, record.brand, record.source || 'Все источники'].join('|'),
     weekStart,
@@ -564,7 +566,8 @@ function brandPerformanceRow_(record) {
     sales,
     revenue,
     budget,
-    Number(record.roas || (budget > 0 ? revenue / budget : 0)),
+    roas,
+    Number(record.roasFact || (roas > 0 ? roas / 2 : 0)),
     Number(record.cpl || (leads > 0 ? budget / leads : 0)),
     Number(record.cpql || (qualified > 0 ? budget / qualified : 0)),
     Number(record.saleCost || (sales > 0 ? budget / sales : 0)),

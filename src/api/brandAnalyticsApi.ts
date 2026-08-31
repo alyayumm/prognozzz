@@ -26,6 +26,7 @@ export type BrandAnalyticsRecord = {
   cpql: number;
   saleCost: number;
   roas: number | null;
+  roasFact: number | null;
   avgCheck: number;
   monthly: BrandMonthlyPoint[];
 };
@@ -38,12 +39,31 @@ export type BrandAnalyticsBundle = {
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
+const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
 const legacyBrandSheets: BrandCity[] = ["МСК", "СПБ"];
 const brandServiceSheets = {
   performance: "Brand_Performance_Weekly",
   branches: "Brand_Branches_Weekly",
   aliases: "Brand_Aliases",
 };
+const drrBudgetSheets: Array<{ sheet: string; city: BrandCity; monthKey: string }> = [
+  { sheet: "МСК ЯНВАРЬ", city: "МСК", monthKey: "2026-01" },
+  { sheet: "СПБ ЯНВАРЬ", city: "СПБ", monthKey: "2026-01" },
+  { sheet: "МСК ФЕВРАЛЬ 26", city: "МСК", monthKey: "2026-02" },
+  { sheet: "СПБ ФЕВРАЛЬ 26", city: "СПБ", monthKey: "2026-02" },
+  { sheet: "МСК МАРТ 26", city: "МСК", monthKey: "2026-03" },
+  { sheet: "СПБ МАРТ 26", city: "СПБ", monthKey: "2026-03" },
+  { sheet: "МСК АПРЕЛЬ 26", city: "МСК", monthKey: "2026-04" },
+  { sheet: "СПБ АПРЕЛЬ 26", city: "СПБ", monthKey: "2026-04" },
+  { sheet: "МСК МАЙ 26", city: "МСК", monthKey: "2026-05" },
+  { sheet: "СПБ МАЙ 26", city: "СПБ", monthKey: "2026-05" },
+  { sheet: "МСК ИЮНЬ 26 ", city: "МСК", monthKey: "2026-06" },
+  { sheet: "СПБ ИЮНЬ 26", city: "СПБ", monthKey: "2026-06" },
+  { sheet: "МСК ИЮЛЬ 26", city: "МСК", monthKey: "2026-07" },
+  { sheet: "СПБ ИЮЛЬ 26", city: "СПБ", monthKey: "2026-07" },
+  { sheet: "МСК АВГУСТ 26", city: "МСК", monthKey: "2026-08" },
+  { sheet: "СПБ АВГУСТ 26", city: "СПБ", monthKey: "2026-08" },
+];
 const monthLabels = ["Апрель", "Май", "Июнь", "Июль"];
 const monthKeysByLabel: Record<string, string> = {
   Апрель: "2026-04",
@@ -64,31 +84,53 @@ type BrandServiceDashboard = {
   performance?: Array<Record<string, unknown>>;
   branches?: Array<Record<string, unknown>>;
   aliases?: Array<Record<string, unknown>>;
+  budgets?: Array<Record<string, unknown>>;
+};
+
+type BrandBudgetMonthly = {
+  monthKey: string;
+  city: BrandCity;
+  brand: string;
+  source: string;
+  budget: number;
 };
 
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
-  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases] = await Promise.all([
+  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets] = await Promise.all([
     loadLegacyBrandRecords(),
     loadOptionalBrandGvizSheet(brandServiceSheets.performance).then(parseBrandPerformanceSheet).catch(() => []),
     loadPublicBrandPerformanceCsv().catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.branches).then(parseBrandBranchesSheet).catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.aliases).then(parseBrandAliasesSheet).catch(() => []),
+    loadDrrBudgetRows().catch(() => []),
+    loadPublicBrandBudgetCsv().catch(() => []),
   ]);
 
   const appsAliases = normalizeBrandAliasObjects(appsScriptSnapshot?.aliases ?? []);
   const appsPerformance = normalizeBrandPerformanceObjects(appsScriptSnapshot?.performance ?? []);
   const appsBranches = normalizeBrandBranchObjects(appsScriptSnapshot?.branches ?? []);
+  const appsBudgets = normalizeBrandBudgetObjects(appsScriptSnapshot?.budgets ?? []);
   const aliases = mergeAliases(importedBrandAliases, mergeAliases(serviceAliases, appsAliases));
   const performance = appsPerformance.length ? appsPerformance : servicePerformance.length ? servicePerformance : publicPerformance;
+  const budgetRows = drrBudgets.length ? drrBudgets : appsBudgets.length ? appsBudgets : publicBudgets;
+  const canonicalPerformance = performance.map((record) => ({
+    ...record,
+    brand: canonicalBrandName(record.brand, aliases),
+    source: canonicalSourceName(record.source),
+  }));
+  const canonicalBudgets = budgetRows.map((record) => ({
+    ...record,
+    brand: canonicalBrandName(normalizeDrrBrandName(record.brand), aliases),
+    source: canonicalSourceName(record.source),
+  }));
   const branches = appsBranches.length ? appsBranches : serviceBranches;
   return {
-    records: legacyRecords.map((record) => ({ ...record, brand: canonicalBrandName(record.brand, aliases) })),
-    performance: performance.map((record) => ({
-      ...record,
-      brand: canonicalBrandName(record.brand, aliases),
-      source: canonicalSourceName(record.source),
-    })),
+    records: legacyRecords.map((record) => {
+      const roas = record.roas;
+      return { ...record, brand: canonicalBrandName(record.brand, aliases), roasFact: roas === null ? null : roas / 2 };
+    }),
+    performance: applyBrandBudgets(canonicalPerformance, canonicalBudgets),
     branches: branches.length
       ? branches.map((record) => ({
         ...record,
@@ -115,6 +157,31 @@ async function loadPublicBrandPerformanceCsv(): Promise<BrandPerformanceWeekly[]
   if (!response.ok) return [];
   const csv = await response.text();
   return normalizeBrandPerformanceObjects(parseCsvObjects(csv));
+}
+
+async function loadPublicBrandBudgetCsv(): Promise<BrandBudgetMonthly[]> {
+  if (typeof fetch === "undefined") return [];
+  const baseUrl = import.meta.env.BASE_URL || "./";
+  const response = await fetch(`${baseUrl}data/brand-budget-monthly.csv?v=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) return [];
+  const csv = await response.text();
+  return normalizeBrandBudgetObjects(parseCsvObjects(csv));
+}
+
+async function loadDrrBudgetRows(): Promise<BrandBudgetMonthly[]> {
+  const tables = await Promise.all(
+    drrBudgetSheets.map(async (config) => {
+      try {
+        return {
+          config,
+          table: await loadGvizSheet(drrBudgetSpreadsheetId, config.sheet, "select A,E,I,K,L,M where A is not null"),
+        };
+      } catch {
+        return { config, table: { rows: [] } };
+      }
+    }),
+  );
+  return tables.flatMap(({ config, table }) => parseDrrBudgetSheet(table, config));
 }
 
 async function loadLegacyBrandRecords(): Promise<BrandAnalyticsRecord[]> {
@@ -183,6 +250,10 @@ function loadOptionalBrandGvizSheet(sheetName: string): Promise<GvizTable> {
 }
 
 function loadBrandGvizSheet(sheetName: string): Promise<GvizTable> {
+  return loadGvizSheet(brandSpreadsheetId, sheetName);
+}
+
+function loadGvizSheet(spreadsheetId: string, sheetName: string, query = "select *"): Promise<GvizTable> {
   return new Promise((resolve, reject) => {
     if (typeof document === "undefined") {
       reject(new Error("Browser document is not available"));
@@ -217,8 +288,8 @@ function loadBrandGvizSheet(sheetName: string): Promise<GvizTable> {
       reject(new Error(`Cannot load Google Sheet: ${sheetName}`));
     };
     script.src =
-      `https://docs.google.com/spreadsheets/d/${brandSpreadsheetId}/gviz/tq?` +
-      `tqx=out:json;responseHandler:${callbackName}&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent("select *")}&_=${Date.now()}`;
+      `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?` +
+      `tqx=out:json;responseHandler:${callbackName}&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent(query)}&_=${Date.now()}`;
     document.head.appendChild(script);
   });
 }
@@ -239,6 +310,7 @@ function parseLegacyBrandSheet(table: GvizTable, fallbackCity: BrandCity): Brand
     const brand = normalizeBrandName(rawBrand, rawDomain);
     const domain = rawDomain || inferDomainFromBrand(brand);
     const city = normalizeBrandCity(readCell(row, 2)) ?? fallbackCity;
+    const roas = toNullableNumber(readCell(row, 13));
     const monthly = monthLabels.map((month, index) => ({
       month,
       sales: toNumber(readCell(row, 15 + index)),
@@ -260,7 +332,8 @@ function parseLegacyBrandSheet(table: GvizTable, fallbackCity: BrandCity): Brand
       cpl: toNumber(readCell(row, 10)),
       cpql: toNumber(readCell(row, 11)),
       saleCost: toNumber(readCell(row, 12)),
-      roas: toNullableNumber(readCell(row, 13)),
+      roas,
+      roasFact: roas === null ? null : roas / 2,
       avgCheck: toNumber(readCell(row, 14)),
       monthly,
     }];
@@ -283,6 +356,8 @@ function normalizeBrandPerformanceObjects(rows: Array<Record<string, unknown>>):
     const sales = toNumber(stringValue(row.sales || row["продажи"]));
     const revenue = toNumber(stringValue(row.revenue || row["выручка"]));
     const budget = toNumber(stringValue(row.budget || row["бюджет"]));
+    const roas = toNullableNumber(stringValue(row.roas || row["roas"])) ?? (budget > 0 ? revenue / budget : null);
+    const roasFact = toNullableNumber(stringValue(row.roasFact || row["roas факт"] || row["ROAS факт"])) ?? (roas === null ? null : roas / 2);
     const source = canonicalSourceName(stringValue(row.source || row["источник"]) || "Все источники");
     const id = stringValue(row.id) || `${weekStart}-${city}-${brand}-${source}`;
 
@@ -299,7 +374,8 @@ function normalizeBrandPerformanceObjects(rows: Array<Record<string, unknown>>):
       sales,
       revenue,
       budget,
-      roas: toNullableNumber(stringValue(row.roas || row["roas"])),
+      roas,
+      roasFact,
       cpl: toNumber(stringValue(row.cpl || row["cpl"] || row["цена лида"])) || (leads > 0 ? budget / leads : 0),
       cpql: toNumber(stringValue(row.cpql || row["cpql"] || row["цена квала"])) || (qualified > 0 ? budget / qualified : 0),
       saleCost: toNumber(stringValue(row.saleCost || row["цена продажи"])) || (sales > 0 ? budget / sales : 0),
@@ -338,11 +414,57 @@ function parseBrandAliasesSheet(table: GvizTable): BrandAlias[] {
   return normalizeBrandAliasObjects(rowsToObjects(table));
 }
 
+function parseDrrBudgetSheet(
+  table: GvizTable,
+  config: { city: BrandCity; monthKey: string },
+): BrandBudgetMonthly[] {
+  return table.rows.flatMap((row) => {
+    const brand = normalizeDrrBrandName(readCell(row, 0));
+    if (!brand || isDrrHeaderOrTotal(brand)) return [];
+
+    const yandexBudget = toNumber(readCell(row, 1));
+    const twoGisBudget = toNumber(readCell(row, 2));
+    const otherSource = canonicalDrrOtherSource(readCell(row, 3));
+    const otherBudget = toNumber(readCell(row, 4));
+    const totalBudget = toNumber(readCell(row, 5));
+    const budgetRows: BrandBudgetMonthly[] = [];
+
+    if (yandexBudget > 0) {
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Яндекс Карты", budget: yandexBudget });
+    }
+    if (twoGisBudget > 0) {
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "2ГИС", budget: twoGisBudget });
+    }
+    if (otherBudget > 0) {
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: otherSource, budget: otherBudget });
+    }
+
+    const sourceBudgetTotal = budgetRows.reduce((sum, item) => sum + item.budget, 0);
+    if (totalBudget > sourceBudgetTotal + 1) {
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Другая реклама", budget: totalBudget - sourceBudgetTotal });
+    }
+
+    return budgetRows;
+  });
+}
+
 function normalizeBrandAliasObjects(rows: Array<Record<string, unknown>>): BrandAlias[] {
   return rows.flatMap((row) => {
     const raw = stringValue(row.raw || row.alias || row["алиас"] || row["исходное название"]);
     const brand = stringValue(row.brand || row["бренд"] || row.canonical || row["единое название"]);
     return raw && brand ? [{ raw, brand }] : [];
+  });
+}
+
+function normalizeBrandBudgetObjects(rows: Array<Record<string, unknown>>): BrandBudgetMonthly[] {
+  return rows.flatMap((row) => {
+    const city = normalizeBrandCity(stringValue(row.city || row["город"]));
+    const monthKey = stringValue(row.monthKey || row.month || row["месяц"]);
+    const brand = normalizeDrrBrandName(stringValue(row.brand || row["бренд"]));
+    const source = canonicalSourceName(stringValue(row.source || row["источник"]) || "Другая реклама");
+    const budget = toNumber(stringValue(row.budget || row["бюджет"] || row["расход"]));
+    if (!city || !monthKey || !brand || budget <= 0) return [];
+    return [{ monthKey, city, brand, source, budget }];
   });
 }
 
@@ -418,6 +540,39 @@ function normalizeBrandKey(value: string): string {
   return value.trim().toLowerCase().replace(/ё/g, "е").replace(/[-_.]+/g, " ").replace(/\s+/g, " ");
 }
 
+function normalizeDrrBrandName(value: string): string {
+  const clean = stringValue(value)
+    .replace(/\s+/g, " ")
+    .replace(/[_-]+/g, " ")
+    .replace(/^(МСК|СПБ)\s+/i, "")
+    .replace(/\s+(МСК|СПБ|СПб)$/i, "")
+    .trim();
+  if (!clean) return "";
+
+  const compact = normalizeBrandKey(clean).replace(/\s+/g, "");
+  const aliases: Array<[string[], string]> = [
+    [["изидрайв", "изидрайвспб", "изи драйв"], "Изи Драйв"],
+    [["автодрайв", "авто драйв"], "АвтоДрайв"],
+    [["hermes", "гермес"], "Гермес"],
+    [["поразаруль", "пора за руль", "нампопути"], "Пора за руль"],
+    [["рулевой"], "Рулевой"],
+    [["топгир", "topgir", "topgear"], "ТопГир"],
+    [["автоправо"], "АвтоПраво"],
+    [["автотест"], "АвтоТест"],
+    [["автопутьалонсо", "алонсо"], "Алонсо"],
+    [["автосити"], "АвтоСити"],
+    [["autoland"], "Автолэнд"],
+    [["dreamавто", "дримавто"], "Dream Auto"],
+  ];
+  const matched = aliases.find(([keys]) => keys.some((key) => compact === key.replace(/\s+/g, "")));
+  return matched?.[1] ?? clean;
+}
+
+function isDrrHeaderOrTotal(value: string): boolean {
+  const key = normalizeBrandKey(value);
+  return key === "бренд" || key.includes("итого") || key.includes("сумма");
+}
+
 function canonicalBranchPlatform(value: string): BrandBranchWeekly["platform"] {
   const normalized = value.toLowerCase();
   if (normalized.includes("2") || normalized.includes("гис") || normalized.includes("gis")) return "2ГИС";
@@ -442,6 +597,128 @@ function canonicalSourceName(value: string): string {
   if (lower.includes("яндекс") && lower.includes("карт")) return "Яндекс Карты";
   if (lower.includes("прям")) return "Прямые визиты";
   return normalized || "Все источники";
+}
+
+function canonicalDrrOtherSource(value: string): string {
+  const lower = stringValue(value).toLowerCase();
+  if (lower.includes("директ")) return "Яндекс Директ";
+  if (lower.includes("кеш") || lower.includes("cashback")) return "Рек/кешбэк";
+  return "Другая реклама";
+}
+
+function applyBrandBudgets(
+  performance: BrandPerformanceWeekly[],
+  budgets: BrandBudgetMonthly[],
+): BrandPerformanceWeekly[] {
+  if (!budgets.length) return performance.map((row) => recalculateBrandBudgetKpis(row, false));
+
+  const normalizedBudgets = mergeBrandBudgets(budgets);
+  const budgetByPeriodSource = new Map<string, number>();
+  const budgetByPeriodTotal = new Map<string, number>();
+  const periodsWithBudget = new Set<string>();
+  normalizedBudgets.forEach((budget) => {
+    const periodKey = brandBudgetPeriodKey(budget);
+    periodsWithBudget.add(periodKey);
+    budgetByPeriodTotal.set(periodKey, (budgetByPeriodTotal.get(periodKey) ?? 0) + budget.budget);
+    const sourceKey = `${periodKey}|${budget.source}`;
+    budgetByPeriodSource.set(sourceKey, (budgetByPeriodSource.get(sourceKey) ?? 0) + budget.budget);
+  });
+
+  const rowsByPeriodSource = new Map<string, BrandPerformanceWeekly[]>();
+  performance.forEach((row) => {
+    const key = `${brandBudgetPeriodKey(row)}|${row.source}`;
+    rowsByPeriodSource.set(key, [...(rowsByPeriodSource.get(key) ?? []), row]);
+  });
+
+  const output: BrandPerformanceWeekly[] = [];
+  rowsByPeriodSource.forEach((rows, key) => {
+    const [monthKey, city, brandKey] = key.split("|");
+    const periodKey = [monthKey, city, brandKey].join("|");
+    const hasDrrBudget = periodsWithBudget.has(periodKey);
+    const sourceBudget = key.endsWith("|Все источники") ? budgetByPeriodTotal.get(periodKey) : budgetByPeriodSource.get(key);
+    const budgetToApply = sourceBudget ?? (hasDrrBudget ? 0 : null);
+    output.push(...allocateBudgetAcrossRows(rows, budgetToApply));
+  });
+
+  normalizedBudgets.forEach((budget) => {
+    const sourceKey = `${brandBudgetPeriodKey(budget)}|${budget.source}`;
+    if (rowsByPeriodSource.has(sourceKey)) return;
+    const hasBrandRows = performance.some((row) => brandBudgetPeriodKey(row) === brandBudgetPeriodKey(budget));
+    if (!hasBrandRows) return;
+    output.push(recalculateBrandBudgetKpis({
+      id: `drr-budget-${budget.monthKey}-${budget.city}-${normalizeBrandKey(budget.brand)}-${normalizeBrandKey(budget.source)}`,
+      weekStart: `${budget.monthKey}-01`,
+      monthKey: budget.monthKey,
+      city: budget.city,
+      brand: budget.brand,
+      domain: inferDomainFromBrand(budget.brand),
+      source: budget.source,
+      leads: 0,
+      qualified: 0,
+      sales: 0,
+      revenue: 0,
+      budget: budget.budget,
+      roas: null,
+      roasFact: null,
+      cpl: 0,
+      cpql: 0,
+      saleCost: 0,
+      avgCheck: 0,
+    }, true));
+  });
+
+  return output.sort((a, b) => (
+    a.weekStart.localeCompare(b.weekStart)
+    || a.city.localeCompare(b.city, "ru")
+    || a.brand.localeCompare(b.brand, "ru")
+    || a.source.localeCompare(b.source, "ru")
+  ));
+}
+
+function mergeBrandBudgets(budgets: BrandBudgetMonthly[]): BrandBudgetMonthly[] {
+  const map = new Map<string, BrandBudgetMonthly>();
+  budgets.forEach((budget) => {
+    if (!budget.budget || !Number.isFinite(budget.budget)) return;
+    const normalized = {
+      ...budget,
+      brand: normalizeDrrBrandName(budget.brand),
+      source: canonicalSourceName(budget.source),
+    };
+    const key = `${brandBudgetPeriodKey(normalized)}|${normalized.source}`;
+    const existing = map.get(key);
+    if (existing) existing.budget += normalized.budget;
+    else map.set(key, { ...normalized });
+  });
+  return [...map.values()];
+}
+
+function allocateBudgetAcrossRows(rows: BrandPerformanceWeekly[], budget: number | null): BrandPerformanceWeekly[] {
+  if (budget === null) return rows.map((row) => recalculateBrandBudgetKpis(row, false));
+  const weights = rows.map((row) => row.sales || row.qualified || row.leads || 1);
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0) || rows.length || 1;
+  return rows.map((row, index) => recalculateBrandBudgetKpis({
+    ...row,
+    budget: budget * (weights[index] / totalWeight),
+  }, true));
+}
+
+function recalculateBrandBudgetKpis(row: BrandPerformanceWeekly, forceDrrBudget: boolean): BrandPerformanceWeekly {
+  const budget = Number.isFinite(row.budget) ? row.budget : 0;
+  const roas = budget > 0 ? row.revenue / budget : (forceDrrBudget ? null : row.roas);
+  return {
+    ...row,
+    budget,
+    roas,
+    roasFact: roas === null ? null : roas / 2,
+    cpl: row.leads > 0 && budget > 0 ? budget / row.leads : 0,
+    cpql: row.qualified > 0 && budget > 0 ? budget / row.qualified : 0,
+    saleCost: row.sales > 0 && budget > 0 ? budget / row.sales : 0,
+    avgCheck: row.sales > 0 ? row.revenue / row.sales : row.avgCheck,
+  };
+}
+
+function brandBudgetPeriodKey(value: Pick<BrandBudgetMonthly, "monthKey" | "city" | "brand">): string {
+  return [value.monthKey, value.city, normalizeBrandKey(value.brand).replace(/\s+/g, "")].join("|");
 }
 
 function normalizeDate(value: unknown): string {
@@ -497,6 +774,7 @@ export function legacyBrandRecordsToPerformance(records: BrandAnalyticsRecord[])
         revenue: Math.round(record.revenue * ratio),
         budget: Math.round(record.budget * ratio),
         roas: point.roas,
+        roasFact: point.roas === null ? null : point.roas / 2,
         cpl: record.cpl,
         cpql: record.cpql,
         saleCost: record.saleCost,
