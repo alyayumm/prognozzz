@@ -618,10 +618,8 @@ function applyBrandBudgets(
   const normalizedBudgets = mergeBrandBudgets(budgets);
   const budgetByPeriodSource = new Map<string, number>();
   const budgetByPeriodTotal = new Map<string, number>();
-  const periodsWithBudget = new Set<string>();
   normalizedBudgets.forEach((budget) => {
     const periodKey = brandBudgetPeriodKey(budget);
-    periodsWithBudget.add(periodKey);
     budgetByPeriodTotal.set(periodKey, (budgetByPeriodTotal.get(periodKey) ?? 0) + budget.budget);
     const sourceKey = `${periodKey}|${budget.source}`;
     budgetByPeriodSource.set(sourceKey, (budgetByPeriodSource.get(sourceKey) ?? 0) + budget.budget);
@@ -637,9 +635,8 @@ function applyBrandBudgets(
   rowsByPeriodSource.forEach((rows, key) => {
     const [monthKey, city, brandKey] = key.split("|");
     const periodKey = [monthKey, city, brandKey].join("|");
-    const hasDrrBudget = periodsWithBudget.has(periodKey);
     const sourceBudget = key.endsWith("|Все источники") ? budgetByPeriodTotal.get(periodKey) : budgetByPeriodSource.get(key);
-    const budgetToApply = sourceBudget ?? (hasDrrBudget ? 0 : null);
+    const budgetToApply = sourceBudget ?? 0;
     output.push(...allocateBudgetAcrossRows(rows, budgetToApply));
   });
 
