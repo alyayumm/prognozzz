@@ -106,6 +106,17 @@ type SourceChartBucket = {
   caption: string;
   values: Record<string, Record<Metric, number>>;
 };
+type SourceMoneyTotals = {
+  source: string;
+  totals: Record<Metric, number>;
+  budget: number;
+  revenue: number;
+  cpl: number;
+  cpql: number;
+  saleCost: number;
+  roas: number | null;
+  roasFact: number | null;
+};
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
 type ChartLineRange = { top: number; height: number };
@@ -256,7 +267,7 @@ const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
 const sourceCityCommentPattern = /\[SOURCE_CITY=(МСК|СПБ)\]/i;
-const defaultLeadSources = ["SEO", "Яндекс Карты", "Яндекс Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк"];
+const defaultLeadSources = ["SEO", "Яндекс Карты", "Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
@@ -821,6 +832,7 @@ export default function App() {
                 monthConfigs={monthConfigs}
                 selectedScope={selectedScope}
                 setSelectedScope={setSelectedScope}
+                brandData={brandData}
               />
             )}
             {mode === "brands" && (
@@ -1725,15 +1737,37 @@ function SourcesAnalyticsDashboard({
   monthConfigs,
   selectedScope,
   setSelectedScope,
+  brandData,
 }: {
   records: DailyRecord[];
   selectedMonthConfig: MonthConfig;
   monthConfigs: MonthConfig[];
   selectedScope: ReportScope;
   setSelectedScope: (scope: ReportScope) => void;
+  brandData: BrandAnalyticsBundle;
 }) {
   const [periodMode, setPeriodMode] = useState<SourcePeriodMode>("day");
+  const [selectedSourceBrandKey, setSelectedSourceBrandKey] = useState("all");
   const sourceCityFilter: SourceCityFilter = selectedScope;
+  const sourceBrandRows = useMemo(
+    () => brandData.performance.length ? brandData.performance : legacyBrandRecordsToPerformance(brandData.records),
+    [brandData.performance, brandData.records],
+  );
+  const sourceBrandOptions = useMemo(() => {
+    const rows = sourceBrandRows.filter((row) => sourceCityFilter === "Все" || row.city === sourceCityFilter);
+    const brands = [...new Map(rows
+      .filter((row) => row.brand)
+      .map((row) => [normalizeBrandDashboardKey(row.brand), row.brand] as const))
+      .values()]
+      .sort((a, b) => a.localeCompare(b, "ru"));
+    return [{ key: "all", label: "Все бренды" }, ...brands.map((brand) => ({ key: normalizeBrandDashboardKey(brand), label: brand }))];
+  }, [sourceBrandRows, sourceCityFilter]);
+  useEffect(() => {
+    if (!sourceBrandOptions.some((option) => option.key === selectedSourceBrandKey)) setSelectedSourceBrandKey("all");
+  }, [selectedSourceBrandKey, sourceBrandOptions]);
+  const selectedSourceBrand = sourceBrandOptions.find((option) => option.key === selectedSourceBrandKey);
+  const isBrandSourceMode = selectedSourceBrandKey !== "all";
+  const chartPeriodMode: SourcePeriodMode = isBrandSourceMode && periodMode === "day" ? "week" : periodMode;
   const cityFilteredRecords = useMemo(
     () => getSourceRecordsForCity(records, sourceCityFilter),
     [records, sourceCityFilter],
@@ -1742,7 +1776,14 @@ function SourcesAnalyticsDashboard({
     () => getSourceRecordsForPeriod(cityFilteredRecords, periodMode, selectedMonthConfig),
     [cityFilteredRecords, periodMode, selectedMonthConfig],
   );
-  const activeSources = useMemo(() => getActiveLeadSources(scopedRecords), [scopedRecords]);
+  const scopedBrandRows = useMemo(
+    () => getSourceBrandRowsForPeriod(sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig),
+    [sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig],
+  );
+  const activeSources = useMemo(
+    () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords),
+    [isBrandSourceMode, scopedBrandRows, scopedRecords],
+  );
   const [hiddenSourceKeys, setHiddenSourceKeys] = useState<string[]>([]);
 
   useEffect(() => {
@@ -1751,12 +1792,16 @@ function SourcesAnalyticsDashboard({
 
   const visibleSources = activeSources.filter((source) => !hiddenSourceKeys.includes(sourceKey(source)));
   const sourceTotals = useMemo(
-    () => visibleSources.map((source) => ({ source, totals: getSourceMetricTotals(scopedRecords, source) })),
-    [visibleSources, scopedRecords],
+    () => isBrandSourceMode
+      ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
+      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources),
+    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords],
   );
   const buckets = useMemo(
-    () => buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources),
-    [cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources],
+    () => isBrandSourceMode
+      ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, monthConfigs, activeSources)
+      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources),
+    [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, monthConfigs, activeSources, cityFilteredRecords, periodMode],
   );
   const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
     acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
@@ -1767,7 +1812,7 @@ function SourcesAnalyticsDashboard({
   const strongestSource = sourceTotals
     .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
     .sort((a, b) => b.value - a.value)[0];
-  const activePeriodLabel = sourcePeriodOptions.find((option) => option.value === periodMode)?.label ?? "По дням";
+  const activePeriodLabel = sourcePeriodOptions.find((option) => option.value === chartPeriodMode)?.label ?? "По дням";
 
   const toggleSource = (source: string) => {
     const key = sourceKey(source);
@@ -1783,6 +1828,7 @@ function SourcesAnalyticsDashboard({
         facts={[
           "Мониторинг трафика и эффективности по источникам",
           `Город: ${sourceCityFilter === "Все" ? "МСК + СПБ" : sourceCityFilter}`,
+          `Бренд: ${selectedSourceBrand?.label ?? "Все бренды"}`,
           `Период: ${activePeriodLabel.toLowerCase()}`,
           `Включено: ${visibleSources.length} из ${activeSources.length}`,
           strongestSource?.value ? `Лидер: ${strongestSource.source}` : "FACT по источникам пока пустой",
@@ -1820,6 +1866,14 @@ function SourcesAnalyticsDashboard({
             ))}
           </div>
         </div>
+        <label className="source-brand-select">
+          <span>Бренд</span>
+          <select value={selectedSourceBrandKey} onChange={(event) => setSelectedSourceBrandKey(event.target.value)}>
+            {sourceBrandOptions.map((option) => (
+              <option key={option.key} value={option.key}>{option.label}</option>
+            ))}
+          </select>
+        </label>
         <div>
           <span>Источники на графиках</span>
           <div className="source-source-toggles">
@@ -1891,7 +1945,9 @@ function SourcesAnalyticsDashboard({
       <section className="analytics-panel">
         <PanelHead
           title="Эффективность источников"
-          description={strongestSource?.value ? `Самый сильный источник по ${sourceMetricLabel(strongestMetric).toLowerCase()}: ${strongestSource.source}.` : "Пока нет FACT по источникам за выбранный период."}
+          description={isBrandSourceMode
+            ? "В режиме одного бренда считаются бюджет, стоимость лида, КВАЛ, продажи и ROAS из ДРР."
+            : strongestSource?.value ? `Самый сильный источник по ${sourceMetricLabel(strongestMetric).toLowerCase()}: ${strongestSource.source}.` : "Пока нет FACT по источникам за выбранный период."}
         />
         <SourceEfficiencyTable
           sourceTotals={sourceTotals}
@@ -1909,7 +1965,7 @@ function SourceShareCard({
   activeSources,
 }: {
   metric: Metric;
-  sourceTotals: Array<{ source: string; totals: Record<Metric, number> }>;
+  sourceTotals: SourceMoneyTotals[];
   activeSources: string[];
 }) {
   const rows = sourceTotals
@@ -2057,7 +2113,7 @@ function SourceEfficiencyTable({
   activeSources,
   summaryTotals,
 }: {
-  sourceTotals: Array<{ source: string; totals: Record<Metric, number> }>;
+  sourceTotals: SourceMoneyTotals[];
   activeSources: string[];
   summaryTotals: Record<Metric, number>;
 }) {
@@ -2088,6 +2144,11 @@ function SourceEfficiencyTable({
         <span>Продажи</span>
         <span>Лид → КВАЛ</span>
         <span>КВАЛ → продажа</span>
+        <span>CPL</span>
+        <span>CPQL</span>
+        <span>Цена продажи</span>
+        <span>ROAS</span>
+        <span>ROAS наш</span>
       </div>
       {rows.map((item) => {
         const sourceIndex = activeSources.findIndex((source) => sourceNameEquals(source, item.source));
@@ -2100,6 +2161,11 @@ function SourceEfficiencyTable({
             <span>{formatNumber(item.sales)}</span>
             <span>{item.leadToQualified}%</span>
             <span>{item.qualifiedToSales}%</span>
+            <span>{formatBrandCurrency(item.cpl)}</span>
+            <span>{formatBrandCurrency(item.cpql)}</span>
+            <span>{formatBrandCurrency(item.saleCost)}</span>
+            <span>{formatBrandRoas(item.roas)}</span>
+            <span>{formatBrandRoas(item.roasFact)}</span>
           </div>
         );
       })}
@@ -6781,6 +6847,8 @@ function normalizeSourceName(value: string): string {
 function canonicalSourceName(value: string): string {
   const normalized = normalizeSourceName(value);
   const lower = normalized.toLowerCase();
+  const domain = lower.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  if (domain === "изи-драйв.рф" || lower.includes("директ")) return "Директ";
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites") return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис") || lower.includes("link.2gis")) return "2ГИС";
   if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return "Гугл Карты";
@@ -7007,6 +7075,114 @@ function getSourceMetricTotals(records: DailyRecord[], source: string): Record<M
       .reduce((sum, record) => sum + Math.max(0, Number(record.fact || 0)), 0);
     return acc;
   }, {} as Record<Metric, number>);
+}
+
+function getSourceMoneyTotalsFromDaily(records: DailyRecord[], sources: string[]): SourceMoneyTotals[] {
+  return sources.map((source) => ({
+    source,
+    totals: getSourceMetricTotals(records, source),
+    budget: 0,
+    revenue: 0,
+    cpl: 0,
+    cpql: 0,
+    saleCost: 0,
+    roas: null,
+    roasFact: null,
+  }));
+}
+
+function getSourceBrandRowsForPeriod(
+  rows: BrandPerformanceWeekly[],
+  selectedBrandKey: string,
+  city: SourceCityFilter,
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+): BrandPerformanceWeekly[] {
+  return rows.filter((row) => {
+    if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
+    if (city !== "Все" && row.city !== city) return false;
+    if (periodMode === "month") return true;
+    return row.monthKey === config.monthKey;
+  });
+}
+
+function getActiveSourcesFromBrandPerformance(rows: BrandPerformanceWeekly[]): string[] {
+  const names = new Set<string>();
+  rows.forEach((row) => {
+    const source = canonicalSourceName(row.source);
+    if (!source || isSuppressedLeadSource(source)) return;
+    if (row.leads > 0 || row.qualified > 0 || row.sales > 0 || row.budget > 0 || row.revenue > 0) names.add(source);
+  });
+  defaultLeadSources.forEach((source) => {
+    if ([...names].some((item) => sourceNameEquals(item, source))) return;
+    if (rows.some((row) => sourceNameEquals(row.source, source))) names.add(source);
+  });
+  return [...names].sort((a, b) => {
+    const aDefault = defaultLeadSources.findIndex((source) => sourceNameEquals(source, a));
+    const bDefault = defaultLeadSources.findIndex((source) => sourceNameEquals(source, b));
+    if (aDefault >= 0 || bDefault >= 0) return (aDefault < 0 ? 999 : aDefault) - (bDefault < 0 ? 999 : bDefault);
+    return a.localeCompare(b, "ru");
+  });
+}
+
+function getSourceMoneyTotalsFromBrandPerformance(rows: BrandPerformanceWeekly[], sources: string[]): SourceMoneyTotals[] {
+  return sources.map((source) => {
+    const sourceRows = rows.filter((row) => sourceNameEquals(row.source, source));
+    const totals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
+      acc[metric] = sourceRows.reduce((sum, row) => {
+        if (metric === "Лиды") return sum + row.leads;
+        if (metric === "Квалы") return sum + row.qualified;
+        return sum + row.sales;
+      }, 0);
+      return acc;
+    }, {} as Record<Metric, number>);
+    const budget = sourceRows.reduce((sum, row) => sum + row.budget, 0);
+    const revenue = sourceRows.reduce((sum, row) => sum + row.revenue, 0);
+    const roas = budget > 0 ? revenue / budget : null;
+    return {
+      source,
+      totals,
+      budget,
+      revenue,
+      cpl: totals["Лиды"] > 0 ? budget / totals["Лиды"] : 0,
+      cpql: totals["Квалы"] > 0 ? budget / totals["Квалы"] : 0,
+      saleCost: totals["Продажи"] > 0 ? budget / totals["Продажи"] : 0,
+      roas,
+      roasFact: roas === null ? null : roas / 2,
+    };
+  });
+}
+
+function buildBrandSourceChartBuckets(
+  rows: BrandPerformanceWeekly[],
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+  configs: MonthConfig[],
+  sources: string[],
+): SourceChartBucket[] {
+  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const buckets = periodMode === "month"
+    ? sortedConfigs.map((monthConfig) => ({
+      key: monthConfig.monthKey,
+      label: getShortMonthLabel(monthConfig),
+      caption: String(monthConfig.year),
+      values: createEmptySourceValues(sources),
+    }))
+    : buildMonthSourceBuckets("week", config, sources);
+  const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+
+  rows.forEach((row) => {
+    const bucketKey = periodMode === "month" ? row.monthKey : `${row.monthKey}-week-${getWeekOfMonth(row.weekStart)}`;
+    const bucket = bucketByKey.get(bucketKey);
+    if (!bucket) return;
+    const source = findSourceLabel(row.source, sources);
+    if (!source || !bucket.values[source]) return;
+    bucket.values[source]["Лиды"] += Math.max(0, Number(row.leads || 0));
+    bucket.values[source]["Квалы"] += Math.max(0, Number(row.qualified || 0));
+    bucket.values[source]["Продажи"] += Math.max(0, Number(row.sales || 0));
+  });
+
+  return buckets;
 }
 
 function findSourceDailyRecord(

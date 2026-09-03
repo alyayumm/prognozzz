@@ -548,6 +548,8 @@ function normalizeDrrBrandName(value: string): string {
     .replace(/\s+(МСК|СПБ|СПб)$/i, "")
     .trim();
   if (!clean) return "";
+  const domain = clean.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  if (domain === "изи-драйв.рф") return "изи-драйв.рф";
 
   const compact = normalizeBrandKey(clean).replace(/\s+/g, "");
   const aliases: Array<[string[], string]> = [
@@ -583,6 +585,8 @@ function canonicalBranchPlatform(value: string): BrandBranchWeekly["platform"] {
 function canonicalSourceName(value: string): string {
   const normalized = stringValue(value);
   const lower = normalized.toLowerCase();
+  const domain = lower.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  if (domain === "изи-драйв.рф" || lower.includes("директ")) return "Директ";
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites" || lower.includes("seo")) return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис")) return "2ГИС";
   if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return "Гугл Карты";
@@ -593,7 +597,6 @@ function canonicalSourceName(value: string): string {
     || /(^|[:_\s-])ya($|[:_\s-])/.test(lower)
     || lower.includes("geoadv_maps")
   ) return "Яндекс Карты";
-  if (lower.includes("директ")) return "Яндекс Директ";
   if (lower.includes("яндекс") && lower.includes("карт")) return "Яндекс Карты";
   if (lower.includes("прям")) return "Прямые визиты";
   return normalized || "Все источники";
@@ -601,7 +604,7 @@ function canonicalSourceName(value: string): string {
 
 function canonicalDrrOtherSource(value: string): string {
   const lower = stringValue(value).toLowerCase();
-  if (lower.includes("директ")) return "Яндекс Директ";
+  if (lower.includes("директ")) return "Директ";
   if (lower.includes("кеш") || lower.includes("cashback")) return "Рек/кешбэк";
   return "Другая реклама";
 }

@@ -2713,7 +2713,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 
 .source-control-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 320px) minmax(190px, 250px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 300px) minmax(190px, 230px) minmax(210px, 280px) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -2751,6 +2751,20 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   color: #fff;
   background: linear-gradient(135deg, var(--blue), #2d6bff);
   box-shadow: 0 8px 18px rgba(28, 70, 245, 0.22);
+}
+.source-brand-select select {
+  min-height: 46px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--navy);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 0 14px;
+  outline: none;
+  box-shadow: var(--glass-highlight);
 }
 .source-source-toggles {
   display: flex;
@@ -2983,9 +2997,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   background: rgba(255, 255, 255, 0.78);
 }
 .source-efficiency-row {
-  min-width: 880px;
+  min-width: 1280px;
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) repeat(6, minmax(96px, 1fr));
+  grid-template-columns: minmax(160px, 1.35fr) repeat(4, minmax(76px, 0.72fr)) repeat(2, minmax(104px, 0.9fr)) repeat(3, minmax(108px, 0.92fr)) repeat(2, minmax(82px, 0.72fr));
   align-items: center;
   min-height: 44px;
   border-top: 1px solid var(--line);

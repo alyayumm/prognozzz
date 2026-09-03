@@ -119,6 +119,7 @@ GENERIC_BRANDS = {
     "Прямые Визиты",
     "Яндекс Yandex",
     "Google Google",
+    "Директ",
     "Яндекс Директ",
     "Geoadv Geoadv",
     "Рек Кэшбек",
@@ -205,6 +206,12 @@ def extract_dates(path: Path) -> tuple[str, str]:
 
 
 def normalize_source(row: pd.Series) -> str:
+    raw_domain = clean_text(row.get("Домен", "")).lower().replace("ё", "е").strip().strip("/")
+    raw_domain = re.sub(r"^https?://", "", raw_domain)
+    raw_domain = re.sub(r"^www\.", "", raw_domain)
+    if raw_domain == "изи-драйв.рф":
+        return "Директ"
+
     first_source = clean_text(row.get("Источник (уровень 1)", ""))
     first_value = clean_text(row.get("Источник (уровень 1) значение", ""))
     first_key = text_key(f"{first_source} {first_value}")
@@ -231,7 +238,7 @@ def normalize_source(row: pd.Series) -> str:
     ):
         return "Яндекс Карты"
     if "geoadv direct" in lower or "direct" in lower or "директ" in lower:
-        return "Яндекс Директ"
+        return "Директ"
     if "seo" in lower or lower in {"сайт", "сайты", "site", "sites"} or "визиты с сайтов" in lower:
         return "SEO"
     if "прям" in lower:
