@@ -44,6 +44,7 @@ SOURCE_SLUGS = {
     "SEO": "seo",
     "Яндекс Карты": "yandexmaps",
     "Директ": "direct",
+    "Авито": "avito",
     "2ГИС": "2gis",
     "Гугл Карты": "googlemaps",
     "Прямые визиты": "directvisits",
@@ -52,6 +53,45 @@ SOURCE_SLUGS = {
     "ВКонтакте": "vk",
     "Другие": "other",
 }
+MANUAL_AVITO_RANGES = [
+    {
+        "start": "2026-08-20",
+        "end": "2026-08-23",
+        "label": "20-23.08",
+        "leads": 23,
+        "qualified": 15,
+        "sales": 3,
+        "revenue": 115480,
+    },
+    {
+        "start": "2026-08-24",
+        "end": "2026-08-30",
+        "label": "24-30.08",
+        "leads": 31,
+        "qualified": 17,
+        "sales": 0,
+        "revenue": 0,
+    },
+    {
+        "start": "2026-08-31",
+        "end": "2026-08-31",
+        "label": "31.08",
+        "leads": 12,
+        "qualified": 7,
+        "sales": 1,
+        "revenue": 58990,
+    },
+    {
+        "start": "2026-09-01",
+        "end": "2026-09-03",
+        "label": "01-03.09",
+        "leads": 23,
+        "qualified": 14,
+        "sales": 0,
+        "revenue": 0,
+    },
+]
+MANUAL_AVITO_AUGUST_DRR_BUDGET = 174425.51
 
 
 def clean_text(value: Any) -> str:
@@ -137,6 +177,18 @@ def discover_files(downloads: Path, start_month: str, end_month: str) -> list[Pa
     return sorted(latest_by_range.values(), key=lambda path: file_range(path) or ("", ""))
 
 
+def add_extra_files(files: list[Path], extra_files: list[Path]) -> list[Path]:
+    latest_by_range = {file_range(path): path for path in files if file_range(path)}
+    for path in extra_files:
+        if not path.exists():
+            raise FileNotFoundError(f"Extra file not found: {path}")
+        range_values = file_range(path)
+        if not range_values:
+            raise ValueError(f"Extra file name does not match report-24 range pattern: {path}")
+        latest_by_range[range_values] = path
+    return sorted(latest_by_range.values(), key=lambda path: file_range(path) or ("", ""))
+
+
 def canonical_source(row: pd.Series) -> str:
     values = [clean_text(row.get(column, "")) for column in SOURCE_COLUMNS]
     raw_source = values[0].lower().replace("ё", "е")
@@ -144,6 +196,8 @@ def canonical_source(row: pd.Series) -> str:
 
     if "директ" in raw_source or "yandex.direct" in joined or "geoadv direct" in joined or "direct" in joined:
         return "Директ"
+    if "авито" in raw_source or "avito" in raw_source or "авито" in joined or "avito" in joined:
+        return "Авито"
     if "2gis" in raw_source or "2гис" in raw_source or "2gis" in joined or "2 гис" in joined or "link.2gis" in joined:
         return "2ГИС"
     if "google" in raw_source or "гугл" in raw_source or "gkart" in joined or "google" in joined or "гугл" in joined:
@@ -210,7 +264,12 @@ def build_records(files: list[Path]) -> tuple[list[dict[str, Any]], dict[str, An
         month_key = week_start[:7]
         week = week_of_month(week_start)
         city_code = "msk" if city == "МСК" else "spb"
-        comment = f"Roistat report-24 апрель-июль: недельные суммы по воронке {city} АШ [SOURCE_CITY={city}]"
+        range_label = "апрель-июль"
+        if week_start == "2026-09-01" and week_end == "2026-09-03":
+            range_label = "1-3 сентября"
+        elif not week_start.startswith(("2026-04", "2026-05", "2026-06", "2026-07")):
+            range_label = f"{week_start}-{week_end}"
+        comment = f"Roistat report-24 {range_label}: недельные суммы по воронке {city} АШ [SOURCE_CITY={city}]"
         for metric in METRIC_COLUMNS:
             fact = int(round(values[metric]))
             if fact <= 0:
@@ -245,6 +304,88 @@ def build_records(files: list[Path]) -> tuple[list[dict[str, Any]], dict[str, An
         "skippedFunnels": skipped_funnels,
     }
     return rows, summary
+
+
+def build_manual_avito_records() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    now = datetime.now().isoformat(timespec="seconds")
+    metric_map = {
+        "Лиды": "leads",
+        "Квалы": "qualified",
+        "Продажи": "sales",
+    }
+    august_ranges = [item for item in MANUAL_AVITO_RANGES if item["start"].startswith("2026-08")]
+    august_leads = sum(int(item["leads"]) for item in august_ranges)
+    august_budget_by_start = {}
+    budget_remainder = MANUAL_AVITO_AUGUST_DRR_BUDGET
+    for index, item in enumerate(august_ranges):
+        if index == len(august_ranges) - 1:
+            budget = round(budget_remainder, 2)
+        else:
+            budget = round(MANUAL_AVITO_AUGUST_DRR_BUDGET * int(item["leads"]) / august_leads, 2)
+            budget_remainder -= budget
+        august_budget_by_start[item["start"]] = budget
+
+    for item in MANUAL_AVITO_RANGES:
+        date_iso = item["start"]
+        base_comment = f"Авито ручной ввод: {item['label']}"
+        budget = august_budget_by_start.get(item["start"], 0)
+        for metric, source_key in metric_map.items():
+            fact = int(item[source_key])
+            comment = f"{base_comment} [SOURCE_CITY=МСК]"
+            if metric == "Продажи":
+                comment = f"{base_comment}; выручка {int(item['revenue'])}; расход {budget:.2f} [SOURCE_CITY=МСК]"
+            rows.append(
+                {
+                    "id": f"{date_iso}-source-manual-msk-avito-{source_slug(metric)}",
+                    "date": date_iso,
+                    "month": date_iso[:7],
+                    "week": week_of_month(date_iso),
+                    "city": "источники",
+                    "channel": "Авито",
+                    "metric": metric,
+                    "plan": 0,
+                    "fact": fact,
+                    "forecast": 0,
+                    "comment": comment,
+                    "updatedAt": now,
+                    "recommendations": 0,
+                    "omQualified": 0,
+                    "weekEnd": "",
+                }
+            )
+    return rows
+
+
+def apply_manual_avito_offsets(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    metrics = {"Лиды": "leads", "Квалы": "qualified", "Продажи": "sales"}
+    remainder: dict[str, dict[str, int]] = {}
+    for item in MANUAL_AVITO_RANGES:
+        remainder[item["label"]] = {}
+        for metric, source_key in metrics.items():
+            left = int(item[source_key])
+            candidates = [
+                row
+                for row in rows
+                if item["start"] <= row["date"] <= item["end"]
+                and row["city"] == "источники"
+                and row["channel"] == "Прямые визиты"
+                and row["metric"] == metric
+                and "[SOURCE_CITY=МСК]" in row["comment"]
+            ]
+            for row in sorted(candidates, key=lambda value: value["date"]):
+                if left <= 0:
+                    break
+                current = int(row["fact"])
+                take = min(current, left)
+                if take <= 0:
+                    continue
+                row["fact"] = current - take
+                row["comment"] = f"{row['comment']}; Авито вынесено: -{take}"
+                left -= take
+            if left > 0:
+                remainder[item["label"]][metric] = left
+    return {label: values for label, values in remainder.items() if values}
 
 
 def totals_by(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, int]]:
@@ -337,10 +478,23 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=Path("tmp/source-daily-report-24.json"))
     parser.add_argument("--csv", type=Path, default=Path("tmp/source-daily-report-24.csv"))
     parser.add_argument("--sheet-csv", type=Path, default=Path("public/data/source-daily-report-24.csv"))
+    parser.add_argument("--extra-file", type=Path, action="append", default=[])
+    parser.add_argument("--skip-manual-avito", action="store_true")
     args = parser.parse_args()
 
     files = discover_files(args.downloads, args.start_month, args.end_month)
+    files = add_extra_files(files, args.extra_file)
     rows, summary = build_records(files)
+    if not args.skip_manual_avito:
+        offsetRemainder = apply_manual_avito_offsets(rows)
+        avito_rows = build_manual_avito_records()
+        rows = [*rows, *avito_rows]
+        summary["rows"] = len(rows)
+        summary["totals"] = totals_by(rows, "metric")
+        summary["totalsByCity"] = totals_by(rows, "cityScope")
+        summary["totalsBySource"] = totals_by(rows, "channel")
+        summary["manualAvitoRows"] = len(avito_rows)
+        summary["manualAvitoOffsetRemainder"] = offsetRemainder
     write_json(args.out, rows, summary)
     write_csv(args.csv, rows)
     write_sheet_csv(args.sheet_csv, rows)

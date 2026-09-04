@@ -2997,9 +2997,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   background: rgba(255, 255, 255, 0.78);
 }
 .source-efficiency-row {
-  min-width: 1280px;
+  min-width: 1500px;
   display: grid;
-  grid-template-columns: minmax(160px, 1.35fr) repeat(4, minmax(76px, 0.72fr)) repeat(2, minmax(104px, 0.9fr)) repeat(3, minmax(108px, 0.92fr)) repeat(2, minmax(82px, 0.72fr));
+  grid-template-columns: minmax(160px, 1.35fr) repeat(4, minmax(76px, 0.72fr)) repeat(2, minmax(112px, 0.95fr)) repeat(2, minmax(104px, 0.9fr)) repeat(3, minmax(108px, 0.92fr)) repeat(2, minmax(82px, 0.72fr));
   align-items: center;
   min-height: 44px;
   border-top: 1px solid var(--line);

@@ -2142,6 +2142,8 @@ function SourceEfficiencyTable({
         <span>Лиды</span>
         <span>КВАЛ</span>
         <span>Продажи</span>
+        <span>Выручка</span>
+        <span>Расход</span>
         <span>Лид → КВАЛ</span>
         <span>КВАЛ → продажа</span>
         <span>CPL</span>
@@ -2159,6 +2161,8 @@ function SourceEfficiencyTable({
             <span>{formatNumber(item.leads)}</span>
             <span>{formatNumber(item.qualified)}</span>
             <span>{formatNumber(item.sales)}</span>
+            <span>{formatBrandCurrency(item.revenue, { allowZero: true })}</span>
+            <span>{formatBrandCurrency(item.budget, { allowZero: true })}</span>
             <span>{item.leadToQualified}%</span>
             <span>{item.qualifiedToSales}%</span>
             <span>{formatBrandCurrency(item.cpl)}</span>
@@ -7078,17 +7082,37 @@ function getSourceMetricTotals(records: DailyRecord[], source: string): Record<M
 }
 
 function getSourceMoneyTotalsFromDaily(records: DailyRecord[], sources: string[]): SourceMoneyTotals[] {
-  return sources.map((source) => ({
-    source,
-    totals: getSourceMetricTotals(records, source),
-    budget: 0,
-    revenue: 0,
-    cpl: 0,
-    cpql: 0,
-    saleCost: 0,
-    roas: null,
-    roasFact: null,
-  }));
+  return sources.map((source) => {
+    const sourceRecords = records.filter((record) => isSourceValueRecord(record) && sourceNameEquals(record.channel, source));
+    const totals = getSourceMetricTotals(records, source);
+    const moneyRecords = sourceRecords.filter((record) => record.metric === "Продажи");
+    const revenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
+    const budget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
+    const roas = budget > 0 ? revenue / budget : null;
+
+    return {
+      source,
+      totals,
+      budget,
+      revenue,
+      cpl: totals["Лиды"] > 0 && budget > 0 ? budget / totals["Лиды"] : 0,
+      cpql: totals["Квалы"] > 0 && budget > 0 ? budget / totals["Квалы"] : 0,
+      saleCost: totals["Продажи"] > 0 && budget > 0 ? budget / totals["Продажи"] : 0,
+      roas,
+      roasFact: roas === null ? null : roas / 2,
+    };
+  });
+}
+
+function sourceMoneyFromComment(comment: string | undefined, labels: string[]): number {
+  const text = String(comment || "").replace(/\u00a0/g, " ");
+  for (const label of labels) {
+    const match = text.match(new RegExp(`${label}\\s*[:=]?\\s*([\\d\\s.,]+)`, "i"));
+    if (!match) continue;
+    const parsed = Number(match[1].replace(/\s/g, "").replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
 
 function getSourceBrandRowsForPeriod(
