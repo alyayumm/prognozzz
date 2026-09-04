@@ -33,6 +33,7 @@ import {
   loadBrandAnalyticsSnapshot,
   type BrandAnalyticsBundle,
   type BrandAnalyticsRecord,
+  type BrandBudgetMonthly,
   type BrandCity,
 } from "./api/brandAnalyticsApi";
 import type { CSSProperties, ReactNode } from "react";
@@ -301,6 +302,7 @@ const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
   performance: [],
   branches: [],
   aliases: [],
+  budgets: [],
 };
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
@@ -1780,9 +1782,13 @@ function SourcesAnalyticsDashboard({
     () => getSourceBrandRowsForPeriod(sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig),
     [sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig],
   );
+  const scopedBrandBudgets = useMemo(
+    () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig),
+    [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig],
+  );
   const activeSources = useMemo(
-    () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords),
-    [isBrandSourceMode, scopedBrandRows, scopedRecords],
+    () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
+    [isBrandSourceMode, scopedBrandRows, scopedRecords, scopedBrandBudgets],
   );
   const [hiddenSourceKeys, setHiddenSourceKeys] = useState<string[]>([]);
 
@@ -1794,8 +1800,8 @@ function SourcesAnalyticsDashboard({
   const sourceTotals = useMemo(
     () => isBrandSourceMode
       ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
-      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources),
-    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords],
+      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
+    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
   );
   const buckets = useMemo(
     () => isBrandSourceMode
@@ -7032,7 +7038,7 @@ function getSourceMeta(records: DailyRecord[]) {
   );
 }
 
-function getActiveLeadSources(records: DailyRecord[]): string[] {
+function getActiveLeadSources(records: DailyRecord[], budgetRows: BrandBudgetMonthly[] = []): string[] {
   const meta = getSourceMeta(records);
   const names = new Set<string>(defaultLeadSources);
 
@@ -7045,6 +7051,14 @@ function getActiveLeadSources(records: DailyRecord[]): string[] {
     const source = canonicalSourceName(record.channel);
     if (!source || isSuppressedLeadSource(source) || meta.hidden.has(source.toLowerCase())) return;
     if (record.fact > 0 || record.plan > 0 || record.forecast > 0 || record.recommendations > 0 || record.omQualified > 0) {
+      const existing = [...names].find((item) => sourceNameEquals(item, source));
+      names.add(existing ?? source);
+    }
+  });
+  budgetRows.forEach((row) => {
+    const source = canonicalSourceName(row.source);
+    if (!source || isSuppressedLeadSource(source) || meta.hidden.has(source.toLowerCase())) return;
+    if (row.budget > 0) {
       const existing = [...names].find((item) => sourceNameEquals(item, source));
       names.add(existing ?? source);
     }
@@ -7081,13 +7095,26 @@ function getSourceMetricTotals(records: DailyRecord[], source: string): Record<M
   }, {} as Record<Metric, number>);
 }
 
-function getSourceMoneyTotalsFromDaily(records: DailyRecord[], sources: string[]): SourceMoneyTotals[] {
+function getSourceMoneyTotalsFromDaily(
+  records: DailyRecord[],
+  sources: string[],
+  budgetRows: BrandBudgetMonthly[] = [],
+  performanceRows: BrandPerformanceWeekly[] = [],
+): SourceMoneyTotals[] {
   return sources.map((source) => {
     const sourceRecords = records.filter((record) => isSourceValueRecord(record) && sourceNameEquals(record.channel, source));
     const totals = getSourceMetricTotals(records, source);
     const moneyRecords = sourceRecords.filter((record) => record.metric === "Продажи");
-    const revenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
-    const budget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
+    const commentRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
+    const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
+    const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
+    const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);
+    const performanceBudget = performanceSourceRows.reduce((sum, row) => sum + row.budget, 0);
+    const drrBudget = budgetRows
+      .filter((row) => sourceNameEquals(row.source, source))
+      .reduce((sum, row) => sum + row.budget, 0);
+    const revenue = commentRevenue > 0 ? commentRevenue : performanceRevenue;
+    const budget = commentBudget > 0 ? commentBudget : drrBudget > 0 ? drrBudget : performanceBudget;
     const roas = budget > 0 ? revenue / budget : null;
 
     return {
@@ -7101,6 +7128,21 @@ function getSourceMoneyTotalsFromDaily(records: DailyRecord[], sources: string[]
       roas,
       roasFact: roas === null ? null : roas / 2,
     };
+  });
+}
+
+function getSourceBudgetsForPeriod(
+  rows: BrandBudgetMonthly[],
+  selectedBrandKey: string,
+  city: SourceCityFilter,
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+): BrandBudgetMonthly[] {
+  return rows.filter((row) => {
+    if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
+    if (city !== "Все" && row.city !== city) return false;
+    if (periodMode === "month") return true;
+    return row.monthKey === config.monthKey;
   });
 }
 

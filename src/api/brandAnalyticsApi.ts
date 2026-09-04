@@ -36,6 +36,7 @@ export type BrandAnalyticsBundle = {
   performance: BrandPerformanceWeekly[];
   branches: BrandBranchWeekly[];
   aliases: BrandAlias[];
+  budgets: BrandBudgetMonthly[];
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
@@ -63,6 +64,8 @@ const drrBudgetSheets: Array<{ sheet: string; city: BrandCity; monthKey: string 
   { sheet: "СПБ ИЮЛЬ 26", city: "СПБ", monthKey: "2026-07" },
   { sheet: "МСК АВГУСТ 26", city: "МСК", monthKey: "2026-08" },
   { sheet: "СПБ АВГУСТ 26", city: "СПБ", monthKey: "2026-08" },
+  { sheet: "МСК СЕНТЯБРЬ", city: "МСК", monthKey: "2026-09" },
+  { sheet: "СПБ СЕНТЯБРЬ", city: "СПБ", monthKey: "2026-09" },
 ];
 const monthLabels = ["Апрель", "Май", "Июнь", "Июль"];
 const monthKeysByLabel: Record<string, string> = {
@@ -87,7 +90,7 @@ type BrandServiceDashboard = {
   budgets?: Array<Record<string, unknown>>;
 };
 
-type BrandBudgetMonthly = {
+export type BrandBudgetMonthly = {
   monthKey: string;
   city: BrandCity;
   brand: string;
@@ -139,6 +142,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
       }))
       : importedBrandBranches,
     aliases,
+    budgets: canonicalBudgets,
   };
 }
 
@@ -174,7 +178,7 @@ async function loadDrrBudgetRows(): Promise<BrandBudgetMonthly[]> {
       try {
         return {
           config,
-          table: await loadGvizSheet(drrBudgetSpreadsheetId, config.sheet, "select A,E,I,K,L,M where A is not null"),
+          table: await loadGvizSheet(drrBudgetSpreadsheetId, config.sheet, "select A,E,I,K,L,M"),
         };
       } catch {
         return { config, table: { rows: [] } };
@@ -418,9 +422,16 @@ function parseDrrBudgetSheet(
   table: GvizTable,
   config: { city: BrandCity; monthKey: string },
 ): BrandBudgetMonthly[] {
-  return table.rows.flatMap((row) => {
-    const brand = normalizeDrrBrandName(readCell(row, 0));
-    if (!brand || isDrrHeaderOrTotal(brand)) return [];
+  const output: BrandBudgetMonthly[] = [];
+  let activeBrand = "";
+
+  table.rows.forEach((row) => {
+    const rawBrand = normalizeDrrBrandName(readCell(row, 0));
+    const hasNamedBrand = Boolean(rawBrand);
+    if (hasNamedBrand) activeBrand = isDrrHeaderOrTotal(rawBrand) ? "" : rawBrand;
+
+    const brand = hasNamedBrand ? activeBrand : activeBrand;
+    if (!brand || isDrrHeaderOrTotal(brand)) return;
 
     const yandexBudget = toNumber(readCell(row, 1));
     const twoGisBudget = toNumber(readCell(row, 2));
@@ -428,6 +439,15 @@ function parseDrrBudgetSheet(
     const otherBudget = toNumber(readCell(row, 4));
     const totalBudget = toNumber(readCell(row, 5));
     const budgetRows: BrandBudgetMonthly[] = [];
+
+    if (!hasNamedBrand && !yandexBudget && !twoGisBudget && !otherBudget && !totalBudget) {
+      activeBrand = "";
+      return;
+    }
+    if (!hasNamedBrand && (twoGisBudget > 0 || otherBudget > 0 || totalBudget > 0)) {
+      activeBrand = "";
+      return;
+    }
 
     if (yandexBudget > 0) {
       budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Яндекс Карты", budget: yandexBudget });
@@ -444,8 +464,9 @@ function parseDrrBudgetSheet(
       budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Другая реклама", budget: totalBudget - sourceBudgetTotal });
     }
 
-    return budgetRows;
+    output.push(...budgetRows);
   });
+  return output;
 }
 
 function normalizeBrandAliasObjects(rows: Array<Record<string, unknown>>): BrandAlias[] {
@@ -572,7 +593,7 @@ function normalizeDrrBrandName(value: string): string {
 
 function isDrrHeaderOrTotal(value: string): boolean {
   const key = normalizeBrandKey(value);
-  return key === "бренд" || key.includes("итого") || key.includes("сумма");
+  return key === "бренд" || key === "всего" || key.includes("итого") || key.includes("сумма");
 }
 
 function canonicalBranchPlatform(value: string): BrandBranchWeekly["platform"] {
