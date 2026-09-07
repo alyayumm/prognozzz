@@ -99,7 +99,7 @@ type SourceCityFilter = "Все" | "МСК" | "СПБ";
 type EditableSourceCity = Exclude<SourceCityFilter, "Все">;
 type BrandTab = "overview" | "compare" | "brand" | "free";
 type BrandViewMode = "overall" | "sources";
-type BrandCompareMetricKey = "leads" | "qualified" | "sales" | "roas" | "roasFact" | "saleCost" | "avgCheck";
+type BrandCompareMetricKey = "leads" | "qualified" | "sales" | "revenue" | "actualRevenue" | "roas" | "roasFact" | "saleCost" | "avgCheck";
 type BrandCompareChartMode = "values" | "index";
 type SourceChartBucket = {
   key: string;
@@ -112,6 +112,7 @@ type SourceMoneyTotals = {
   totals: Record<Metric, number>;
   budget: number;
   revenue: number;
+  actualRevenue: number;
   cpl: number;
   cpql: number;
   saleCost: number;
@@ -132,6 +133,7 @@ type BrandSummary = {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   leadToQualified: number;
   qualifiedToSales: number;
@@ -154,6 +156,7 @@ type BrandDashboardSummary = {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   leadToQualified: number;
   qualifiedToSales: number;
@@ -179,6 +182,7 @@ type BrandWeeklyPoint = {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   saleCost: number;
   roas: number | null;
@@ -191,6 +195,7 @@ type BrandSourceSummary = {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   roas: number | null;
   roasFact: number | null;
@@ -289,6 +294,8 @@ const brandCompareMetricOptions: Array<{ value: BrandCompareMetricKey; label: st
   { value: "leads", label: "Лиды" },
   { value: "qualified", label: "КВАЛ" },
   { value: "sales", label: "Продажи" },
+  { value: "revenue", label: "Выручка", suffix: " ₽" },
+  { value: "actualRevenue", label: "Факт. выручка", suffix: " ₽" },
   { value: "roas", label: "ROAS", suffix: "x" },
   { value: "roasFact", label: "ROAS факт", suffix: "x" },
   { value: "saleCost", label: "Стоимость продажи", lowerIsBetter: true, suffix: " ₽" },
@@ -303,6 +310,7 @@ const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
   branches: [],
   aliases: [],
   budgets: [],
+  receivables: [],
 };
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
@@ -2149,6 +2157,7 @@ function SourceEfficiencyTable({
         <span>КВАЛ</span>
         <span>Продажи</span>
         <span>Выручка</span>
+        <span>Факт. выручка</span>
         <span>Расход</span>
         <span>Лид → КВАЛ</span>
         <span>КВАЛ → продажа</span>
@@ -2168,6 +2177,7 @@ function SourceEfficiencyTable({
             <span>{formatNumber(item.qualified)}</span>
             <span>{formatNumber(item.sales)}</span>
             <span>{formatBrandCurrency(item.revenue, { allowZero: true })}</span>
+            <span>{formatBrandCurrency(item.actualRevenue, { allowZero: true })}</span>
             <span>{formatBrandCurrency(item.budget, { allowZero: true })}</span>
             <span>{item.leadToQualified}%</span>
             <span>{item.qualifiedToSales}%</span>
@@ -2425,6 +2435,7 @@ function BrandOverviewPanel({
         <BrandMetricCard label="КВАЛ" value={totals.qualified} helper={`${percent(totals.qualified, totals.leads)}% из лидов`} />
         <BrandMetricCard label="Продажи" value={totals.sales} helper={`${percent(totals.sales, totals.qualified)}% из КВАЛ`} />
         <BrandMetricCard label="Выручка" value={totals.revenue} suffix=" ₽" />
+        <BrandMetricCard label="Факт. выручка" value={totals.actualRevenue} suffix=" ₽" />
         <BrandMetricCard label="ROAS" value={totals.roas ?? 0} suffix="x" decimal />
         <BrandMetricCard label="ROAS факт" value={totals.roasFact ?? 0} suffix="x" decimal />
       </section>
@@ -2432,10 +2443,11 @@ function BrandOverviewPanel({
       <section className="brand-ranking-grid brand-ranking-grid-v2">
         <BrandTopListCard title="Топ по продажам" caption="Топ-16 выбранного периода" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.sales, "desc")} formatValue={formatNumber} />
         <BrandTopListCard title="Топ по выручке" caption="Бренды с максимальной выручкой" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.revenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
+        <BrandTopListCard title="Топ по факт. выручке" caption="Выручка без задолженности" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.actualRevenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
         <BrandTopListCard title="Цена КВАЛ" caption="Чем ниже, тем лучше" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.cpql, "asc")} formatValue={(value) => formatBrandCurrency(value)} />
         <BrandTopListCard title={`Продаж на филиал: ${platform}`} caption="Только внутри выбранной площадки" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.salesPerBranch[platform], "desc")} formatValue={(value) => formatCompactDecimal(value)} />
         <BrandTopListCard title="Топ по ROAS" caption="Выручка / бюджет ДРР" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roas ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
-        <BrandTopListCard title="Топ по ROAS факт" caption="ROAS / 2" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roasFact ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
+        <BrandTopListCard title="Топ по ROAS факт" caption="Факт. выручка / бюджет ДРР" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roasFact ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
         <BrandTopListCard title="Лид → КВАЛ" caption="Лучшая конверсия в КВАЛ" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.leadToQualified, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}%`} />
         <BrandTopListCard title="КВАЛ → продажа" caption="Лучшая конверсия в продажу" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.qualifiedToSales, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}%`} />
         <BrandTopListCard title="Средний чек" caption="Топ по среднему чеку" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.avgCheck, "desc")} formatValue={(value) => formatBrandCurrency(value)} />
@@ -2660,6 +2672,7 @@ function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSumma
         <span>КВАЛ</span>
         <span>Продажи</span>
         <span>Выручка</span>
+        <span>Факт. выручка</span>
         <span>ROAS</span>
         <span>ROAS факт</span>
         <span>CPQL</span>
@@ -2673,6 +2686,7 @@ function BrandTopTable({ summaries, platform }: { summaries: BrandDashboardSumma
           <span>{formatNumber(summary.qualified)}</span>
           <span>{formatNumber(summary.sales)}</span>
           <span>{formatNumber(summary.revenue)} ₽</span>
+          <span>{formatNumber(summary.actualRevenue)} ₽</span>
           <span>{summary.roas === null ? "—" : `${formatCompactDecimal(summary.roas)}x`}</span>
           <span>{summary.roasFact === null ? "—" : `${formatCompactDecimal(summary.roasFact)}x`}</span>
           <span>{formatNumber(Math.round(summary.cpql))} ₽</span>
@@ -2765,6 +2779,7 @@ function BrandComparePanel({ performance, sourceFilter }: { performance: BrandPe
             { label: "лида", value: formatNumber(volume.leads) },
             { label: "КВАЛ", value: formatNumber(volume.qualified) },
             { label: "выручка", value: formatBrandCurrency(volume.revenue) },
+            { label: "факт. выручка", value: formatBrandCurrency(volume.actualRevenue) },
             { label: "средний чек", value: formatBrandCurrency(volume.avgCheck) },
           ]}
         />
@@ -2907,6 +2922,7 @@ function BrandCompareDetailTable({
     { label: "ROAS факт", msk: msk.roasFact, spb: spb.roasFact, mode: "roas", higherBetter: true },
     { label: "Бюджет", msk: msk.budget, spb: spb.budget, mode: "currency", higherBetter: false },
     { label: "Выручка", msk: msk.revenue, spb: spb.revenue, mode: "currency", higherBetter: true },
+    { label: "Факт. выручка", msk: msk.actualRevenue, spb: spb.actualRevenue, mode: "currency", higherBetter: true },
   ];
 
   return (
@@ -3013,7 +3029,7 @@ function formatBrandCompareMetricValue(value: number | null, metric: BrandCompar
   if (value === null || !Number.isFinite(value)) return "—";
   if (mode === "index") return `${formatCompactDecimal(value)}%`;
   if (metric === "roas" || metric === "roasFact") return `${formatCompactDecimal(value)}x`;
-  if (metric === "saleCost" || metric === "avgCheck") return formatBrandCurrency(value, options);
+  if (metric === "revenue" || metric === "actualRevenue" || metric === "saleCost" || metric === "avgCheck") return formatBrandCurrency(value, options);
   return formatNumber(Math.round(value));
 }
 
@@ -3157,6 +3173,7 @@ function BrandWeeklyBarsV2({ summary }: { summary: BrandDashboardSummary }) {
     qualified: 0,
     sales: 0,
     revenue: 0,
+    actualRevenue: 0,
     budget: 0,
     saleCost: 0,
     roas: null,
@@ -6242,6 +6259,7 @@ function buildBrandSummaries(records: BrandAnalyticsRecord[]): BrandSummary[] {
       const qualified = group.reduce((sum, record) => sum + record.qualified, 0);
       const sales = group.reduce((sum, record) => sum + record.sales, 0);
       const revenue = group.reduce((sum, record) => sum + record.revenue, 0);
+      const actualRevenue = group.reduce((sum, record) => sum + record.actualRevenue, 0);
       const budget = group.reduce((sum, record) => sum + record.budget, 0);
       const monthly = combineBrandMonthly(group);
       return {
@@ -6253,6 +6271,7 @@ function buildBrandSummaries(records: BrandAnalyticsRecord[]): BrandSummary[] {
         qualified,
         sales,
         revenue,
+        actualRevenue,
         budget,
         leadToQualified: percent(qualified, leads),
         qualifiedToSales: percent(sales, qualified),
@@ -6260,7 +6279,7 @@ function buildBrandSummaries(records: BrandAnalyticsRecord[]): BrandSummary[] {
         cpql: qualified > 0 ? budget / qualified : 0,
         saleCost: sales > 0 ? budget / sales : 0,
         roas: budget > 0 ? revenue / budget : averageNullable(group.map((record) => record.roas)),
-        roasFact: budget > 0 ? (revenue / budget) / 2 : averageNullable(group.map((record) => record.roasFact)),
+        roasFact: budget > 0 ? actualRevenue / budget : averageNullable(group.map((record) => record.roasFact)),
         avgCheck: sales > 0 ? revenue / sales : averagePositive(group.map((record) => record.avgCheck)),
         monthly,
       };
@@ -6393,6 +6412,7 @@ function buildBrandDashboardSummaries(
         qualified: totals.qualified,
         sales: totals.sales,
         revenue: totals.revenue,
+        actualRevenue: totals.actualRevenue,
         budget: totals.budget,
         leadToQualified: totals.leadToQualified,
         qualifiedToSales: totals.qualifiedToSales,
@@ -6423,12 +6443,14 @@ function aggregateBrandPerformance(rows: BrandPerformanceWeekly[]) {
   const qualified = rows.reduce((sum, row) => sum + row.qualified, 0);
   const sales = rows.reduce((sum, row) => sum + row.sales, 0);
   const revenue = rows.reduce((sum, row) => sum + row.revenue, 0);
+  const actualRevenue = rows.reduce((sum, row) => sum + row.actualRevenue, 0);
   const budget = rows.reduce((sum, row) => sum + row.budget, 0);
   return {
     leads,
     qualified,
     sales,
     revenue,
+    actualRevenue,
     budget,
     leadToQualified: percent(qualified, leads),
     qualifiedToSales: percent(sales, qualified),
@@ -6436,7 +6458,7 @@ function aggregateBrandPerformance(rows: BrandPerformanceWeekly[]) {
     cpql: qualified > 0 ? budget / qualified : 0,
     saleCost: sales > 0 ? budget / sales : 0,
     roas: budget > 0 ? revenue / budget : averageNullable(rows.map((row) => row.roas)),
-    roasFact: budget > 0 ? (revenue / budget) / 2 : averageNullable(rows.map((row) => row.roasFact)),
+    roasFact: budget > 0 ? actualRevenue / budget : averageNullable(rows.map((row) => row.roasFact)),
     avgCheck: sales > 0 ? revenue / sales : averagePositive(rows.map((row) => row.avgCheck)),
   };
 }
@@ -6446,15 +6468,17 @@ function buildBrandTotals(summaries: BrandDashboardSummary[]) {
   const qualified = summaries.reduce((sum, summary) => sum + summary.qualified, 0);
   const sales = summaries.reduce((sum, summary) => sum + summary.sales, 0);
   const revenue = summaries.reduce((sum, summary) => sum + summary.revenue, 0);
+  const actualRevenue = summaries.reduce((sum, summary) => sum + summary.actualRevenue, 0);
   const budget = summaries.reduce((sum, summary) => sum + summary.budget, 0);
   return {
     leads,
     qualified,
     sales,
     revenue,
+    actualRevenue,
     budget,
     roas: budget > 0 ? revenue / budget : null,
-    roasFact: budget > 0 ? (revenue / budget) / 2 : null,
+    roasFact: budget > 0 ? actualRevenue / budget : null,
   };
 }
 
@@ -6474,6 +6498,7 @@ function buildBrandWeeklyPoints(rows: BrandPerformanceWeekly[]): BrandWeeklyPoin
         qualified: totals.qualified,
         sales: totals.sales,
         revenue: totals.revenue,
+        actualRevenue: totals.actualRevenue,
         budget: totals.budget,
         saleCost: totals.saleCost,
         roas: totals.roas,
@@ -6497,6 +6522,7 @@ function buildBrandSourceBreakdown(rows: BrandPerformanceWeekly[]): BrandSourceS
         qualified: totals.qualified,
         sales: totals.sales,
         revenue: totals.revenue,
+        actualRevenue: totals.actualRevenue,
         budget: totals.budget,
         roas: totals.roas,
         roasFact: totals.roasFact,
@@ -6535,6 +6561,7 @@ function attachBrandTopBadges(summaries: BrandDashboardSummary[]): BrandDashboar
   }> = [
     { label: "продажи", direction: "desc", getValue: (summary) => summary.sales, format: formatNumber },
     { label: "выручка", direction: "desc", getValue: (summary) => summary.revenue, format: (value) => `${formatNumber(value)} ₽` },
+    { label: "факт. выручка", direction: "desc", getValue: (summary) => summary.actualRevenue, format: (value) => `${formatNumber(value)} ₽` },
     { label: "ROAS", direction: "desc", getValue: (summary) => summary.roas ?? 0, format: (value) => `${formatCompactDecimal(value)}x` },
     { label: "ROAS факт", direction: "desc", getValue: (summary) => summary.roasFact ?? 0, format: (value) => `${formatCompactDecimal(value)}x` },
     { label: "средний чек", direction: "desc", getValue: (summary) => summary.avgCheck, format: (value) => `${formatNumber(value)} ₽` },
@@ -7109,24 +7136,28 @@ function getSourceMoneyTotalsFromDaily(
     const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
     const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
     const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);
+    const performanceActualRevenue = performanceSourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
     const performanceBudget = performanceSourceRows.reduce((sum, row) => sum + row.budget, 0);
     const drrBudget = budgetRows
       .filter((row) => sourceNameEquals(row.source, source))
       .reduce((sum, row) => sum + row.budget, 0);
     const revenue = commentRevenue > 0 ? commentRevenue : performanceRevenue;
+    const actualRevenue = performanceActualRevenue > 0 ? performanceActualRevenue : revenue;
     const budget = commentBudget > 0 ? commentBudget : drrBudget > 0 ? drrBudget : performanceBudget;
     const roas = budget > 0 ? revenue / budget : null;
+    const roasFact = budget > 0 ? actualRevenue / budget : null;
 
     return {
       source,
       totals,
       budget,
       revenue,
+      actualRevenue,
       cpl: totals["Лиды"] > 0 && budget > 0 ? budget / totals["Лиды"] : 0,
       cpql: totals["Квалы"] > 0 && budget > 0 ? budget / totals["Квалы"] : 0,
       saleCost: totals["Продажи"] > 0 && budget > 0 ? budget / totals["Продажи"] : 0,
       roas,
-      roasFact: roas === null ? null : roas / 2,
+      roasFact,
     };
   });
 }
@@ -7204,17 +7235,20 @@ function getSourceMoneyTotalsFromBrandPerformance(rows: BrandPerformanceWeekly[]
     }, {} as Record<Metric, number>);
     const budget = sourceRows.reduce((sum, row) => sum + row.budget, 0);
     const revenue = sourceRows.reduce((sum, row) => sum + row.revenue, 0);
+    const actualRevenue = sourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
     const roas = budget > 0 ? revenue / budget : null;
+    const roasFact = budget > 0 ? actualRevenue / budget : null;
     return {
       source,
       totals,
       budget,
       revenue,
+      actualRevenue,
       cpl: totals["Лиды"] > 0 ? budget / totals["Лиды"] : 0,
       cpql: totals["Квалы"] > 0 ? budget / totals["Квалы"] : 0,
       saleCost: totals["Продажи"] > 0 ? budget / totals["Продажи"] : 0,
       roas,
-      roasFact: roas === null ? null : roas / 2,
+      roasFact,
     };
   });
 }

@@ -19,6 +19,7 @@ export type BrandAnalyticsRecord = {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   leadToQualified: number;
   qualifiedToSales: number;
@@ -37,10 +38,13 @@ export type BrandAnalyticsBundle = {
   branches: BrandBranchWeekly[];
   aliases: BrandAlias[];
   budgets: BrandBudgetMonthly[];
+  receivables: RevenueReceivableMonthly[];
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
 const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
+const receivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
+const receivablesSummarySheet = "Август Итог";
 const legacyBrandSheets: BrandCity[] = ["МСК", "СПБ"];
 const brandServiceSheets = {
   performance: "Brand_Performance_Weekly",
@@ -98,9 +102,20 @@ export type BrandBudgetMonthly = {
   budget: number;
 };
 
+export type RevenueReceivableMonthly = {
+  monthKey: string;
+  label: string;
+  debtAmount: number;
+  returnedAmount: number;
+  badAmount: number;
+  outstandingAmount: number;
+  debtCount: number;
+  badCount: number;
+};
+
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
-  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets] = await Promise.all([
+  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables] = await Promise.all([
     loadLegacyBrandRecords(),
     loadOptionalBrandGvizSheet(brandServiceSheets.performance).then(parseBrandPerformanceSheet).catch(() => []),
     loadPublicBrandPerformanceCsv().catch(() => []),
@@ -108,6 +123,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     loadOptionalBrandGvizSheet(brandServiceSheets.aliases).then(parseBrandAliasesSheet).catch(() => []),
     loadDrrBudgetRows().catch(() => []),
     loadPublicBrandBudgetCsv().catch(() => []),
+    loadGvizSheet(receivablesSpreadsheetId, receivablesSummarySheet, "select B,C,D,E,F,G,H,I,J,K").then(parseReceivableMonthlySheet).catch(() => []),
   ]);
 
   const appsAliases = normalizeBrandAliasObjects(appsScriptSnapshot?.aliases ?? []);
@@ -131,9 +147,9 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
   return {
     records: legacyRecords.map((record) => {
       const roas = record.roas;
-      return { ...record, brand: canonicalBrandName(record.brand, aliases), roasFact: roas === null ? null : roas / 2 };
+      return { ...record, brand: canonicalBrandName(record.brand, aliases), roasFact: roas };
     }),
-    performance: applyBrandBudgets(canonicalPerformance, canonicalBudgets),
+    performance: applyBrandBudgets(applyActualRevenueFromReceivables(canonicalPerformance, receivables), canonicalBudgets),
     branches: branches.length
       ? branches.map((record) => ({
         ...record,
@@ -143,6 +159,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
       : importedBrandBranches,
     aliases,
     budgets: canonicalBudgets,
+    receivables,
   };
 }
 
@@ -330,6 +347,7 @@ function parseLegacyBrandSheet(table: GvizTable, fallbackCity: BrandCity): Brand
       qualified: toNumber(readCell(row, 4)),
       sales: toNumber(readCell(row, 5)),
       revenue: toNumber(readCell(row, 6)),
+      actualRevenue: toNumber(readCell(row, 6)),
       budget: toNumber(readCell(row, 7)),
       leadToQualified: toNumber(readCell(row, 8)),
       qualifiedToSales: toNumber(readCell(row, 9)),
@@ -337,7 +355,7 @@ function parseLegacyBrandSheet(table: GvizTable, fallbackCity: BrandCity): Brand
       cpql: toNumber(readCell(row, 11)),
       saleCost: toNumber(readCell(row, 12)),
       roas,
-      roasFact: roas === null ? null : roas / 2,
+      roasFact: roas,
       avgCheck: toNumber(readCell(row, 14)),
       monthly,
     }];
@@ -359,9 +377,18 @@ function normalizeBrandPerformanceObjects(rows: Array<Record<string, unknown>>):
     const qualified = toNumber(stringValue(row.qualified || row["квал"] || row["квалы"]));
     const sales = toNumber(stringValue(row.sales || row["продажи"]));
     const revenue = toNumber(stringValue(row.revenue || row["выручка"]));
+    const actualRevenueFromRow = toNumber(stringValue(
+      row.actualRevenue
+      || row.factRevenue
+      || row["факт выручка"]
+      || row["факт. выручка"]
+      || row["выручка факт"]
+      || row["фактическая выручка"],
+    ));
+    const actualRevenue = actualRevenueFromRow > 0 || revenue <= 0 ? actualRevenueFromRow : revenue;
     const budget = toNumber(stringValue(row.budget || row["бюджет"]));
     const roas = toNullableNumber(stringValue(row.roas || row["roas"])) ?? (budget > 0 ? revenue / budget : null);
-    const roasFact = toNullableNumber(stringValue(row.roasFact || row["roas факт"] || row["ROAS факт"])) ?? (roas === null ? null : roas / 2);
+    const roasFact = toNullableNumber(stringValue(row.roasFact || row["roas факт"] || row["ROAS факт"])) ?? (budget > 0 ? actualRevenue / budget : roas);
     const source = canonicalSourceName(stringValue(row.source || row["источник"]) || "Все источники");
     const id = stringValue(row.id) || `${weekStart}-${city}-${brand}-${source}`;
 
@@ -377,6 +404,7 @@ function normalizeBrandPerformanceObjects(rows: Array<Record<string, unknown>>):
       qualified,
       sales,
       revenue,
+      actualRevenue,
       budget,
       roas,
       roasFact,
@@ -467,6 +495,95 @@ function parseDrrBudgetSheet(
     output.push(...budgetRows);
   });
   return output;
+}
+
+function parseReceivableMonthlySheet(table: GvizTable): RevenueReceivableMonthly[] {
+  const monthIndexByName: Record<string, number> = {
+    январь: 1,
+    февраль: 2,
+    март: 3,
+    апрель: 4,
+    май: 5,
+    июнь: 6,
+    июль: 7,
+    август: 8,
+    сентябрь: 9,
+    октябрь: 10,
+    ноябрь: 11,
+    декабрь: 12,
+  };
+  const byMonth = new Map<string, RevenueReceivableMonthly>();
+  let lastMonthKey = "";
+
+  table.rows.forEach((row) => {
+    const label = readCell(row, 0).trim();
+    const labelKey = label.toLowerCase().replace(/ё/g, "е");
+    if (!label || labelKey.includes("итого")) return;
+
+    const monthIndex = monthIndexByName[labelKey];
+    if (!monthIndex) return;
+
+    const date = parseRuDate(readCell(row, 1));
+    let year = date ? (date.month < monthIndex ? date.year - 1 : date.year) : 0;
+    if (!year && lastMonthKey) {
+      const [lastYear, lastMonth] = lastMonthKey.split("-").map(Number);
+      year = monthIndex > lastMonth ? lastYear : lastYear + 1;
+    }
+    if (!year) return;
+
+    const monthKey = `${year}-${String(monthIndex).padStart(2, "0")}`;
+    const badAmount = toNumber(readCell(row, 8));
+    const outstandingAmount = toNumber(readCell(row, 9));
+    const debtAmount = toNumber(readCell(row, 5)) || badAmount + outstandingAmount;
+
+    byMonth.set(monthKey, {
+      monthKey,
+      label,
+      debtAmount,
+      returnedAmount: toNumber(readCell(row, 6)),
+      badAmount,
+      outstandingAmount,
+      debtCount: toNumber(readCell(row, 3)),
+      badCount: toNumber(readCell(row, 7)),
+    });
+    lastMonthKey = monthKey;
+  });
+
+  return [...byMonth.values()].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
+function parseRuDate(value: string): { day: number; month: number; year: number } | null {
+  const match = value.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+  if (!match) return null;
+  return {
+    day: Number(match[1]),
+    month: Number(match[2]),
+    year: Number(match[3]),
+  };
+}
+
+function applyActualRevenueFromReceivables(
+  performance: BrandPerformanceWeekly[],
+  receivables: RevenueReceivableMonthly[],
+): BrandPerformanceWeekly[] {
+  const receivableByMonth = new Map(receivables.map((row) => [row.monthKey, row]));
+  const revenueByMonth = new Map<string, number>();
+  performance.forEach((row) => {
+    revenueByMonth.set(row.monthKey, (revenueByMonth.get(row.monthKey) ?? 0) + Math.max(0, row.revenue));
+  });
+
+  return performance.map((row) => {
+    const monthRevenue = revenueByMonth.get(row.monthKey) ?? 0;
+    const receivable = receivableByMonth.get(row.monthKey);
+    const baseActualRevenue = Number.isFinite(row.actualRevenue) ? row.actualRevenue : row.revenue;
+    if (!receivable || monthRevenue <= 0 || row.revenue <= 0) {
+      return { ...row, actualRevenue: Math.max(0, baseActualRevenue) };
+    }
+
+    const debtShare = receivable.debtAmount * (row.revenue / monthRevenue);
+    const actualRevenue = Math.max(0, row.revenue - debtShare);
+    return { ...row, actualRevenue: roundMoney(actualRevenue) };
+  });
 }
 
 function normalizeBrandAliasObjects(rows: Array<Record<string, unknown>>): BrandAlias[] {
@@ -678,6 +795,7 @@ function applyBrandBudgets(
       qualified: 0,
       sales: 0,
       revenue: 0,
+      actualRevenue: 0,
       budget: budget.budget,
       roas: null,
       roasFact: null,
@@ -725,12 +843,15 @@ function allocateBudgetAcrossRows(rows: BrandPerformanceWeekly[], budget: number
 
 function recalculateBrandBudgetKpis(row: BrandPerformanceWeekly, forceDrrBudget: boolean): BrandPerformanceWeekly {
   const budget = Number.isFinite(row.budget) ? row.budget : 0;
+  const actualRevenue = Number.isFinite(row.actualRevenue) ? Math.max(0, row.actualRevenue) : Math.max(0, row.revenue);
   const roas = budget > 0 ? row.revenue / budget : (forceDrrBudget ? null : row.roas);
+  const roasFact = budget > 0 ? actualRevenue / budget : (forceDrrBudget ? null : row.roasFact);
   return {
     ...row,
     budget,
+    actualRevenue,
     roas,
-    roasFact: roas === null ? null : roas / 2,
+    roasFact,
     cpl: row.leads > 0 && budget > 0 ? budget / row.leads : 0,
     cpql: row.qualified > 0 && budget > 0 ? budget / row.qualified : 0,
     saleCost: row.sales > 0 && budget > 0 ? budget / row.sales : 0,
@@ -773,6 +894,10 @@ function toNullableNumber(value: string): number | null {
   return toNumber(value);
 }
 
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export function legacyBrandRecordsToPerformance(records: BrandAnalyticsRecord[]): BrandPerformanceWeekly[] {
   return records.flatMap((record) => {
     const salesTotal = record.monthly.reduce((sum, point) => sum + point.sales, 0);
@@ -793,9 +918,10 @@ export function legacyBrandRecordsToPerformance(records: BrandAnalyticsRecord[])
         qualified: Math.round(record.qualified * ratio),
         sales: point.sales,
         revenue: Math.round(record.revenue * ratio),
+        actualRevenue: Math.round(record.actualRevenue * ratio),
         budget: Math.round(record.budget * ratio),
         roas: point.roas,
-        roasFact: point.roas === null ? null : point.roas / 2,
+        roasFact: point.roas,
         cpl: record.cpl,
         cpql: record.cpql,
         saleCost: record.saleCost,

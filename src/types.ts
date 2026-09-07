@@ -125,6 +125,7 @@ export interface BrandPerformanceWeekly {
   qualified: number;
   sales: number;
   revenue: number;
+  actualRevenue: number;
   budget: number;
   roas: number | null;
   roasFact: number | null;

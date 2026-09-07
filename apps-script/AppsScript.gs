@@ -107,6 +107,7 @@ const HEADERS = {
     'saleCost',
     'avgCheck',
     'updatedAt',
+    'actualRevenue',
   ],
   Brand_Branches_Weekly: [
     'id',
@@ -551,8 +552,10 @@ function brandPerformanceRow_(record) {
   const qualified = Number(record.qualified || record.kval || record.ql || 0);
   const sales = Number(record.sales || 0);
   const revenue = Number(record.revenue || 0);
+  const actualRevenue = Number(record.actualRevenue || record.factRevenue || revenue || 0);
   const budget = Number(record.budget || 0);
   const roas = Number(record.roas || (budget > 0 ? revenue / budget : 0));
+  const roasFact = Number(record.roasFact || (budget > 0 ? actualRevenue / budget : 0));
   return [
     record.id || [weekStart, record.city, record.brand, record.source || 'Все источники'].join('|'),
     weekStart,
@@ -567,12 +570,13 @@ function brandPerformanceRow_(record) {
     revenue,
     budget,
     roas,
-    Number(record.roasFact || (roas > 0 ? roas / 2 : 0)),
+    roasFact,
     Number(record.cpl || (leads > 0 ? budget / leads : 0)),
     Number(record.cpql || (qualified > 0 ? budget / qualified : 0)),
     Number(record.saleCost || (sales > 0 ? budget / sales : 0)),
     Number(record.avgCheck || (sales > 0 ? revenue / sales : 0)),
     new Date(),
+    actualRevenue,
   ];
 }
 
