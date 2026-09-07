@@ -7,6 +7,7 @@ import json
 import math
 import re
 import unicodedata
+import urllib.request
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ import pandas as pd
 
 
 DEFAULT_DOWNLOADS = Path.home() / "Downloads"
+DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbxQSYUaFmhVdmZ1JKruN2AS0hV7TidbKaXAKXEx0REXmNmvYqIq39YniEyrY8Kes2F7fA/exec"
 FILE_RE = re.compile(r"project_285979_report-24_(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})(?: \(\d+\))?\.xlsx$", re.I)
 TARGET_FUNNELS = {"МСК АШ": "МСК", "СПБ АШ": "СПБ"}
 METRIC_COLUMNS = {
@@ -470,6 +472,32 @@ def print_summary(summary: dict[str, Any]) -> None:
                 print(f"  {funnel}: leads={values['Лиды']}, qualified={values['Квалы']}, sales={values['Продажи']}")
 
 
+def post_to_apps_script(endpoint: str, password: str, rows: list[dict[str, Any]], chunk_size: int) -> int:
+    updated = 0
+    month_keys = sorted({row["month"] for row in rows})
+    for month_key in month_keys:
+        month_rows = [row for row in rows if row["month"] == month_key]
+        for start in range(0, len(month_rows), chunk_size):
+            chunk = month_rows[start : start + chunk_size]
+            body = json.dumps(
+                {"action": "upsertDailyValues", "password": password, "payload": {"monthKey": month_key, "records": chunk}},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            request = urllib.request.Request(
+                endpoint,
+                data=body,
+                headers={"Content-Type": "text/plain;charset=utf-8"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=90) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not payload.get("ok"):
+                raise RuntimeError(payload.get("error") or "Apps Script returned an error")
+            data = payload.get("data") or {}
+            updated += int(data.get("updated", len(chunk)))
+    return updated
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare Roistat report-24 weekly source rows for Data_Daily.")
     parser.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS)
@@ -480,6 +508,10 @@ def main() -> int:
     parser.add_argument("--sheet-csv", type=Path, default=Path("public/data/source-daily-report-24.csv"))
     parser.add_argument("--extra-file", type=Path, action="append", default=[])
     parser.add_argument("--skip-manual-avito", action="store_true")
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--password", default="")
+    parser.add_argument("--chunk-size", type=int, default=150)
+    parser.add_argument("--upload", action="store_true")
     args = parser.parse_args()
 
     files = discover_files(args.downloads, args.start_month, args.end_month)
@@ -502,6 +534,11 @@ def main() -> int:
     print(f"Saved JSON: {args.out}")
     print(f"Saved CSV: {args.csv}")
     print(f"Saved sheet CSV: {args.sheet_csv}")
+    if args.upload:
+        if not args.password:
+            raise SystemExit("--password is required with --upload")
+        updated = post_to_apps_script(args.endpoint, args.password, rows, args.chunk_size)
+        print(f"Uploaded records: {updated}")
     return 0 if rows else 1
 
 
