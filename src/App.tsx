@@ -676,7 +676,7 @@ export default function App() {
     }
 
     setIsSavingDaily(true);
-    setSavedMessage(kind === "sources" ? "Загружаю Roistat: отчет тест6.04..." : "Загружаю Roistat: отчет по домену...");
+    setSavedMessage(kind === "sources" ? "Загружаю Roistat: отчет тест6.04 за выбранный период..." : "Загружаю Roistat: отчет по домену за выбранный период...");
     try {
       const action = kind === "sources" ? "syncRoistatSources" : "syncRoistatBrands";
       const result = await callReportApi<RoistatSyncResult>(action, { fromDate, toDate }, writePassword);
@@ -4213,9 +4213,10 @@ function SourceAdminPanel({
   isSavingDaily: boolean;
 }) {
   const firstDate = monthDates[0] ?? `${selectedMonthConfig.monthKey}-01`;
+  const lastDate = monthDates[monthDates.length - 1] ?? firstDate;
   const [selectedDate, setSelectedDate] = useState(firstDate);
   const [syncFromDate, setSyncFromDate] = useState(firstDate);
-  const [syncToDate, setSyncToDate] = useState(firstDate);
+  const [syncToDate, setSyncToDate] = useState(lastDate);
   const [sourceCity, setSourceCity] = useState<EditableSourceCity>("МСК");
   const [newSourceName, setNewSourceName] = useState("");
   const activeSources = useMemo(() => getActiveLeadSources(records), [records]);
@@ -4226,6 +4227,11 @@ function SourceAdminPanel({
       setSelectedDate(firstDate);
     }
   }, [firstDate, monthDates, selectedDate]);
+
+  useEffect(() => {
+    setSyncFromDate(firstDate);
+    setSyncToDate(lastDate);
+  }, [firstDate, lastDate, selectedMonthConfig.monthKey]);
 
   useEffect(() => {
     setDraft(createSourceDraft(records, selectedDate, activeSources, sourceCity));
@@ -4292,12 +4298,6 @@ function SourceAdminPanel({
           </button>
           <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
             Поля Roistat
-          </button>
-          <button className="ghost-button" type="button" onClick={() => syncRoistat("sources", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
-            Тест 06.04 источники
-          </button>
-          <button className="ghost-button" type="button" onClick={() => syncRoistat("brands", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
-            Тест 06.04 домены
           </button>
         </div>
       </div>
