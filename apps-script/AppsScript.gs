@@ -1146,7 +1146,7 @@ function getRoistatFieldMap_(kind) {
 
   const metricMap = {
     leads: roistatFieldOverride_('ROISTAT_METRIC_LEADS') || selectRoistatField_(metricsDictionary, ['leads', 'lead_count', 'leads_count'], ['лид', 'заявк'], 'leads'),
-    qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'ql', 'kval'], ['квал', 'целев'], ''),
+    qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['ql', 'qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'kval'], ['квал', 'целев'], 'ql'),
     sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['sales', 'orders', 'sales_count', 'paid_orders'], ['продаж', 'сделк'], 'sales'),
     revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], ''),
     budget: roistatFieldOverride_('ROISTAT_METRIC_BUDGET') || selectRoistatField_(metricsDictionary, ['marketing_cost', 'cost', 'expenses', 'ad_cost', 'advertising_cost', 'budget'], ['маркетинг', 'расход', 'затрат', 'бюджет', 'cost'], 'marketing_cost'),
