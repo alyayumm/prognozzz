@@ -143,6 +143,17 @@ type ManagerPsMetrics = {
   abDeals: number;
 };
 
+const staticPsMetricsByManager: Record<string, ManagerPsMetrics> = {
+  "Руднев Денис": { vipDeals: 1, distantDeals: 0, paidDeals: 1, orderCount: 2, revenue: 118490, abDeals: 0 },
+  "Драбо Максим": { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 0, revenue: 0, abDeals: 0 },
+  "Борисова Алена": { vipDeals: 4, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 642980, abDeals: 2 },
+  "Шевелев Иван": { vipDeals: 2, distantDeals: 0, paidDeals: 3, orderCount: 4, revenue: 224500, abDeals: 0 },
+  "Садовников Алексей": { vipDeals: 2, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 491490, abDeals: 4 },
+  "Сергеева Софья": { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 3, revenue: 184000, abDeals: 0 },
+  "Смирнов Никита": { vipDeals: 1, distantDeals: 0, paidDeals: 0, orderCount: 2, revenue: 122500, abDeals: 0 },
+  "Антиповский Евгений": { vipDeals: 3, distantDeals: 0, paidDeals: 5, orderCount: 10, revenue: 455990, abDeals: 0 },
+};
+
 const monthKey = "2026-09";
 const monthLabel = "Сентябрь 2026";
 const monthYear = 2026;
@@ -200,9 +211,9 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
 
 export async function loadSalesDepartmentSnapshot(): Promise<SalesDepartmentSnapshot> {
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot();
-  if (serviceSnapshot) return serviceSnapshot;
+  if (serviceSnapshot) return applySalesDepartmentPsSnapshot(serviceSnapshot);
 
-  return loadSalesDepartmentGvizSnapshot();
+  return applySalesDepartmentPsSnapshot(await loadSalesDepartmentGvizSnapshot());
 }
 
 async function loadSalesDepartmentServiceSnapshot(): Promise<SalesDepartmentSnapshot | null> {
@@ -412,6 +423,40 @@ function loadGviz(
     script.src = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?${params.toString()}`;
     document.head.appendChild(script);
   });
+}
+
+function applySalesDepartmentPsSnapshot(snapshot: SalesDepartmentSnapshot): SalesDepartmentSnapshot {
+  if (snapshot.monthKey !== monthKey) return snapshot;
+
+  const managers = snapshot.managers.map((manager) => {
+    const fallback = staticPsMetricsByManager[manager.name];
+    if (!fallback) return manager;
+
+    const orderCount = manager.orderCount ?? fallback.orderCount;
+    const revenue = manager.revenue ?? fallback.revenue;
+
+    return {
+      ...manager,
+      vipDeals: manager.vipDeals ?? fallback.vipDeals,
+      distantDeals: manager.distantDeals ?? fallback.distantDeals,
+      paidDeals: manager.paidDeals ?? fallback.paidDeals,
+      orderCount,
+      revenue,
+      abDeals: Math.max(manager.abDeals, fallback.abDeals),
+      avgCheck: revenue !== null && orderCount && orderCount > 0 ? revenue / orderCount : manager.avgCheck,
+    };
+  });
+
+  const warnings = snapshot.warnings
+    .filter((warning) => !warning.includes("Выгрузка PS") && !warning.includes("VIP, дистант"))
+    .concat("VIP, дистант, выручка и средний чек добавлены из PS-снимка от 08.09.2026.");
+
+  return {
+    ...snapshot,
+    managers,
+    totals: buildTotals(managers),
+    warnings,
+  };
 }
 
 function parsePlanSheet(table: GvizTable): Map<string, ManagerPlan> {
