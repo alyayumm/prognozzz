@@ -3799,9 +3799,15 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .brand-kpi-card strong {
   color: var(--navy);
-  font-size: 24px;
-  line-height: 1;
+  font-size: clamp(18px, 1.25vw, 22px);
+  line-height: 1.08;
   font-weight: 950;
+  letter-spacing: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.brand-kpi-grid-wide .brand-kpi-card strong {
+  font-size: clamp(17px, 1.08vw, 20px);
 }
 .brand-kpi-card small {
   color: var(--muted);
