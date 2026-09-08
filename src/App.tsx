@@ -36,6 +36,15 @@ import {
   type BrandBudgetMonthly,
   type BrandCity,
 } from "./api/brandAnalyticsApi";
+import {
+  dakoroManagers,
+  loadSalesDepartmentSnapshot,
+  salesDepartmentRops,
+  type SalesDayPoint,
+  type SalesDepartmentRop,
+  type SalesDepartmentSnapshot,
+  type SalesManagerMetrics,
+} from "./api/salesDepartmentApi";
 import type { CSSProperties, ReactNode } from "react";
 import { buildAttentionItems } from "./lib/insights";
 import {
@@ -882,11 +891,7 @@ export default function App() {
               />
             )}
             {mode === "leadDaily" && (
-              <LeadsWeekendReport
-                records={records}
-                monthConfigs={monthConfigs}
-                selectedScope={selectedScope}
-              />
+              <SalesDepartmentDashboard selectedMonthConfig={selectedMonthConfig} />
             )}
             {mode === "week" && activeWeek && (
               <WeekDashboard
@@ -1062,8 +1067,8 @@ function Sidebar({
       <button className={mode === "leadDaily" ? "designer-report-button active" : "designer-report-button"} type="button" onClick={() => setMode("leadDaily")}>
         <TrendingUp size={16} />
         <span>
-          <strong>Лиды по дням</strong>
-          <small>дизайнерский отчет</small>
+          <strong>Отдел продаж</strong>
+          <small>внутренний отчет</small>
         </span>
       </button>
     </aside>
@@ -1386,6 +1391,422 @@ function MonthDailyDashboard({
           <DailyForecastChart key={chart.metric} data={chart} highlightedEventId={highlightedEventId} />
         ))}
       </section>
+    </div>
+  );
+}
+
+function SalesDepartmentDashboard({
+  selectedMonthConfig,
+}: {
+  selectedMonthConfig: MonthConfig;
+}) {
+  const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
+  const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
+
+  useEffect(() => {
+    let ignore = false;
+    setLoadState("loading");
+    loadSalesDepartmentSnapshot()
+      .then((nextSnapshot) => {
+        if (ignore) return;
+        setSnapshot(nextSnapshot);
+        setLoadState("ready");
+      })
+      .catch(() => {
+        if (ignore) return;
+        setSnapshot(null);
+        setLoadState("error");
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const managers = snapshot?.managers ?? [];
+  const totals = snapshot?.totals;
+  const selectedManager = selectedManagerName === "team"
+    ? null
+    : managers.find((manager) => manager.name === selectedManagerName) ?? null;
+  const topManagers = [...managers].sort((a, b) => b.totalTraffic - a.totalTraffic);
+  const maxManagerTraffic = Math.max(1, ...managers.map((manager) => manager.totalTraffic));
+  const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
+  const summaryStatus: SummaryStatus = loadState === "ready"
+    ? { label: "live", tone: snapshot?.warnings.length ? "warning" : "good" }
+    : loadState === "error"
+      ? { label: "нет доступа", tone: "danger" }
+      : { label: "загрузка", tone: "neutral" };
+
+  return (
+    <div className="page-stack sales-department-dashboard">
+      <ExecutiveSummary
+        status={summaryStatus}
+        eyebrow={monthLabel}
+        title="Отдел продаж"
+        subtitle="Дакоро: планы менеджеров, факт из общей динамики, категории продаж из PS и два прогноза по месяцу."
+        facts={[
+          `РОП: ${activeRop}`,
+          `Менеджеров: ${managers.length || dakoroManagers.length}`,
+          snapshot ? `Рабочих дней: ${snapshot.workingDaysPassed} из ${snapshot.workingDaysInMonth}` : "Рабочие дни: расчет после загрузки",
+          snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем таблицу",
+        ]}
+      />
+
+      <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
+        {salesDepartmentRops.map((rop) => (
+          <button
+            key={rop}
+            type="button"
+            className={activeRop === rop ? "active" : ""}
+            disabled={rop !== "Дакоро"}
+            onClick={() => setActiveRop(rop)}
+          >
+            <span>{rop}</span>
+            <small>{rop === "Дакоро" ? "собирается сейчас" : "следующий этап"}</small>
+          </button>
+        ))}
+      </section>
+
+      {!snapshot && (
+        <section className={`sales-empty-state ${loadState}`}>
+          <strong>{loadState === "error" ? "Не удалось загрузить отдел продаж" : "Собираю отдел продаж из таблиц"}</strong>
+          <span>{loadState === "error" ? "Проверь доступ к Google Sheets или попробуй обновить страницу." : "Планы, динамика и PS подтягиваются отдельными узкими запросами."}</span>
+        </section>
+      )}
+
+      {snapshot && totals && (
+        <>
+          <section className="sales-kpi-grid" aria-label="Ключевые показатели отдела продаж">
+            <SalesKpiCard
+              icon={<TrendingUp />}
+              label="Взяли лидов"
+              value={formatNumber(totals.totalTraffic)}
+              helper={`Квалы: ${formatNumber(totals.factQualified)} · ${formatNullablePercent(totals.conversionToQualified)} из лидов`}
+              plan={`План ${formatNumber(totals.planTraffic)}`}
+              progress={percent(totals.totalTraffic, totals.planTraffic)}
+            />
+            <SalesKpiCard
+              icon={<Target />}
+              label="Договоры"
+              value={formatNumber(totals.factDeals)}
+              helper={`Динамический ${formatNumber(totals.forecastDeals)} · линейный ${formatNumber(totals.linearDealsForecast)}`}
+              plan={`План ${formatNumber(totals.planDeals)}`}
+              progress={totals.dealPlanCompletion}
+              tone="red"
+            />
+            <SalesKpiCard
+              icon={<CheckCircle2 />}
+              label="VIP"
+              value={formatSalesNumber(totals.vipDeals)}
+              helper={totals.vipDeals === null ? "ждем выгрузку PS" : `План VIP ${formatNumber(totals.planVip)}`}
+              plan={`A+B ${formatNumber(totals.abDeals)}`}
+              progress={totals.vipDeals === null ? 0 : percent(totals.vipDeals, totals.planVip)}
+            />
+            <SalesKpiCard
+              icon={<BarChart3 />}
+              label="Средний чек"
+              value={formatNullableCurrency(totals.avgCheck)}
+              helper={totals.revenue === null ? "PS пока не загрузилась" : `Выручка PS ${formatNullableCurrency(totals.revenue)}`}
+              plan={`Дистант ${formatSalesNumber(totals.distantDeals)} / ${formatNumber(totals.planDistant)}`}
+              progress={totals.distantDeals === null ? 0 : percent(totals.distantDeals, totals.planDistant)}
+            />
+          </section>
+
+          <section className="sales-layout">
+            <article className="sales-panel sales-manager-panel">
+              <PanelHead
+                title="Кто сколько трафика берет"
+                description="Доля менеджеров по всем обращениям и быстрый переход в персональную вкладку."
+              />
+              <div className="sales-manager-list">
+                <button
+                  type="button"
+                  className={selectedManagerName === "team" ? "active" : ""}
+                  onClick={() => setSelectedManagerName("team")}
+                >
+                  <span>Команда Дакоро</span>
+                  <strong>{formatNumber(totals.totalTraffic)}</strong>
+                  <i style={{ width: "100%" }} />
+                  <small>{formatNumber(totals.factDeals)} договоров · {formatNullablePercent(totals.conversionToDeals)} квал → договор</small>
+                </button>
+                {topManagers.map((manager) => (
+                  <button
+                    key={manager.name}
+                    type="button"
+                    className={selectedManagerName === manager.name ? "active" : ""}
+                    onClick={() => setSelectedManagerName(manager.name)}
+                  >
+                    <span>{shortManagerName(manager.name)}</span>
+                    <strong>{formatNumber(manager.totalTraffic)}</strong>
+                    <i style={{ width: `${Math.max(4, (manager.totalTraffic / maxManagerTraffic) * 100)}%` }} />
+                    <small>{formatNumber(manager.factDeals)} договоров · {formatNullablePercent(percentValueForUi(manager.totalTraffic, totals.totalTraffic))} трафика</small>
+                  </button>
+                ))}
+              </div>
+            </article>
+
+            <SalesManagerDetail manager={selectedManager} snapshot={snapshot} />
+          </section>
+
+          <section className="sales-two-column">
+            <article className="sales-panel">
+              <PanelHead
+                title="Динамика по дням"
+                description="Обращения и договоры команды по датам текущего месяца."
+              />
+              <SalesDailyChart days={snapshot.daily} />
+            </article>
+
+            <article className="sales-panel sales-events-panel">
+              <PanelHead
+                title="Рабочие дни и события"
+                description="Основа для учета отпусков, больничных и трафиковых событий."
+              />
+              <div className="sales-workdays">
+                <span>
+                  <strong>{snapshot.workingDaysPassed}</strong>
+                  рабочих дней прошло
+                </span>
+                <span>
+                  <strong>{snapshot.workingDaysInMonth}</strong>
+                  рабочих дней в месяце
+                </span>
+                <span>
+                  <strong>{snapshot.activeCalendarDays}</strong>
+                  дней с фактом
+                </span>
+              </div>
+              <div className="sales-event-empty">
+                <Info size={17} />
+                <span>Отпуска, больничные и события по трафику пока не выделены отдельной вкладкой в таблице.</span>
+              </div>
+            </article>
+          </section>
+
+          <section className="sales-panel sales-table-panel">
+            <PanelHead
+              title="Менеджеры Дакоро"
+              description="План, факт, категории и прогнозы в одной таблице."
+            />
+            <div className="sales-table-wrap">
+              <table className="sales-table">
+                <thead>
+                  <tr>
+                    <th>Менеджер</th>
+                    <th>Лиды</th>
+                    <th>Квалы</th>
+                    <th>Договоры</th>
+                    <th>VIP</th>
+                    <th>A+B</th>
+                    <th>Дистант</th>
+                    <th>Конверсия</th>
+                    <th>Прогноз</th>
+                    <th>Линейный</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {managers.map((manager) => (
+                    <tr key={manager.name}>
+                      <td>{shortManagerName(manager.name)}</td>
+                      <td>{formatNumber(manager.totalTraffic)} / {formatNumber(manager.planTraffic)}</td>
+                      <td>{formatNumber(manager.factQualified)} / {formatNumber(manager.planQualified)}</td>
+                      <td>{formatNumber(manager.factDeals)} / {formatNumber(manager.planDeals)}</td>
+                      <td>{formatSalesNumber(manager.vipDeals)} / {formatNumber(manager.planVip)}</td>
+                      <td>{formatNumber(manager.abDeals)}</td>
+                      <td>{formatSalesNumber(manager.distantDeals)} / {formatNumber(manager.planDistant)}</td>
+                      <td>{formatNullablePercent(manager.factConversion)}</td>
+                      <td>{formatNumber(manager.forecastDeals)}</td>
+                      <td>{formatNumber(manager.linearDealsForecast)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {snapshot.warnings.length > 0 && (
+            <section className="sales-warnings">
+              {snapshot.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SalesKpiCard({
+  icon,
+  label,
+  value,
+  helper,
+  plan,
+  progress,
+  tone = "blue",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  helper: string;
+  plan: string;
+  progress: number;
+  tone?: "blue" | "red";
+}) {
+  return (
+    <article className={`sales-kpi-card ${tone}`}>
+      <div>
+        {icon}
+        <span>{label}</span>
+      </div>
+      <strong>{value}</strong>
+      <small>{helper}</small>
+      <footer>
+        <span>{plan}</span>
+        <b>{Math.round(progress)}%</b>
+      </footer>
+      <i style={{ width: `${clampPercent(progress)}%` }} />
+    </article>
+  );
+}
+
+function SalesManagerDetail({
+  manager,
+  snapshot,
+}: {
+  manager: SalesManagerMetrics | null;
+  snapshot: SalesDepartmentSnapshot;
+}) {
+  const totals = snapshot.totals;
+  const title = manager ? shortManagerName(manager.name) : "Команда Дакоро";
+  const traffic = manager?.totalTraffic ?? totals.totalTraffic;
+  const qualified = manager?.factQualified ?? totals.factQualified;
+  const deals = manager?.factDeals ?? totals.factDeals;
+  const planDeals = manager?.planDeals ?? totals.planDeals;
+  const forecastDeals = manager?.forecastDeals ?? totals.forecastDeals;
+  const linearForecastValue = manager?.linearDealsForecast ?? totals.linearDealsForecast;
+  const vipDeals = manager?.vipDeals ?? totals.vipDeals;
+  const distantDeals = manager?.distantDeals ?? totals.distantDeals;
+  const avgCheck = manager?.avgCheck ?? totals.avgCheck;
+  const abDeals = manager?.abDeals ?? totals.abDeals;
+
+  return (
+    <article className="sales-panel sales-detail-panel">
+      <div className="sales-detail-head">
+        <div>
+          <span>{manager ? "Вкладка менеджера" : "Общая вкладка"}</span>
+          <h3>{title}</h3>
+        </div>
+        <strong>{formatNullablePercent(percentValueForUi(deals, planDeals))} плана договоров</strong>
+      </div>
+
+      <div className="sales-mini-grid">
+        <SalesMiniMetric label="Лиды" value={formatNumber(traffic)} caption={`план ${formatNumber(manager?.planTraffic ?? totals.planTraffic)}`} />
+        <SalesMiniMetric label="Квалы" value={formatNumber(qualified)} caption={formatNullablePercent(percentValueForUi(qualified, traffic))} />
+        <SalesMiniMetric label="Договоры" value={formatNumber(deals)} caption={`план ${formatNumber(planDeals)}`} />
+        <SalesMiniMetric label="VIP" value={formatSalesNumber(vipDeals)} caption={`A+B ${formatNumber(abDeals)}`} />
+        <SalesMiniMetric label="Дистант" value={formatSalesNumber(distantDeals)} caption="категория PS" />
+        <SalesMiniMetric label="Средний чек" value={formatNullableCurrency(avgCheck)} caption="по PS без персональных данных" />
+      </div>
+
+      <div className="sales-forecast-grid">
+        <SalesForecastBar label="Динамический" value={forecastDeals} plan={planDeals} />
+        <SalesForecastBar label="Линейный" value={linearForecastValue} plan={planDeals} />
+      </div>
+
+      {manager && (
+        <div className="sales-city-split">
+          <div>
+            <span>Москва</span>
+            <strong>{formatNumber(manager.mskDeals)} договоров</strong>
+            <small>{formatNumber(manager.mskQualified)} квалов · {formatNullablePercent(manager.mskConversion)}</small>
+          </div>
+          <div>
+            <span>Санкт-Петербург</span>
+            <strong>{formatNumber(manager.spbDeals)} договоров</strong>
+            <small>{formatNumber(manager.spbQualified)} квалов · {formatNullablePercent(manager.spbConversion)}</small>
+          </div>
+          <div>
+            <span>Каналы входа</span>
+            <strong>{formatNumber(manager.calls)} звонков</strong>
+            <small>сайт {formatNumber(manager.siteRequests)} · квизы {formatNumber(manager.quizRequests)}</small>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function SalesMiniMetric({
+  label,
+  value,
+  caption,
+}: {
+  label: string;
+  value: string;
+  caption: string;
+}) {
+  return (
+    <div className="sales-mini-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{caption}</small>
+    </div>
+  );
+}
+
+function SalesForecastBar({
+  label,
+  value,
+  plan,
+}: {
+  label: string;
+  value: number;
+  plan: number;
+}) {
+  const completion = percentValueForUi(value, plan) ?? 0;
+  return (
+    <div className="sales-forecast-bar">
+      <div>
+        <span>{label}</span>
+        <strong>{formatNumber(value)}</strong>
+      </div>
+      <i>
+        <b style={{ width: `${clampPercent(completion)}%` }} />
+      </i>
+      <small>{formatNullablePercent(completion)} от плана</small>
+    </div>
+  );
+}
+
+function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
+  const maxValue = Math.max(1, ...days.map((day) => Math.max(day.totalTraffic, day.totalDeals)));
+  if (!days.length) {
+    return (
+      <div className="sales-chart-empty">
+        <strong>Дневная динамика пока не загрузилась</strong>
+        <span>После доступа к вкладке «Динамика по дням» здесь появятся обращения и договоры.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sales-daily-chart" aria-label="Динамика обращений и договоров по дням">
+      {days.map((day) => (
+        <div key={day.key} className={(day.totalTraffic > 0 || day.totalDeals > 0) ? "sales-day active" : "sales-day"}>
+          <div>
+            <i className="traffic" style={{ height: `${Math.max(4, (day.totalTraffic / maxValue) * 100)}%` }}>
+              <b>{formatNumber(day.totalTraffic)}</b>
+            </i>
+            <i className="deals" style={{ height: `${Math.max(4, (day.totalDeals / maxValue) * 100)}%` }}>
+              <b>{formatNumber(day.totalDeals)}</b>
+            </i>
+          </div>
+          <span>{day.label}</span>
+          <small>{day.weekday}</small>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1884,15 +2305,15 @@ function SourcesAnalyticsDashboard({
   );
   const buckets = useMemo(
     () => isBrandSourceMode
-      ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, monthConfigs, activeSources)
-      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs, activeSources),
-    [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, monthConfigs, activeSources, cityFilteredRecords, periodMode],
+      ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources)
+      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, activeSources),
+    [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, cityFilteredRecords, periodMode],
   );
   const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
     acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
     return acc;
   }, {} as Record<Metric, number>);
-  const periodLabel = periodMode === "month" ? getSourceMonthRangeLabel(monthConfigs) : selectedMonthConfig.label;
+  const periodLabel = selectedMonthConfig.label;
   const strongestMetric = metrics.reduce((best, metric) => (summaryTotals[metric] > summaryTotals[best] ? metric : best), "Лиды" as Metric);
   const strongestSource = sourceTotals
     .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
@@ -6023,14 +6444,6 @@ function getShortMonthLabel(config: MonthConfig): string {
   return monthName.length <= 3 ? monthName : monthName.slice(0, 3);
 }
 
-function getSourceMonthRangeLabel(configs: MonthConfig[]): string {
-  if (!configs.length) return "нет данных";
-  const sorted = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-  const first = sorted[0].label;
-  const last = sorted[sorted.length - 1].label;
-  return first === last ? first : `${first} → ${last}`;
-}
-
 function getLeadFactForCity(records: DailyRecord[], date: string, city: City): number {
   if (city === "сообщения") return 0;
   return records
@@ -6777,8 +7190,8 @@ function getPageCopy(mode: Mode) {
       subtitle: "Дневная динамика факта, прогнозный коридор Optima и события выбранного месяца.",
     },
     leadDaily: {
-      title: "Лиды по дням",
-      subtitle: "Дизайнерский отчет по лидам: месяцы отдельными графиками, города раздельными кривыми.",
+      title: "Отдел продаж",
+      subtitle: "Внутренний отчет отдела продаж: команда, менеджеры, договоры, VIP, трафик и прогноз.",
     },
     week: {
       title: "Неделя",
@@ -7076,7 +7489,6 @@ function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter)
 
 function getSourceRecordsForPeriod(records: DailyRecord[], periodMode: SourcePeriodMode, config: MonthConfig): DailyRecord[] {
   const sourceRecords = records.filter(isSourceValueRecord);
-  if (periodMode === "month") return sourceRecords;
   return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
 }
 
@@ -7084,23 +7496,21 @@ function buildSourceChartBuckets(
   records: DailyRecord[],
   periodMode: SourcePeriodMode,
   config: MonthConfig,
-  configs: MonthConfig[],
   sources: string[],
 ): SourceChartBucket[] {
-  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   const buckets = periodMode === "month"
-    ? sortedConfigs.map((monthConfig) => ({
-      key: monthConfig.monthKey,
-      label: getShortMonthLabel(monthConfig),
-      caption: String(monthConfig.year),
+    ? [{
+      key: config.monthKey,
+      label: getShortMonthLabel(config),
+      caption: "итого за месяц",
       values: createEmptySourceValues(sources),
-    }))
+    }]
     : buildMonthSourceBuckets(periodMode, config, sources);
 
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   records.filter(isSourceValueRecord).forEach((record) => {
-    if (periodMode !== "month" && !record.date.startsWith(config.monthKey)) return;
+    if (!record.date.startsWith(config.monthKey)) return;
 
     const bucketKey = periodMode === "month"
       ? record.date.slice(0, 7)
@@ -7290,7 +7700,6 @@ function getSourceBudgetsForPeriod(
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    if (periodMode === "month") return true;
     return row.monthKey === config.monthKey;
   });
 }
@@ -7316,7 +7725,6 @@ function getSourceBrandRowsForPeriod(
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    if (periodMode === "month") return true;
     return row.monthKey === config.monthKey;
   });
 }
@@ -7375,17 +7783,15 @@ function buildBrandSourceChartBuckets(
   rows: BrandPerformanceWeekly[],
   periodMode: SourcePeriodMode,
   config: MonthConfig,
-  configs: MonthConfig[],
   sources: string[],
 ): SourceChartBucket[] {
-  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   const buckets = periodMode === "month"
-    ? sortedConfigs.map((monthConfig) => ({
-      key: monthConfig.monthKey,
-      label: getShortMonthLabel(monthConfig),
-      caption: String(monthConfig.year),
+    ? [{
+      key: config.monthKey,
+      label: getShortMonthLabel(config),
+      caption: "итого за месяц",
       values: createEmptySourceValues(sources),
-    }))
+    }]
     : buildMonthSourceBuckets("week", config, sources);
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
@@ -7937,6 +8343,39 @@ function getTodayIso(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatSalesNumber(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? "—" : formatNumber(value);
+}
+
+function formatNullableCurrency(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? "—" : `${formatNumber(value)} ₽`;
+}
+
+function formatNullablePercent(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? "—" : `${formatCompactDecimal(value)}%`;
+}
+
+function percentValueForUi(numerator: number, denominator: number): number | null {
+  if (!denominator) return null;
+  return (numerator / denominator) * 100;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function shortManagerName(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return parts.length >= 2 ? `${parts[0]} ${parts[1]}` : name;
+}
+
+function formatSalesDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-");
+  if (!year || !month || !day) return isoDate;
+  return `${day}.${month}.${year}`;
 }
 
 function formatNumber(value: number): string {
