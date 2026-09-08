@@ -305,13 +305,14 @@ function doPost(e) {
       syncRoistatBrands: syncRoistatBrands_,
       getRoistatFields: getRoistatFields_,
       refreshRoistatFields: refreshRoistatFields_,
+      setRoistatRecommendedFields: setRoistatRecommendedFields_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -332,6 +333,27 @@ function setWeeklyReportPassword(password) {
 
 function authorizeRoistatOnce() {
   refreshRoistatFields_();
+}
+
+function setRoistatRecommendedFieldsOnce() {
+  return setRoistatRecommendedFields_();
+}
+
+function setRoistatRecommendedFields_() {
+  PropertiesService.getScriptProperties().setProperties({
+    ROISTAT_METRIC_QUALIFIED: 'custom_18',
+    ROISTAT_METRIC_SALES: 'custom_9',
+    ROISTAT_METRIC_REVENUE: 'payment_revenue',
+    ROISTAT_METRIC_BUDGET: 'marketing_cost',
+    ROISTAT_DIMENSION_SOURCE: 'custom_dimension_1',
+    ROISTAT_DIMENSION_DOMAIN: 'custom_dimension_3',
+    ROISTAT_DIMENSION_CITY: 'custom_dimension_6',
+    ROISTAT_DIMENSION_LEAD_TYPE: 'order_field_21',
+  });
+  refreshRoistatFields_();
+  return {
+    message: 'Рекомендуемые поля Roistat сохранены.',
+  };
 }
 
 function verifyPassword_(password) {
@@ -1147,8 +1169,8 @@ function getRoistatFieldMap_(kind) {
   const metricMap = {
     leads: roistatFieldOverride_('ROISTAT_METRIC_LEADS') || selectRoistatField_(metricsDictionary, ['leads', 'lead_count', 'leads_count'], ['лид', 'заявк'], 'leads'),
     qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['custom_18', 'ql', 'qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'kval'], ['квал', 'целев'], 'custom_18'),
-    sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['sales', 'orders', 'sales_count', 'paid_orders'], ['продаж', 'сделк'], 'sales'),
-    revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], ''),
+    sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['custom_9', 'payment_sales', 'sales', 'new_sales', 'payment_first_sales', 'orders', 'sales_count', 'paid_orders'], ['продаж по дате оплаты', 'оплат', 'продаж', 'сделк'], 'payment_sales'),
+    revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['payment_revenue', 'revenue', 'first_sales_revenue', 'payment_first_sales_revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], 'payment_revenue'),
     budget: roistatFieldOverride_('ROISTAT_METRIC_BUDGET') || selectRoistatField_(metricsDictionary, ['marketing_cost', 'cost', 'expenses', 'ad_cost', 'advertising_cost', 'budget'], ['маркетинг', 'расход', 'затрат', 'бюджет', 'cost'], 'marketing_cost'),
   };
 
@@ -1359,8 +1381,10 @@ function collectRoistatDictionaryItems_(node, result) {
 
 function selectRoistatField_(dictionary, names, titleParts, fallback) {
   const normalizedNames = names.map((name) => String(name).toLowerCase());
-  const exact = dictionary.find((item) => normalizedNames.indexOf(item.name.toLowerCase()) >= 0);
-  if (exact) return exact.name;
+  for (let index = 0; index < normalizedNames.length; index += 1) {
+    const exact = dictionary.find((item) => item.name.toLowerCase() === normalizedNames[index]);
+    if (exact) return exact.name;
+  }
 
   const byTitle = dictionary.find((item) => {
     return titleParts.some((part) => item.search.indexOf(String(part).toLowerCase()) >= 0);
@@ -1427,7 +1451,7 @@ function roistatObjectFromSection_(section, fieldOrder) {
   if (Array.isArray(section)) {
     section.forEach((item, index) => {
       if (item && typeof item === 'object') {
-        const name = String(item.name || item.key || item.id || item.metric_name || item.dimension_name || item.metric || item.dimension || item.field || item.code || fieldOrder[index] || '').trim();
+        const name = roistatSectionItemName_(item, fieldOrder[index]);
         if (name) result[name] = roistatValue_(item);
       } else if (fieldOrder[index]) {
         result[fieldOrder[index]] = roistatValue_(item);
@@ -1441,6 +1465,19 @@ function roistatObjectFromSection_(section, fieldOrder) {
     });
   }
   return result;
+}
+
+function roistatSectionItemName_(item, fallback) {
+  const direct = item.name || item.key || item.id || item.metric_name || item.dimension_name || item.field || item.code;
+  if (direct) return String(direct).trim();
+
+  const nested = item.metric || item.dimension;
+  if (nested && typeof nested === 'object') {
+    return String(nested.name || nested.key || nested.id || nested.code || nested.value || fallback || '').trim();
+  }
+
+  if (nested) return String(nested).trim();
+  return String(fallback || '').trim();
 }
 
 function roistatValue_(value) {
