@@ -1156,14 +1156,14 @@ function getRoistatFieldMap_(kind) {
   if (!metricMap.revenue) warnings.push('Не нашла метрику выручки в справочнике Roistat. Если выручка нужна, задайте Script Property ROISTAT_METRIC_REVENUE.');
 
   const sourceDimensions = [
-    roistatDimensionOverride_('ROISTAT_DIMENSION_SOURCE') || selectRoistatField_(dimensionsDictionary, ['marker_level_1', 'utm_source', 'source'], ['источник', 'реклам'], 'marker_level_1'),
+    roistatDimensionOverride_('ROISTAT_DIMENSION_SOURCE') || selectRoistatField_(dimensionsDictionary, ['custom_dimension_1', 'order_field_10', 'marker_level_1', 'utm_source', 'source'], ['источник', 'реклам'], 'custom_dimension_1'),
+    selectRoistatField_(dimensionsDictionary, ['marker_level_1', 'utm_source'], ['источник', 'реклам'], 'marker_level_1'),
     selectRoistatField_(dimensionsDictionary, ['marker_level_2', 'utm_medium'], ['канал', 'medium'], 'marker_level_2'),
     selectRoistatField_(dimensionsDictionary, ['marker_level_3', 'utm_campaign'], ['кампан'], 'marker_level_3'),
-    selectRoistatField_(dimensionsDictionary, ['marker_level_4', 'utm_content'], ['content'], 'marker_level_4'),
   ];
-  const hostDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_DOMAIN') || selectRoistatField_(dimensionsDictionary, ['host', 'domain'], ['домен', 'host'], 'host');
-  const cityDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_CITY') || selectRoistatField_(dimensionsDictionary, ['pipeline', 'funnel', 'project', 'city'], ['воронк', 'город', 'мск', 'спб'], '');
-  const leadTypeDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_LEAD_TYPE') || selectRoistatField_(dimensionsDictionary, ['lead_type', 'order_type', 'request_type'], ['тип лида', 'тип заявки'], '');
+  const hostDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_DOMAIN') || selectRoistatField_(dimensionsDictionary, ['custom_dimension_3', 'order_field_94', 'host', 'domain'], ['бренд/домен', 'домен', 'host'], 'custom_dimension_3');
+  const cityDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_CITY') || selectRoistatField_(dimensionsDictionary, ['order_field_2', 'custom_dimension_6', 'pipeline', 'funnel', 'project', 'city'], ['воронк', 'город', 'мск', 'спб'], 'order_field_2');
+  const leadTypeDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_LEAD_TYPE') || selectRoistatField_(dimensionsDictionary, ['order_field_21', 'lead_type', 'order_type', 'request_type'], ['тип лида', 'тип заявки'], 'order_field_21');
 
   const dimensions = unique_(
     []

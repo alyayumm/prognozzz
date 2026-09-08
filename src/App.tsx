@@ -676,7 +676,7 @@ export default function App() {
     }
 
     setIsSavingDaily(true);
-    setSavedMessage(kind === "sources" ? "Загружаю Roistat: источники..." : "Загружаю Roistat: домены/бренды...");
+    setSavedMessage(kind === "sources" ? "Загружаю Roistat: отчет тест6.04..." : "Загружаю Roistat: отчет по домену...");
     try {
       const action = kind === "sources" ? "syncRoistatSources" : "syncRoistatBrands";
       const result = await callReportApi<RoistatSyncResult>(action, { fromDate, toDate }, writePassword);
@@ -4273,7 +4273,7 @@ function SourceAdminPanel({
       <div className="roistat-sync-panel">
         <div>
           <strong>Roistat API</strong>
-          <span>Источники пишутся в раздел источников. Домены пишутся в Бренды.</span>
+          <span>Отчет тест6.04 пишется в Источники. Отчет по домену пишется в Бренды.</span>
         </div>
         <label>
           С
@@ -4285,19 +4285,19 @@ function SourceAdminPanel({
         </label>
         <div className="roistat-sync-actions">
           <button className="select-button" type="button" onClick={() => syncRoistat("sources")} disabled={isSavingDaily}>
-            Roistat: источники
+            тест6.04: источники
           </button>
           <button className="select-button" type="button" onClick={() => syncRoistat("brands")} disabled={isSavingDaily}>
-            Roistat: домены/бренды
+            по домену: бренды
           </button>
           <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
             Поля Roistat
           </button>
           <button className="ghost-button" type="button" onClick={() => syncRoistat("sources", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
-            Тест 06.04: источники
+            Тест 06.04 источники
           </button>
           <button className="ghost-button" type="button" onClick={() => syncRoistat("brands", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
-            Тест 06.04: домены
+            Тест 06.04 домены
           </button>
         </div>
       </div>
