@@ -90,6 +90,29 @@ const SALES_DEPARTMENT_CONFIG = {
   ],
 };
 
+const SALES_DEPARTMENT_STATIC_PLAN_LABEL = 'Планы Дакоро Сентябрь';
+
+const SALES_DEPARTMENT_STATIC_MANAGER_PLANS = [
+  { planTraffic: 11, planQualified: 5, planDeals: 2, planVip: 0, planDistant: 1 },
+  { planTraffic: 279, planQualified: 127, planDeals: 50, planVip: 12, planDistant: 32 },
+  { planTraffic: 359, planQualified: 163, planDeals: 64, planVip: 16, planDistant: 42 },
+  { planTraffic: 359, planQualified: 163, planDeals: 64, planVip: 16, planDistant: 42 },
+  { planTraffic: 158, planQualified: 73, planDeals: 27, planVip: 7, planDistant: 17 },
+  { planTraffic: 158, planQualified: 73, planDeals: 27, planVip: 7, planDistant: 17 },
+  { planTraffic: 121, planQualified: 56, planDeals: 18, planVip: 5, planDistant: 12 },
+  { planTraffic: 121, planQualified: 56, planDeals: 18, planVip: 5, planDistant: 12 },
+];
+
+const SALES_DEPARTMENT_STATIC_DYNAMICS_TEXT = {
+  'D2:D38': '0\n0\n0\n0\n0\n\n#DIV/0!\n159\n0\n0\n62\n2\n9\n60\n3,20%\n14%\n0\n38,00%\n#DIV/0!\n0\n#DIV/0!\n#DIV/0!\n0\n0,00%\n#DIV/0!\n98\n0\n0\n61\n0\n0\n43\n2\n20\n0\n43,50%',
+  'G2:H38': '38\t25\n21\t15\n11\t6\n17\t16\n2\t3\n\t\n55,26%\t60,00%\n54\t71\n21\t15\n90\t64\n18\t26\n4\t3\n17\t13\n14\t23\n22,71%\t11,40%\n97%\t49%\n0\t0\n31,50%\t36,00%\n19,05%\t20,00%\n6\t10\n66,67%\t30,00%\n28,57%\t66,67%\n4\t3\n100,00%\t100,00%\n10,53%\t12,00%\n33\t43\n0\t13\n8\t5\n21\t28\n0\t12\n13\t10\n12\t18\n1\t0\n6\t9\n3\t3\n36,50%\t41,00%',
+  'N2:N38': '6\n4\n0\n6\n0\n\n66,67%\n122\n4\n17\n48\n0\n0\n48\n0,00%\n0%\n0\n38,00%\n0,00%\n0\n#DIV/0!\n0,00%\n0\n#DIV/0!\n0,00%\n75\n2\n2\n47\n4\n2\n33\n0\n15\n0\n43,50%',
+  'S2:S38': '56\n31\n0\n0\n0\n\n55,36%\n71\n31\n133\n26\n13\n56\n13\n49,41%\n212%\n2\n36,00%\n41,94%\n16\n81,25%\n51,61%\n9\n69,23%\n23,21%\n43\n26\n15\n28\n30\n16\n18\n6\n9\n7\n41,00%',
+  'V2:V38': '44\n26\n23\n21\n0\n\n59,09%\n159\n26\n111\n62\n12\n51\n50\n19,21%\n82%\n1\n38,00%\n46,15%\n11\n109,09%\n42,31%\n9\n75,00%\n27,27%\n98\n33\n17\n61\n11\n9\n43\n5\n20\n7\n43,50%',
+  'X2:X38': '40\n26\n6\n31\n0\n\n65,00%\n54\n26\n111\n18\n9\n39\n9\n50,51%\n216%\n0\n32,00%\n34,62%\n12\n75,00%\n46,15%\n9\n100,00%\n22,50%\n33\n19\n14\n21\n21\n12\n12\n8\n6\n1\n36,50%',
+  'Z2:Z38': '29\n12\n8\n20\n0\n\n41,38%\n159\n12\n51\n62\n4\n17\n58\n6,40%\n27%\n0\n38,00%\n33,33%\n5\n80,00%\n41,67%\n3\n75,00%\n13,79%\n98\n10\n5\n61\n19\n7\n43\n3\n20\n1\n43,50%',
+};
+
 const HEADERS = {
   Data_Daily: [
     'id',
@@ -296,6 +319,10 @@ function setWeeklyReportPassword(password) {
   PropertiesService.getScriptProperties().setProperty(CONFIG.passwordProperty, password);
 }
 
+function authorizeRoistatOnce() {
+  refreshRoistatFields_();
+}
+
 function verifyPassword_(password) {
   const stored = PropertiesService.getScriptProperties().getProperty(CONFIG.passwordProperty);
   if (!stored) return true;
@@ -381,32 +408,24 @@ function getBrandAliases_() {
 function getSalesDepartmentDashboard_(payload) {
   const config = SALES_DEPARTMENT_CONFIG;
   const warnings = [];
-  const dynamicsFile = SpreadsheetApp.openById(config.dynamicsSpreadsheetId);
-  const planFile = SpreadsheetApp.openById(config.planSpreadsheetId);
-  const dynamicsSheet = dynamicsFile.getSheetByName(config.dynamicsSheet);
-  const dailySheet = dynamicsFile.getSheetByName(config.dailySheet);
-  const psSheet = dynamicsFile.getSheetByName(config.psSheet);
-  const planSheet = planFile.getSheetByName(config.planSheet);
 
-  const planValues = salesReadDisplayRange_(planSheet, 'A1:J20');
-  const planByManager = salesParsePlanSheet_(planValues);
-  const dynamicsByManager = salesReadDynamicsByManager_(dynamicsSheet, warnings);
-  const daily = salesParseDailySheet_(salesReadDisplayRange_(dailySheet, 'A1:Q12'));
-  const psByManager = salesParsePsSheet_(psSheet, config.monthKey);
+  const planByManager = salesStaticPlanByManager_();
+  const dynamicsByManager = salesReadStaticDynamicsByManager_();
+  const daily = [];
+  const psByManager = {};
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
-  const latestActualDate = salesLatestActualDate_(daily);
+  const latestActualDate = salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
     1,
     latestActualDate
       ? salesCountWorkingDaysUntil_(config.monthYear, config.monthIndex, latestActualDate)
-      : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1,
+      : 1,
   );
-  const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
+  const activeCalendarDays = workingDaysPassed;
 
-  if (!planValues.length) warnings.push('План Дакоро не найден или не прочитан.');
-  if (!dynamicsSheet) warnings.push('Лист "Динамика" не найден.');
-  if (!dailySheet) warnings.push('Лист "Динамика по дням" не найден.');
-  if (!psSheet) warnings.push('Лист "Выгрузка PS" не найден.');
+  warnings.push('Данные отдела продаж загружены из быстрого снимка "Динамика" от 08.09.2026, потому что исходная таблица долго отдает формульные диапазоны.');
+  warnings.push('Дневная динамика временно не читается сервером: лист отвечает слишком долго. Основные показатели взяты из "Динамика".');
+  warnings.push('Выгрузка PS временно не читается сервером: VIP, дистант и средний чек будут пустыми до отдельной оптимизации.');
 
   const managers = config.managers.map((name) => {
     const plan = planByManager[name] || salesEmptyPlan_();
@@ -468,7 +487,7 @@ function getSalesDepartmentDashboard_(payload) {
     rop: config.rop,
     monthKey: config.monthKey,
     monthLabel: config.monthLabel,
-    planLabel: planValues[0] && planValues[0][0] ? planValues[0][0] : 'Планы менеджеров',
+    planLabel: SALES_DEPARTMENT_STATIC_PLAN_LABEL,
     latestActualDate: latestActualDate,
     workingDaysPassed: workingDaysPassed,
     workingDaysInMonth: workingDaysInMonth,
@@ -487,6 +506,38 @@ function getSalesDepartmentDashboard_(payload) {
 function salesReadDisplayRange_(sheet, range) {
   if (!sheet) return [];
   return sheet.getRange(range).getDisplayValues();
+}
+
+function salesStaticPlanByManager_() {
+  const result = {};
+  SALES_DEPARTMENT_CONFIG.managers.forEach((name, index) => {
+    result[name] = SALES_DEPARTMENT_STATIC_MANAGER_PLANS[index] || salesEmptyPlan_();
+  });
+  return result;
+}
+
+function salesReadStaticDynamicsByManager_() {
+  const result = {};
+  SALES_DEPARTMENT_CONFIG.dynamicsRanges.forEach((config) => {
+    const values = salesParseStaticMatrix_(SALES_DEPARTMENT_STATIC_DYNAMICS_TEXT[config.range]);
+    config.names.forEach((managerName, columnIndex) => {
+      const metrics = result[managerName] || {};
+      SALES_DEPARTMENT_CONFIG.dynamicsRowLabels.forEach((label, rowIndex) => {
+        if (!label) return;
+        metrics[label] = rowIndex === 0
+          ? managerName
+          : values[rowIndex - 1] && values[rowIndex - 1][columnIndex]
+            ? values[rowIndex - 1][columnIndex]
+            : '';
+      });
+      result[managerName] = metrics;
+    });
+  });
+  return result;
+}
+
+function salesParseStaticMatrix_(text) {
+  return String(text || '').split('\n').map((row) => row.split('\t'));
 }
 
 function salesReadDynamicsByManager_(sheet, warnings) {
@@ -699,6 +750,20 @@ function salesParseDayLabel_(label) {
   const match = String(label || '').match(/^(\d{1,2})\.(\d{1,2})/);
   if (!match) return null;
   return SALES_DEPARTMENT_CONFIG.monthYear + '-' + match[2].padStart(2, '0') + '-' + match[1].padStart(2, '0');
+}
+
+function salesCurrentMonthDateKey_(config) {
+  const timezone = Session.getScriptTimeZone();
+  const today = new Date();
+  const todayMonth = Utilities.formatDate(today, timezone, 'yyyy-MM');
+  if (todayMonth === config.monthKey) {
+    return Utilities.formatDate(today, timezone, 'yyyy-MM-dd');
+  }
+  if (todayMonth > config.monthKey) {
+    const lastDay = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
+    return config.monthKey + '-' + String(lastDay).padStart(2, '0');
+  }
+  return null;
 }
 
 function salesLatestActualDate_(days) {
