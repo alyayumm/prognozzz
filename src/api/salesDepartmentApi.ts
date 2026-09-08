@@ -1,3 +1,5 @@
+import { callReportApi } from "./reportApi";
+
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
 
@@ -197,6 +199,25 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
 ];
 
 export async function loadSalesDepartmentSnapshot(): Promise<SalesDepartmentSnapshot> {
+  const serviceSnapshot = await loadSalesDepartmentServiceSnapshot();
+  if (serviceSnapshot) return serviceSnapshot;
+
+  return loadSalesDepartmentGvizSnapshot();
+}
+
+async function loadSalesDepartmentServiceSnapshot(): Promise<SalesDepartmentSnapshot | null> {
+  try {
+    return await withTimeout(
+      callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey }),
+      16000,
+      "Sales department Apps Script timeout",
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function loadSalesDepartmentGvizSnapshot(): Promise<SalesDepartmentSnapshot> {
   const warnings: string[] = [];
   const planResult = await settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:J20", 22000));
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
@@ -313,6 +334,21 @@ export async function loadSalesDepartmentSnapshot(): Promise<SalesDepartmentSnap
       plans: `https://docs.google.com/spreadsheets/d/${dakoroPlanSpreadsheetId}/edit#gid=0`,
     },
   };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise
+      .then((value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
 }
 
 function loadGvizRange(spreadsheetId: string, sheetName: string, range: string, timeoutMs: number): Promise<GvizTable> {

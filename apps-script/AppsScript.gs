@@ -18,6 +18,78 @@ const CONFIG = {
   },
 };
 
+const SALES_DEPARTMENT_CONFIG = {
+  dynamicsSpreadsheetId: '1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI',
+  planSpreadsheetId: '1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4',
+  monthKey: '2026-09',
+  monthLabel: 'Сентябрь 2026',
+  monthYear: 2026,
+  monthIndex: 8,
+  rop: 'Дакоро',
+  dynamicsSheet: 'Динамика',
+  dailySheet: 'Динамика по дням',
+  psSheet: 'Выгрузка PS',
+  planSheet: 'Лист1',
+  managers: [
+    'Руднев Денис',
+    'Драбо Максим',
+    'Борисова Алена',
+    'Шевелев Иван',
+    'Садовников Алексей',
+    'Сергеева Софья',
+    'Смирнов Никита',
+    'Антиповский Евгений',
+  ],
+  dynamicsRowLabels: [
+    'Менеджеры',
+    'Обращения всего',
+    'Обращения целевые',
+    'Заявки с сайта',
+    'Звонки',
+    'Симакин и квизы',
+    '',
+    'Доля целевых от всего',
+    'План обращения',
+    'Факт обращения',
+    'Прогноз обращения',
+    'План договоры',
+    'Факт Договоры',
+    'Прогноз Шт',
+    'Отставание',
+    'Факт, %',
+    'Прогноз, %',
+    'A+B',
+    'План конверсия',
+    'Факт коверсия',
+    'Заявки',
+    'Доля договоров от заявок',
+    'Доля заявок от целевых',
+    'Договоры в мес.',
+    'Доля договоров в мес. от договоров',
+    'Факт конверсия из всего',
+    'План обращения  целевые МСК',
+    'Факт обращения всего МСК',
+    'Факт обращения целевые МСК',
+    'План обращения целевые СПБ',
+    'Факт обращения всего СПБ',
+    'Факт обращения целевые СПБ',
+    'План договоры МСК',
+    'Факт договоры МСК',
+    'План  договоры СПБ',
+    'Факт  договоры СПБ',
+    'План Конверсия МСК',
+  ],
+  dynamicsRanges: [
+    { range: 'D2:D38', names: ['Руднев Денис'] },
+    { range: 'G2:H38', names: ['Смирнов Никита', 'Сергеева Софья'] },
+    { range: 'N2:N38', names: ['Драбо Максим'] },
+    { range: 'S2:S38', names: ['Садовников Алексей'] },
+    { range: 'V2:V38', names: ['Борисова Алена'] },
+    { range: 'X2:X38', names: ['Антиповский Евгений'] },
+    { range: 'Z2:Z38', names: ['Шевелев Иван'] },
+  ],
+};
+
 const HEADERS = {
   Data_Daily: [
     'id',
@@ -172,7 +244,10 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    ensureServiceSheets_();
+    const externalReadActions = ['getSalesDepartmentDashboard'];
+    if (externalReadActions.indexOf(action) < 0) {
+      ensureServiceSheets_();
+    }
 
     const routes = {
       getMonths: getMonths_,
@@ -188,6 +263,7 @@ function doPost(e) {
       getBrandPerformance: getBrandPerformance_,
       getBrandBranches: getBrandBranches_,
       getBrandAliases: getBrandAliases_,
+      getSalesDepartmentDashboard: getSalesDepartmentDashboard_,
       upsertBrandPerformance: upsertBrandPerformance_,
       upsertBrandBranches: upsertBrandBranches_,
       getRoistatSyncStatus: getRoistatSyncStatus_,
@@ -300,6 +376,397 @@ function getBrandBranches_() {
 
 function getBrandAliases_() {
   return readObjects_(CONFIG.sheets.brandAliases);
+}
+
+function getSalesDepartmentDashboard_(payload) {
+  const config = SALES_DEPARTMENT_CONFIG;
+  const warnings = [];
+  const dynamicsFile = SpreadsheetApp.openById(config.dynamicsSpreadsheetId);
+  const planFile = SpreadsheetApp.openById(config.planSpreadsheetId);
+  const dynamicsSheet = dynamicsFile.getSheetByName(config.dynamicsSheet);
+  const dailySheet = dynamicsFile.getSheetByName(config.dailySheet);
+  const psSheet = dynamicsFile.getSheetByName(config.psSheet);
+  const planSheet = planFile.getSheetByName(config.planSheet);
+
+  const planValues = salesReadDisplayRange_(planSheet, 'A1:J20');
+  const planByManager = salesParsePlanSheet_(planValues);
+  const dynamicsByManager = salesReadDynamicsByManager_(dynamicsSheet, warnings);
+  const daily = salesParseDailySheet_(salesReadDisplayRange_(dailySheet, 'A1:Q12'));
+  const psByManager = salesParsePsSheet_(psSheet, config.monthKey);
+  const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
+  const latestActualDate = salesLatestActualDate_(daily);
+  const workingDaysPassed = Math.max(
+    1,
+    latestActualDate
+      ? salesCountWorkingDaysUntil_(config.monthYear, config.monthIndex, latestActualDate)
+      : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1,
+  );
+  const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
+
+  if (!planValues.length) warnings.push('План Дакоро не найден или не прочитан.');
+  if (!dynamicsSheet) warnings.push('Лист "Динамика" не найден.');
+  if (!dailySheet) warnings.push('Лист "Динамика по дням" не найден.');
+  if (!psSheet) warnings.push('Лист "Выгрузка PS" не найден.');
+
+  const managers = config.managers.map((name) => {
+    const plan = planByManager[name] || salesEmptyPlan_();
+    const dynamic = dynamicsByManager[name] || {};
+    const ps = psByManager[name] || null;
+    const factDeals = salesNumber_(dynamic['Факт Договоры']);
+    const factQualified = salesNumber_(dynamic['Факт обращения']) || salesNumber_(dynamic['Обращения целевые']);
+    const totalTraffic = salesNumber_(dynamic['Обращения всего']);
+    const forecastDeals = salesNumber_(dynamic['Прогноз Шт']);
+    const forecastQualified = salesNumber_(dynamic['Прогноз обращения']);
+    const revenue = ps ? ps.revenue : null;
+    const orderCount = ps ? ps.orderCount : null;
+
+    return {
+      name: name,
+      displayName: dynamic['Менеджеры'] || name,
+      planTraffic: plan.planTraffic,
+      planQualified: plan.planQualified,
+      planDeals: plan.planDeals,
+      planVip: plan.planVip,
+      planDistant: plan.planDistant,
+      totalTraffic: totalTraffic,
+      factQualified: factQualified,
+      forecastQualified: forecastQualified,
+      siteRequests: salesNumber_(dynamic['Заявки с сайта']),
+      calls: salesNumber_(dynamic['Звонки']),
+      quizRequests: salesNumber_(dynamic['Симакин и квизы']),
+      applications: salesNumber_(dynamic['Заявки']),
+      factDeals: factDeals,
+      forecastDeals: forecastDeals,
+      lagDeals: salesNumber_(dynamic['Отставание']),
+      abDeals: Math.max(salesNumber_(dynamic['A+B']), ps ? ps.abDeals : 0),
+      sheetFactCompletion: salesNullablePercent_(dynamic['Факт, %']),
+      sheetForecastCompletion: salesNullablePercent_(dynamic['Прогноз, %']),
+      planConversion: salesNullablePercent_(dynamic['План конверсия']) || salesPercent_(plan.planDeals, plan.planQualified),
+      factConversion: salesNullablePercent_(dynamic['Факт коверсия']) || salesPercent_(factDeals, factQualified),
+      totalConversion: salesNullablePercent_(dynamic['Факт конверсия из всего']) || salesPercent_(factDeals, totalTraffic),
+      applicationsToDeals: salesNullablePercent_(dynamic['Доля договоров от заявок']),
+      mskTraffic: salesNumber_(dynamic['Факт обращения всего МСК']),
+      spbTraffic: salesNumber_(dynamic['Факт обращения всего СПБ']),
+      mskQualified: salesNumber_(dynamic['Факт обращения целевые МСК']),
+      spbQualified: salesNumber_(dynamic['Факт обращения целевые СПБ']),
+      mskDeals: salesNumber_(dynamic['Факт договоры МСК']),
+      spbDeals: salesNumber_(dynamic['Факт  договоры СПБ']),
+      mskConversion: salesPercent_(salesNumber_(dynamic['Факт договоры МСК']), salesNumber_(dynamic['Факт обращения целевые МСК'])),
+      spbConversion: salesPercent_(salesNumber_(dynamic['Факт  договоры СПБ']), salesNumber_(dynamic['Факт обращения целевые СПБ'])),
+      vipDeals: ps ? ps.vipDeals : null,
+      distantDeals: ps ? ps.distantDeals : null,
+      paidDeals: ps ? ps.paidDeals : null,
+      orderCount: orderCount,
+      avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
+      revenue: revenue,
+      linearDealsForecast: salesLinearForecast_(factDeals, workingDaysPassed, workingDaysInMonth),
+      linearQualifiedForecast: salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth),
+    };
+  });
+
+  return {
+    rop: config.rop,
+    monthKey: config.monthKey,
+    monthLabel: config.monthLabel,
+    planLabel: planValues[0] && planValues[0][0] ? planValues[0][0] : 'Планы менеджеров',
+    latestActualDate: latestActualDate,
+    workingDaysPassed: workingDaysPassed,
+    workingDaysInMonth: workingDaysInMonth,
+    activeCalendarDays: activeCalendarDays,
+    managers: managers,
+    daily: daily,
+    totals: salesBuildTotals_(managers),
+    warnings: warnings,
+    sourceLinks: {
+      dynamics: 'https://docs.google.com/spreadsheets/d/' + config.dynamicsSpreadsheetId + '/edit#gid=2045376562',
+      plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit#gid=0',
+    },
+  };
+}
+
+function salesReadDisplayRange_(sheet, range) {
+  if (!sheet) return [];
+  return sheet.getRange(range).getDisplayValues();
+}
+
+function salesReadDynamicsByManager_(sheet, warnings) {
+  const result = {};
+  if (!sheet) return result;
+  SALES_DEPARTMENT_CONFIG.dynamicsRanges.forEach((config) => {
+    try {
+      const values = sheet.getRange(config.range).getDisplayValues();
+      config.names.forEach((managerName, columnIndex) => {
+        const metrics = result[managerName] || {};
+        SALES_DEPARTMENT_CONFIG.dynamicsRowLabels.forEach((label, rowIndex) => {
+          if (!label) return;
+          metrics[label] = values[rowIndex] && values[rowIndex][columnIndex] ? values[rowIndex][columnIndex] : '';
+        });
+        result[managerName] = metrics;
+      });
+    } catch (error) {
+      warnings.push('Не прочитан фрагмент динамики ' + config.range + '.');
+    }
+  });
+  return result;
+}
+
+function salesParsePlanSheet_(rows) {
+  const result = {};
+  const managerRow = rows.find((row) => salesNormalizeLabel_(row[0]) === salesNormalizeLabel_('Менеджеры')) || [];
+  const rowMap = {};
+  rows.forEach((row) => {
+    rowMap[salesNormalizeLabel_(row[0])] = row;
+  });
+  SALES_DEPARTMENT_CONFIG.managers.forEach((name) => {
+    const columnIndex = managerRow.findIndex((value) => salesManagerMatches_(value, name));
+    const readPlan = (label) => salesNumber_((rowMap[salesNormalizeLabel_(label)] || [])[columnIndex]);
+    result[name] = {
+      planTraffic: readPlan('Обращения Общие'),
+      planQualified: readPlan('Общие Квал'),
+      planDeals: readPlan('Общий План Договоры'),
+      planVip: readPlan('ВИП'),
+      planDistant: readPlan('Дистанты'),
+    };
+  });
+  return result;
+}
+
+function salesParseDailySheet_(rows) {
+  const dateRow = salesFindRow_(rows, 'Дата');
+  const weekdayRow = salesFindRow_(rows, 'День недели');
+  const trafficMskRow = salesFindRow_(rows, 'Обращения МСК');
+  const trafficSpbRow = salesFindRow_(rows, 'Обращения СПБ');
+  const trafficTotalRow = salesFindRow_(rows, 'Итого Обращения');
+  const dealsMskRow = salesFindRow_(rows, 'Договоры МСК');
+  const dealsSpbRow = salesFindRow_(rows, 'Договоры СПБ');
+  const dealsTotalRow = salesFindRow_(rows, 'Итого Договоры');
+  if (!dateRow.length) return [];
+
+  return dateRow.slice(1).map((label, offset) => {
+    const column = offset + 1;
+    const normalizedDate = salesParseDayLabel_(label);
+    const mskTraffic = salesNumber_(trafficMskRow[column]);
+    const spbTraffic = salesNumber_(trafficSpbRow[column]);
+    const mskDeals = salesNumber_(dealsMskRow[column]);
+    const spbDeals = salesNumber_(dealsSpbRow[column]);
+    return {
+      key: normalizedDate || SALES_DEPARTMENT_CONFIG.monthKey + '-' + String(column).padStart(2, '0'),
+      label: label || String(column).padStart(2, '0'),
+      weekday: weekdayRow[column] || '',
+      totalTraffic: salesNumber_(trafficTotalRow[column]) || mskTraffic + spbTraffic,
+      mskTraffic: mskTraffic,
+      spbTraffic: spbTraffic,
+      totalDeals: salesNumber_(dealsTotalRow[column]) || mskDeals + spbDeals,
+      mskDeals: mskDeals,
+      spbDeals: spbDeals,
+    };
+  }).filter((day) => day.label);
+}
+
+function salesParsePsSheet_(sheet, monthKey) {
+  const result = {};
+  if (!sheet) return result;
+  const lastRow = Math.min(Math.max(sheet.getLastRow(), 1), 1500);
+  if (lastRow < 2) return result;
+  const rows = sheet.getRange(2, 16, lastRow - 1, 27).getDisplayValues();
+  rows.forEach((row) => {
+    const abFlag = row[0];
+    const manager = row[7];
+    const createdAt = row[10];
+    const paymentDate = row[11];
+    const price = salesNumber_(row[14]);
+    const tariff = String(row[21] || '') + ' ' + String(row[22] || '');
+    const distant = row[23];
+    const count = salesNumber_(row[24]) || 1;
+    const contract = row[26];
+    const managerName = SALES_DEPARTMENT_CONFIG.managers.find((name) => salesManagerMatches_(manager, name));
+
+    if (!managerName || !salesIsDateInMonth_(createdAt, monthKey) || !salesHasContract_(contract)) return;
+
+    const item = result[managerName] || {
+      vipDeals: 0,
+      distantDeals: 0,
+      paidDeals: 0,
+      orderCount: 0,
+      revenue: 0,
+      abDeals: 0,
+    };
+    item.orderCount += count;
+    item.revenue += price;
+    if (salesIsTruthy_(abFlag)) item.abDeals += count;
+    if (salesIsVipTariff_(tariff)) item.vipDeals += count;
+    if (salesIsTruthy_(distant)) item.distantDeals += count;
+    if (paymentDate && paymentDate !== '-' && paymentDate !== '—') item.paidDeals += count;
+    result[managerName] = item;
+  });
+  return result;
+}
+
+function salesBuildTotals_(managers) {
+  const vipDeals = salesSumNullable_(managers, (manager) => manager.vipDeals);
+  const distantDeals = salesSumNullable_(managers, (manager) => manager.distantDeals);
+  const paidDeals = salesSumNullable_(managers, (manager) => manager.paidDeals);
+  const orderCount = salesSumNullable_(managers, (manager) => manager.orderCount);
+  const revenue = salesSumNullable_(managers, (manager) => manager.revenue);
+  const factDeals = salesSum_(managers, (manager) => manager.factDeals);
+  const totalTraffic = salesSum_(managers, (manager) => manager.totalTraffic);
+  const factQualified = salesSum_(managers, (manager) => manager.factQualified);
+  const planDeals = salesSum_(managers, (manager) => manager.planDeals);
+
+  return {
+    planTraffic: salesSum_(managers, (manager) => manager.planTraffic),
+    planQualified: salesSum_(managers, (manager) => manager.planQualified),
+    planDeals: planDeals,
+    planVip: salesSum_(managers, (manager) => manager.planVip),
+    planDistant: salesSum_(managers, (manager) => manager.planDistant),
+    totalTraffic: totalTraffic,
+    factQualified: factQualified,
+    forecastQualified: salesSum_(managers, (manager) => manager.forecastQualified),
+    factDeals: factDeals,
+    forecastDeals: salesSum_(managers, (manager) => manager.forecastDeals),
+    abDeals: salesSum_(managers, (manager) => manager.abDeals),
+    vipDeals: vipDeals,
+    distantDeals: distantDeals,
+    paidDeals: paidDeals,
+    orderCount: orderCount,
+    revenue: revenue,
+    avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
+    conversionToQualified: salesPercent_(factQualified, totalTraffic),
+    conversionToDeals: salesPercent_(factDeals, factQualified),
+    dealPlanCompletion: Math.round(salesPercent_(factDeals, planDeals) || 0),
+    linearDealsForecast: salesSum_(managers, (manager) => manager.linearDealsForecast),
+  };
+}
+
+function salesFindRow_(rows, label) {
+  return rows.find((row) => salesNormalizeLabel_(row[0]) === salesNormalizeLabel_(label)) || [];
+}
+
+function salesNumber_(value) {
+  if (typeof value === 'number') return isFinite(value) ? value : 0;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  const cleaned = String(value || '')
+    .replace(/\s/g, '')
+    .replace('%', '')
+    .replace('₽', '')
+    .replace(',', '.')
+    .replace(/[^\d.-]/g, '');
+  const parsed = Number(cleaned);
+  return isFinite(parsed) ? parsed : 0;
+}
+
+function salesNullablePercent_(value) {
+  if (!value || String(value).indexOf('#') >= 0) return null;
+  return salesNumber_(value);
+}
+
+function salesPercent_(numerator, denominator) {
+  if (!denominator) return null;
+  return (numerator / denominator) * 100;
+}
+
+function salesLinearForecast_(fact, passedDays, totalDays) {
+  if (!passedDays || !totalDays) return fact;
+  return Math.round((fact / passedDays) * totalDays);
+}
+
+function salesSum_(items, getValue) {
+  return items.reduce((total, item) => total + Number(getValue(item) || 0), 0);
+}
+
+function salesSumNullable_(items, getValue) {
+  let hasValue = false;
+  const value = items.reduce((total, item) => {
+    const next = getValue(item);
+    if (next === null || next === undefined) return total;
+    hasValue = true;
+    return total + Number(next || 0);
+  }, 0);
+  return hasValue ? value : null;
+}
+
+function salesEmptyPlan_() {
+  return {
+    planTraffic: 0,
+    planQualified: 0,
+    planDeals: 0,
+    planVip: 0,
+    planDistant: 0,
+  };
+}
+
+function salesParseDayLabel_(label) {
+  const match = String(label || '').match(/^(\d{1,2})\.(\d{1,2})/);
+  if (!match) return null;
+  return SALES_DEPARTMENT_CONFIG.monthYear + '-' + match[2].padStart(2, '0') + '-' + match[1].padStart(2, '0');
+}
+
+function salesLatestActualDate_(days) {
+  const activeDays = days.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0);
+  return activeDays.length ? activeDays[activeDays.length - 1].key : null;
+}
+
+function salesCountWorkingDaysInMonth_(year, zeroBasedMonth) {
+  const daysInMonth = new Date(year, zeroBasedMonth + 1, 0).getDate();
+  let count = 0;
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    if (salesIsWorkingDay_(new Date(year, zeroBasedMonth, day))) count += 1;
+  }
+  return count;
+}
+
+function salesCountWorkingDaysUntil_(year, zeroBasedMonth, isoDate) {
+  const dayLimit = Number(String(isoDate).slice(8, 10)) || 1;
+  let count = 0;
+  for (let day = 1; day <= dayLimit; day += 1) {
+    if (salesIsWorkingDay_(new Date(year, zeroBasedMonth, day))) count += 1;
+  }
+  return count;
+}
+
+function salesIsWorkingDay_(date) {
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
+function salesIsDateInMonth_(value, expectedMonthKey) {
+  const match = String(value || '').match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  if (!match) return false;
+  return match[3] + '-' + match[2] === expectedMonthKey;
+}
+
+function salesHasContract_(value) {
+  const normalized = salesNormalizeText_(value);
+  return Boolean(normalized) && normalized.indexOf('договор') >= 0 && normalized.indexOf('нет') < 0;
+}
+
+function salesIsTruthy_(value) {
+  const normalized = salesNormalizeText_(value);
+  return normalized === 'true' || normalized === 'истина' || normalized === 'да' || normalized === '1';
+}
+
+function salesIsVipTariff_(value) {
+  const normalized = salesNormalizeText_(value);
+  return normalized.indexOf('вип') >= 0 || normalized.indexOf('vip') >= 0 || normalized.indexOf('расшир') >= 0;
+}
+
+function salesManagerMatches_(candidate, manager) {
+  const normalizedCandidate = salesNormalizePerson_(candidate);
+  const normalizedManager = salesNormalizePerson_(manager);
+  if (!normalizedCandidate || !normalizedManager) return false;
+  return normalizedCandidate.indexOf(normalizedManager) >= 0 || normalizedManager.indexOf(normalizedCandidate) >= 0;
+}
+
+function salesNormalizeLabel_(value) {
+  return salesNormalizeText_(value).replace(/[^a-zа-я0-9%+]+/g, '');
+}
+
+function salesNormalizePerson_(value) {
+  return salesNormalizeText_(value).replace(/[^a-zа-я]+/g, '');
+}
+
+function salesNormalizeText_(value) {
+  return String(value || '').trim().toLowerCase().replace(/ё/g, 'е');
 }
 
 function upsertBrandPerformance_(payload) {
