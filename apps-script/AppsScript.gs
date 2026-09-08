@@ -1146,7 +1146,7 @@ function getRoistatFieldMap_(kind) {
 
   const metricMap = {
     leads: roistatFieldOverride_('ROISTAT_METRIC_LEADS') || selectRoistatField_(metricsDictionary, ['leads', 'lead_count', 'leads_count'], ['лид', 'заявк'], 'leads'),
-    qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['ql', 'qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'kval'], ['квал', 'целев'], 'ql'),
+    qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['custom_18', 'ql', 'qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'kval'], ['квал', 'целев'], 'custom_18'),
     sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['sales', 'orders', 'sales_count', 'paid_orders'], ['продаж', 'сделк'], 'sales'),
     revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], ''),
     budget: roistatFieldOverride_('ROISTAT_METRIC_BUDGET') || selectRoistatField_(metricsDictionary, ['marketing_cost', 'cost', 'expenses', 'ad_cost', 'advertising_cost', 'budget'], ['маркетинг', 'расход', 'затрат', 'бюджет', 'cost'], 'marketing_cost'),
@@ -1427,7 +1427,7 @@ function roistatObjectFromSection_(section, fieldOrder) {
   if (Array.isArray(section)) {
     section.forEach((item, index) => {
       if (item && typeof item === 'object') {
-        const name = String(item.name || item.key || item.id || item.metric || item.dimension || fieldOrder[index] || '').trim();
+        const name = String(item.name || item.key || item.id || item.metric_name || item.dimension_name || item.metric || item.dimension || item.field || item.code || fieldOrder[index] || '').trim();
         if (name) result[name] = roistatValue_(item);
       } else if (fieldOrder[index]) {
         result[fieldOrder[index]] = roistatValue_(item);
@@ -1836,10 +1836,31 @@ function readObjects_(sheetName) {
 function upsertRowsById_(sheetName, headers, records, mapRow) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
   const existing = readObjects_(sheetName);
-  const rowById = {};
+  const rowsById = {};
   existing.forEach((row, index) => {
-    rowById[row.id] = index + 2;
+    const id = String(row.id || '').trim();
+    if (!id) return;
+    if (!rowsById[id]) rowsById[id] = [];
+    rowsById[id].push(index + 2);
   });
+  const duplicateRows = [];
+  Object.keys(rowsById).forEach((id) => {
+    const rows = rowsById[id];
+    if (rows.length < 2) return;
+    duplicateRows.push.apply(duplicateRows, rows.slice(1));
+  });
+  const rowById = {};
+  if (duplicateRows.length) {
+    unique_(duplicateRows).sort((a, b) => b - a).forEach((rowNumber) => sheet.deleteRow(rowNumber));
+    readObjects_(sheetName).forEach((row, index) => {
+      const id = String(row.id || '').trim();
+      if (id) rowById[id] = index + 2;
+    });
+  } else {
+    Object.keys(rowsById).forEach((id) => {
+      rowById[id] = rowsById[id][0];
+    });
+  }
 
   records.forEach((record) => {
     const values = mapRow(record);
