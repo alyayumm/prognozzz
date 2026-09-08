@@ -103,6 +103,17 @@ const SALES_DEPARTMENT_STATIC_MANAGER_PLANS = [
   { planTraffic: 121, planQualified: 56, planDeals: 18, planVip: 5, planDistant: 12 },
 ];
 
+const SALES_DEPARTMENT_STATIC_PS_METRICS = {
+  'Руднев Денис': { vipDeals: 1, distantDeals: 0, paidDeals: 1, orderCount: 2, revenue: 118490, abDeals: 0 },
+  'Драбо Максим': { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 0, revenue: 0, abDeals: 0 },
+  'Борисова Алена': { vipDeals: 4, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 642980, abDeals: 2 },
+  'Шевелев Иван': { vipDeals: 2, distantDeals: 0, paidDeals: 3, orderCount: 4, revenue: 224500, abDeals: 0 },
+  'Садовников Алексей': { vipDeals: 2, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 491490, abDeals: 4 },
+  'Сергеева Софья': { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 3, revenue: 184000, abDeals: 0 },
+  'Смирнов Никита': { vipDeals: 1, distantDeals: 0, paidDeals: 0, orderCount: 2, revenue: 122500, abDeals: 0 },
+  'Антиповский Евгений': { vipDeals: 3, distantDeals: 0, paidDeals: 5, orderCount: 10, revenue: 455990, abDeals: 0 },
+};
+
 const SALES_DEPARTMENT_STATIC_DYNAMICS_TEXT = {
   'D2:D38': '0\n0\n0\n0\n0\n\n#DIV/0!\n159\n0\n0\n62\n2\n9\n60\n3,20%\n14%\n0\n38,00%\n#DIV/0!\n0\n#DIV/0!\n#DIV/0!\n0\n0,00%\n#DIV/0!\n98\n0\n0\n61\n0\n0\n43\n2\n20\n0\n43,50%',
   'G2:H38': '38\t25\n21\t15\n11\t6\n17\t16\n2\t3\n\t\n55,26%\t60,00%\n54\t71\n21\t15\n90\t64\n18\t26\n4\t3\n17\t13\n14\t23\n22,71%\t11,40%\n97%\t49%\n0\t0\n31,50%\t36,00%\n19,05%\t20,00%\n6\t10\n66,67%\t30,00%\n28,57%\t66,67%\n4\t3\n100,00%\t100,00%\n10,53%\t12,00%\n33\t43\n0\t13\n8\t5\n21\t28\n0\t12\n13\t10\n12\t18\n1\t0\n6\t9\n3\t3\n36,50%\t41,00%',
@@ -412,7 +423,7 @@ function getSalesDepartmentDashboard_(payload) {
   const planByManager = salesStaticPlanByManager_();
   const dynamicsByManager = salesReadStaticDynamicsByManager_();
   const daily = [];
-  const psByManager = {};
+  const psByManager = salesStaticPsByManager_();
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
@@ -423,9 +434,8 @@ function getSalesDepartmentDashboard_(payload) {
   );
   const activeCalendarDays = workingDaysPassed;
 
-  warnings.push('Данные отдела продаж загружены из быстрого снимка "Динамика" от 08.09.2026, потому что исходная таблица долго отдает формульные диапазоны.');
+  warnings.push('Данные отдела продаж загружены из быстрого снимка "Динамика" и "Выгрузка PS" от 08.09.2026, потому что исходная таблица долго отдает формульные диапазоны.');
   warnings.push('Дневная динамика временно не читается сервером: лист отвечает слишком долго. Основные показатели взяты из "Динамика".');
-  warnings.push('Выгрузка PS временно не читается сервером: VIP, дистант и средний чек будут пустыми до отдельной оптимизации.');
 
   const managers = config.managers.map((name) => {
     const plan = planByManager[name] || salesEmptyPlan_();
@@ -512,6 +522,22 @@ function salesStaticPlanByManager_() {
   const result = {};
   SALES_DEPARTMENT_CONFIG.managers.forEach((name, index) => {
     result[name] = SALES_DEPARTMENT_STATIC_MANAGER_PLANS[index] || salesEmptyPlan_();
+  });
+  return result;
+}
+
+function salesStaticPsByManager_() {
+  const result = {};
+  SALES_DEPARTMENT_CONFIG.managers.forEach((name) => {
+    const shortName = name.split(' ').slice(0, 2).join(' ');
+    result[name] = SALES_DEPARTMENT_STATIC_PS_METRICS[shortName] || {
+      vipDeals: 0,
+      distantDeals: 0,
+      paidDeals: 0,
+      orderCount: 0,
+      revenue: 0,
+      abDeals: 0,
+    };
   });
   return result;
 }
