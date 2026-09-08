@@ -1892,7 +1892,7 @@ function SourcesAnalyticsDashboard({
     acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
     return acc;
   }, {} as Record<Metric, number>);
-  const periodLabel = periodMode === "month" ? getSourceMonthRangeLabel(monthConfigs) : selectedMonthConfig.label;
+  const periodLabel = selectedMonthConfig.label;
   const strongestMetric = metrics.reduce((best, metric) => (summaryTotals[metric] > summaryTotals[best] ? metric : best), "Лиды" as Metric);
   const strongestSource = sourceTotals
     .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
@@ -7076,7 +7076,6 @@ function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter)
 
 function getSourceRecordsForPeriod(records: DailyRecord[], periodMode: SourcePeriodMode, config: MonthConfig): DailyRecord[] {
   const sourceRecords = records.filter(isSourceValueRecord);
-  if (periodMode === "month") return sourceRecords;
   return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
 }
 
@@ -7087,23 +7086,22 @@ function buildSourceChartBuckets(
   configs: MonthConfig[],
   sources: string[],
 ): SourceChartBucket[] {
-  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   const buckets = periodMode === "month"
-    ? sortedConfigs.map((monthConfig) => ({
-      key: monthConfig.monthKey,
-      label: getShortMonthLabel(monthConfig),
-      caption: String(monthConfig.year),
+    ? [{
+      key: config.monthKey,
+      label: getShortMonthLabel(config),
+      caption: "итого за месяц",
       values: createEmptySourceValues(sources),
-    }))
+    }]
     : buildMonthSourceBuckets(periodMode, config, sources);
 
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   records.filter(isSourceValueRecord).forEach((record) => {
-    if (periodMode !== "month" && !record.date.startsWith(config.monthKey)) return;
+    if (!record.date.startsWith(config.monthKey)) return;
 
     const bucketKey = periodMode === "month"
-      ? record.date.slice(0, 7)
+      ? config.monthKey
       : periodMode === "week"
         ? `${config.monthKey}-week-${getWeekOfMonth(record.date)}`
         : record.date;
@@ -7290,7 +7288,6 @@ function getSourceBudgetsForPeriod(
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    if (periodMode === "month") return true;
     return row.monthKey === config.monthKey;
   });
 }
@@ -7316,7 +7313,6 @@ function getSourceBrandRowsForPeriod(
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    if (periodMode === "month") return true;
     return row.monthKey === config.monthKey;
   });
 }
@@ -7378,19 +7374,18 @@ function buildBrandSourceChartBuckets(
   configs: MonthConfig[],
   sources: string[],
 ): SourceChartBucket[] {
-  const sortedConfigs = [...configs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   const buckets = periodMode === "month"
-    ? sortedConfigs.map((monthConfig) => ({
-      key: monthConfig.monthKey,
-      label: getShortMonthLabel(monthConfig),
-      caption: String(monthConfig.year),
+    ? [{
+      key: config.monthKey,
+      label: getShortMonthLabel(config),
+      caption: "итого за месяц",
       values: createEmptySourceValues(sources),
-    }))
+    }]
     : buildMonthSourceBuckets("week", config, sources);
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   rows.forEach((row) => {
-    const bucketKey = periodMode === "month" ? row.monthKey : `${row.monthKey}-week-${getWeekOfMonth(row.weekStart)}`;
+    const bucketKey = periodMode === "month" ? config.monthKey : `${row.monthKey}-week-${getWeekOfMonth(row.weekStart)}`;
     const bucket = bucketByKey.get(bucketKey);
     if (!bucket) return;
     const source = findSourceLabel(row.source, sources);
