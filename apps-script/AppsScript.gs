@@ -342,7 +342,7 @@ function setRoistatRecommendedFieldsOnce() {
 function setRoistatRecommendedFields_() {
   PropertiesService.getScriptProperties().setProperties({
     ROISTAT_METRIC_QUALIFIED: 'custom_18',
-    ROISTAT_METRIC_SALES: 'custom_9',
+    ROISTAT_METRIC_SALES: 'payment_sales',
     ROISTAT_METRIC_REVENUE: 'payment_revenue',
     ROISTAT_METRIC_BUDGET: 'marketing_cost',
     ROISTAT_DIMENSION_SOURCE: 'custom_dimension_1',
@@ -1169,7 +1169,7 @@ function getRoistatFieldMap_(kind) {
   const metricMap = {
     leads: roistatFieldOverride_('ROISTAT_METRIC_LEADS') || selectRoistatField_(metricsDictionary, ['leads', 'lead_count', 'leads_count'], ['лид', 'заявк'], 'leads'),
     qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['custom_18', 'ql', 'qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'kval'], ['квал', 'целев'], 'custom_18'),
-    sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['custom_9', 'payment_sales', 'sales', 'new_sales', 'payment_first_sales', 'orders', 'sales_count', 'paid_orders'], ['продаж по дате оплаты', 'оплат', 'продаж', 'сделк'], 'payment_sales'),
+    sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['payment_sales', 'custom_9', 'sales', 'new_sales', 'payment_first_sales', 'orders', 'sales_count', 'paid_orders'], ['продаж по дате оплаты', 'оплат', 'продаж', 'сделк'], 'payment_sales'),
     revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['payment_revenue', 'revenue', 'first_sales_revenue', 'payment_first_sales_revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], 'payment_revenue'),
     budget: roistatFieldOverride_('ROISTAT_METRIC_BUDGET') || selectRoistatField_(metricsDictionary, ['marketing_cost', 'cost', 'expenses', 'ad_cost', 'advertising_cost', 'budget'], ['маркетинг', 'расход', 'затрат', 'бюджет', 'cost'], 'marketing_cost'),
   };
