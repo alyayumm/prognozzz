@@ -21,6 +21,11 @@ type ApiAction =
   | "getBrandAliases"
   | "upsertBrandPerformance"
   | "upsertBrandBranches"
+  | "getRoistatSyncStatus"
+  | "getRoistatFields"
+  | "refreshRoistatFields"
+  | "syncRoistatSources"
+  | "syncRoistatBrands"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

@@ -80,6 +80,9 @@ import type {
   BrandBranchWeekly,
   BrandEvent,
   BrandPerformanceWeekly,
+  RoistatFieldsRefreshResult,
+  RoistatSyncKind,
+  RoistatSyncResult,
   WeekdayCoefficientKey,
   WeekSummary,
 } from "./types";
@@ -633,6 +636,72 @@ export default function App() {
     return persistDailyValues(values, message);
   }
 
+  async function refreshSharedSnapshotAfterWrite() {
+    const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
+    if (snapshot.records.length) {
+      setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
+      setRecords(mergePublicSheetRecords([], snapshot.records));
+      if (snapshot.eventsLoaded) {
+        setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
+      }
+      latestRecordDateRef.current = snapshot.latestActualDate;
+    }
+
+    const brandSnapshot = await loadBrandAnalyticsSnapshot();
+    setBrandData(brandSnapshot);
+    setBrandLoadMessage(
+      brandSnapshot.records.length || brandSnapshot.performance.length || brandSnapshot.branches.length
+        ? `Бренды загружены: ${brandSnapshot.records.length} строк аналитики, ${brandSnapshot.performance.length} недельных строк, ${brandSnapshot.branches.length} строк филиалов.`
+        : "В таблице брендов пока нет строк для отображения.",
+    );
+  }
+
+  async function syncRoistat(kind: RoistatSyncKind, fromDate: string, toDate: string) {
+    if (!apiConfigured) {
+      setSavedMessage("Roistat нельзя загрузить в локальном режиме: нужен Apps Script URL.");
+      return;
+    }
+    if (!writePassword) {
+      setSavedMessage("Для импорта Roistat введите пароль админки.");
+      return;
+    }
+
+    setIsSavingDaily(true);
+    setSavedMessage(kind === "sources" ? "Загружаю Roistat: источники..." : "Загружаю Roistat: домены/бренды...");
+    try {
+      const action = kind === "sources" ? "syncRoistatSources" : "syncRoistatBrands";
+      const result = await callReportApi<RoistatSyncResult>(action, { fromDate, toDate }, writePassword);
+      await refreshSharedSnapshotAfterWrite();
+      setSavedMessage(`${result.message} Данные обновлены из общей Google-таблицы.`);
+    } catch (error) {
+      setSavedMessage(`Roistat не загрузился: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
+    }
+  }
+
+  async function refreshRoistatFields() {
+    if (!apiConfigured) {
+      setSavedMessage("Поля Roistat нельзя обновить в локальном режиме: нужен Apps Script URL.");
+      return;
+    }
+    if (!writePassword) {
+      setSavedMessage("Для диагностики Roistat введите пароль админки.");
+      return;
+    }
+
+    setIsSavingDaily(true);
+    setSavedMessage("Обновляю список полей Roistat...");
+    try {
+      const result = await callReportApi<RoistatFieldsRefreshResult>("refreshRoistatFields", {}, writePassword);
+      setSavedMessage(`${result.message} Лист Roistat_Fields обновлен в Google Sheets.`);
+    } catch (error) {
+      setSavedMessage(`Поля Roistat не обновились: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
+    }
+  }
+
   function addEvent(event: EventItem) {
     const normalizedEvent = normalizeEvent(event);
     const isUpdate = events.some((item) => item.id === normalizedEvent.id);
@@ -887,6 +956,8 @@ export default function App() {
                 forecastCoefficients={forecastCoefficients}
                 onUpdateForecastCoefficient={updateForecastCoefficient}
                 onSaveForecastCoefficients={persistForecastCoefficients}
+                onSyncRoistat={syncRoistat}
+                onRefreshRoistatFields={refreshRoistatFields}
                 tab={adminTab}
                 setTab={setAdminTab}
               />
@@ -3708,16 +3779,22 @@ function SourceAdminPanel({
   selectedMonthConfig,
   monthDates,
   onSaveDailyValues,
+  onSyncRoistat,
+  onRefreshRoistatFields,
   isSavingDaily,
 }: {
   records: DailyRecord[];
   selectedMonthConfig: MonthConfig;
   monthDates: string[];
   onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => Promise<void>;
+  onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
+  onRefreshRoistatFields: () => Promise<void>;
   isSavingDaily: boolean;
 }) {
   const firstDate = monthDates[0] ?? `${selectedMonthConfig.monthKey}-01`;
   const [selectedDate, setSelectedDate] = useState(firstDate);
+  const [syncFromDate, setSyncFromDate] = useState(firstDate);
+  const [syncToDate, setSyncToDate] = useState(firstDate);
   const [sourceCity, setSourceCity] = useState<EditableSourceCity>("МСК");
   const [newSourceName, setNewSourceName] = useState("");
   const activeSources = useMemo(() => getActiveLeadSources(records), [records]);
@@ -3762,12 +3839,47 @@ function SourceAdminPanel({
     await onSaveDailyValues([sourceMetaUpdate(firstDate, source, false)], `Источник ${source} скрыт.`);
   }
 
+  async function syncRoistat(kind: RoistatSyncKind, fromDate = syncFromDate, toDate = syncToDate) {
+    await onSyncRoistat(kind, fromDate, toDate);
+  }
+
   return (
     <section className="analytics-panel source-editor-panel">
       <PanelHead
         title="Источники"
         description="Ввод лидов, КВАЛ и продаж по каналам привлечения. Эти данные не смешиваются с городами и сообщениями."
       />
+      <div className="roistat-sync-panel">
+        <div>
+          <strong>Roistat API</strong>
+          <span>Источники пишутся в раздел источников. Домены пишутся в Бренды.</span>
+        </div>
+        <label>
+          С
+          <input type="date" value={syncFromDate} onChange={(event) => setSyncFromDate(event.target.value)} />
+        </label>
+        <label>
+          По
+          <input type="date" value={syncToDate} onChange={(event) => setSyncToDate(event.target.value)} />
+        </label>
+        <div className="roistat-sync-actions">
+          <button className="select-button" type="button" onClick={() => syncRoistat("sources")} disabled={isSavingDaily}>
+            Roistat: источники
+          </button>
+          <button className="select-button" type="button" onClick={() => syncRoistat("brands")} disabled={isSavingDaily}>
+            Roistat: домены/бренды
+          </button>
+          <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
+            Поля Roistat
+          </button>
+          <button className="ghost-button" type="button" onClick={() => syncRoistat("sources", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
+            Тест 06.04: источники
+          </button>
+          <button className="ghost-button" type="button" onClick={() => syncRoistat("brands", "2026-04-06", "2026-04-06")} disabled={isSavingDaily}>
+            Тест 06.04: домены
+          </button>
+        </div>
+      </div>
       <div className="source-toolbar">
         <label>
           Дата
@@ -4746,6 +4858,8 @@ function AdminDashboard({
   forecastCoefficients,
   onUpdateForecastCoefficient,
   onSaveForecastCoefficients,
+  onSyncRoistat,
+  onRefreshRoistatFields,
   tab,
   setTab,
 }: {
@@ -4766,6 +4880,8 @@ function AdminDashboard({
   forecastCoefficients: ForecastCoefficients;
   onUpdateForecastCoefficient: (city: City, metric: Metric, weekday: WeekdayCoefficientKey, value: number) => void;
   onSaveForecastCoefficients: () => void;
+  onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
+  onRefreshRoistatFields: () => Promise<void>;
   tab: AdminTab;
   setTab: (tab: AdminTab) => void;
 }) {
@@ -4856,6 +4972,8 @@ function AdminDashboard({
           selectedMonthConfig={selectedMonthConfig}
           monthDates={dates}
           onSaveDailyValues={onSaveDailyValues}
+          onSyncRoistat={onSyncRoistat}
+          onRefreshRoistatFields={onRefreshRoistatFields}
           isSavingDaily={isSavingDaily}
         />
       )}

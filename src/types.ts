@@ -160,3 +160,23 @@ export interface BrandEvent {
   direction: "рост" | "падение";
   percent: number;
 }
+
+export type RoistatSyncKind = "sources" | "brands";
+
+export interface RoistatSyncResult {
+  kind: RoistatSyncKind;
+  fromDate: string;
+  toDate: string;
+  status: "success" | "warning" | "error";
+  message: string;
+  sourceRows: number;
+  brandRows: number;
+  skippedRows: number;
+  updatedAt: string;
+}
+
+export interface RoistatFieldsRefreshResult {
+  metrics: number;
+  dimensions: number;
+  message: string;
+}

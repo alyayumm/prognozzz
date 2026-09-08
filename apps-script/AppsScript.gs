@@ -1,5 +1,8 @@
 const CONFIG = {
   passwordProperty: 'WEEKLY_REPORT_PASSWORD',
+  roistatApiKeyProperty: 'ROISTAT_API_KEY',
+  roistatProjectProperty: 'ROISTAT_PROJECT_ID',
+  roistatDefaultProjectId: '301351',
   sheets: {
     daily: 'Data_Daily',
     months: 'Month_Config',
@@ -10,6 +13,8 @@ const CONFIG = {
     brandPerformance: 'Brand_Performance_Weekly',
     brandBranches: 'Brand_Branches_Weekly',
     brandAliases: 'Brand_Aliases',
+    roistatSyncLog: 'Roistat_Sync_Log',
+    roistatFields: 'Roistat_Fields',
   },
 };
 
@@ -125,6 +130,24 @@ const HEADERS = {
     'brand',
     'updatedAt',
   ],
+  Roistat_Sync_Log: [
+    'id',
+    'kind',
+    'fromDate',
+    'toDate',
+    'status',
+    'message',
+    'sourceRows',
+    'brandRows',
+    'skippedRows',
+    'updatedAt',
+  ],
+  Roistat_Fields: [
+    'kind',
+    'name',
+    'title',
+    'updatedAt',
+  ],
 };
 
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
@@ -167,13 +190,18 @@ function doPost(e) {
       getBrandAliases: getBrandAliases_,
       upsertBrandPerformance: upsertBrandPerformance_,
       upsertBrandBranches: upsertBrandBranches_,
+      getRoistatSyncStatus: getRoistatSyncStatus_,
+      syncRoistatSources: syncRoistatSources_,
+      syncRoistatBrands: syncRoistatBrands_,
+      getRoistatFields: getRoistatFields_,
+      refreshRoistatFields: refreshRoistatFields_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -228,6 +256,8 @@ function formatServiceSheetKeys_() {
     { sheet: CONFIG.sheets.brandPerformance, column: 3 },
     { sheet: CONFIG.sheets.brandBranches, column: 2 },
     { sheet: CONFIG.sheets.brandBranches, column: 3 },
+    { sheet: CONFIG.sheets.roistatSyncLog, column: 3 },
+    { sheet: CONFIG.sheets.roistatSyncLog, column: 4 },
   ].forEach((entry) => {
     const sheet = ss.getSheetByName(entry.sheet);
     if (!sheet) return;
@@ -280,6 +310,767 @@ function upsertBrandPerformance_(payload) {
 function upsertBrandBranches_(payload) {
   const records = Array.isArray(payload.records) ? payload.records : (Array.isArray(payload.rows) ? payload.rows : []);
   return upsertRowsById_(CONFIG.sheets.brandBranches, HEADERS.Brand_Branches_Weekly, records, brandBranchRow_);
+}
+
+function getRoistatSyncStatus_() {
+  const properties = PropertiesService.getScriptProperties();
+  const logs = readObjects_(CONFIG.sheets.roistatSyncLog)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, 20);
+
+  return {
+    projectId: properties.getProperty(CONFIG.roistatProjectProperty) || CONFIG.roistatDefaultProjectId,
+    hasApiKey: Boolean(properties.getProperty(CONFIG.roistatApiKeyProperty)),
+    logs: logs,
+  };
+}
+
+function getRoistatFields_() {
+  return readObjects_(CONFIG.sheets.roistatFields);
+}
+
+function refreshRoistatFields_() {
+  const now = new Date();
+  const metrics = normalizeRoistatDictionary_(fetchRoistatDictionary_('analytics/metrics-new'))
+    .map((item) => ({
+      kind: 'metric',
+      name: item.name,
+      title: item.title,
+      updatedAt: now,
+    }));
+  const dimensions = normalizeRoistatDictionary_(fetchRoistatDictionary_('analytics/dimensions'))
+    .map((item) => ({
+      kind: 'dimension',
+      name: item.name,
+      title: item.title,
+      updatedAt: now,
+    }));
+  const rows = metrics.concat(dimensions).filter((item) => item.name);
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.roistatFields);
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, HEADERS.Roistat_Fields.length).setValues([HEADERS.Roistat_Fields]);
+  sheet.setFrozenRows(1);
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, HEADERS.Roistat_Fields.length)
+      .setValues(rows.map((row) => HEADERS.Roistat_Fields.map((header) => row[header] || '')));
+  }
+  sheet.autoResizeColumns(1, HEADERS.Roistat_Fields.length);
+  return {
+    metrics: metrics.length,
+    dimensions: dimensions.length,
+    message: 'Поля Roistat обновлены: метрик ' + metrics.length + ', измерений ' + dimensions.length + '.',
+  };
+}
+
+function syncRoistatSources_(payload) {
+  return syncRoistatRange_(payload, 'sources');
+}
+
+function syncRoistatBrands_(payload) {
+  return syncRoistatRange_(payload, 'brands');
+}
+
+function syncRoistatRange_(payload, kind) {
+  const range = normalizeRoistatDateRange_(payload);
+  const fields = getRoistatFieldMap_(kind);
+  const dates = eachDateInRange_(range.fromDate, range.toDate);
+
+  if (dates.length > 62) {
+    throw new Error('Roistat: выберите период до 62 дней за один импорт, чтобы не упереться в лимиты Apps Script.');
+  }
+
+  try {
+    const rawRows = [];
+    const warnings = [].concat(fields.warnings || []);
+    dates.forEach((date) => {
+      const requestPayload = buildRoistatAnalyticsPayload_(fields, date, date);
+      const result = fetchRoistatAnalyticsData_(requestPayload, fields, kind);
+      warnings.push.apply(warnings, result.warnings || []);
+      rawRows.push.apply(rawRows, extractRoistatRows_(result.response, fields, date));
+    });
+
+    const result = kind === 'brands'
+      ? writeRoistatBrandRows_(rawRows, fields, range, warnings)
+      : writeRoistatSourceRows_(rawRows, fields, range, warnings);
+    logRoistatSync_(result);
+    return result;
+  } catch (error) {
+    const result = {
+      kind: kind,
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      status: 'error',
+      message: roistatUserError_(error),
+      sourceRows: 0,
+      brandRows: 0,
+      skippedRows: 0,
+      updatedAt: new Date(),
+    };
+    logRoistatSync_(result);
+    throw new Error(result.message);
+  }
+}
+
+function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
+  const aggregated = {};
+  let skippedRows = 0;
+
+  rawRows.forEach((row) => {
+    const dimensionText = roistatDimensionText_(row);
+    if (isRoistatMessageLead_(dimensionText)) {
+      skippedRows += 1;
+      return;
+    }
+
+    const date = stringifyDate_(row.syncDate || range.fromDate);
+    const city = normalizeRoistatCity_(dimensionText);
+    const source = canonicalRoistatSource_(dimensionText, row.dimensions[fields.domainDimension]);
+    if (!city || !source || source === 'Другие') {
+      skippedRows += 1;
+      return;
+    }
+
+    const key = [date, city, source].join('|');
+    if (!aggregated[key]) {
+      aggregated[key] = {
+        date: date,
+        city: city,
+        source: source,
+        leads: 0,
+        qualified: 0,
+        sales: 0,
+        revenue: 0,
+        budget: 0,
+      };
+    }
+
+    aggregated[key].leads += roistatMetricValue_(row, fields.metricMap.leads);
+    aggregated[key].qualified += roistatMetricValue_(row, fields.metricMap.qualified);
+    aggregated[key].sales += roistatMetricValue_(row, fields.metricMap.sales);
+    aggregated[key].revenue += roistatMetricValue_(row, fields.metricMap.revenue);
+    aggregated[key].budget += roistatMetricValue_(row, fields.metricMap.budget);
+  });
+
+  const records = Object.keys(aggregated).flatMap((key) => {
+    const item = aggregated[key];
+    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat API';
+    return [
+      roistatSourceDailyRecord_(item, 'Лиды', item.leads, baseComment),
+      roistatSourceDailyRecord_(item, 'Квалы', item.qualified, baseComment),
+      roistatSourceDailyRecord_(item, 'Продажи', item.sales, baseComment + '; выручка: ' + Math.round(item.revenue) + '; расход: ' + Math.round(item.budget)),
+    ];
+  });
+
+  const upsertResult = records.length
+    ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, records, dailyRow_)
+    : { updated: 0 };
+  unique_(records.map((record) => record.month)).forEach(rebuildWeeklySummary_);
+
+  return {
+    kind: 'sources',
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    status: warnings.length || skippedRows ? 'warning' : 'success',
+    message: roistatResultMessage_('источники', upsertResult.updated, skippedRows, warnings),
+    sourceRows: upsertResult.updated,
+    brandRows: 0,
+    skippedRows: skippedRows,
+    updatedAt: new Date(),
+  };
+}
+
+function writeRoistatBrandRows_(rawRows, fields, range, warnings) {
+  const aggregated = {};
+  let skippedRows = 0;
+
+  rawRows.forEach((row) => {
+    const dimensionText = roistatDimensionText_(row);
+    if (isRoistatMessageLead_(dimensionText)) {
+      skippedRows += 1;
+      return;
+    }
+
+    const date = stringifyDate_(row.syncDate || range.fromDate);
+    const city = normalizeRoistatCity_(dimensionText);
+    const domain = normalizeRoistatDomain_(row.dimensions[fields.domainDimension] || firstRoistatDomain_(dimensionText));
+    const brand = canonicalRoistatBrand_(domain, dimensionText);
+    const source = canonicalRoistatSource_(dimensionText, domain);
+    if (!city || !brand || !source || source === 'Другие') {
+      skippedRows += 1;
+      return;
+    }
+
+    const weekStart = mondayOfDate_(date);
+    const key = [weekStart, city, brand, source].join('|');
+    if (!aggregated[key]) {
+      aggregated[key] = {
+        weekStart: weekStart,
+        monthKey: String(weekStart).slice(0, 7),
+        city: city,
+        brand: brand,
+        domain: domain,
+        source: source,
+        leads: 0,
+        qualified: 0,
+        sales: 0,
+        revenue: 0,
+        budget: 0,
+      };
+    }
+
+    aggregated[key].leads += roistatMetricValue_(row, fields.metricMap.leads);
+    aggregated[key].qualified += roistatMetricValue_(row, fields.metricMap.qualified);
+    aggregated[key].sales += roistatMetricValue_(row, fields.metricMap.sales);
+    aggregated[key].revenue += roistatMetricValue_(row, fields.metricMap.revenue);
+    aggregated[key].budget += roistatMetricValue_(row, fields.metricMap.budget);
+  });
+
+  const records = Object.keys(aggregated).map((key) => {
+    const item = aggregated[key];
+    return {
+      id: 'roistat-brand-' + item.weekStart + '-' + citySlug_(item.city) + '-' + slug_(item.brand) + '-' + slug_(item.source),
+      weekStart: item.weekStart,
+      monthKey: item.monthKey,
+      city: item.city,
+      brand: item.brand,
+      domain: item.domain,
+      source: item.source,
+      leads: Math.round(item.leads),
+      qualified: Math.round(item.qualified),
+      sales: Math.round(item.sales),
+      revenue: Math.round(item.revenue),
+      actualRevenue: Math.round(item.revenue),
+      budget: Math.round(item.budget),
+    };
+  });
+
+  const upsertResult = records.length
+    ? upsertRowsById_(CONFIG.sheets.brandPerformance, HEADERS.Brand_Performance_Weekly, records, brandPerformanceRow_)
+    : { updated: 0 };
+
+  return {
+    kind: 'brands',
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    status: warnings.length || skippedRows ? 'warning' : 'success',
+    message: roistatResultMessage_('домены/бренды', upsertResult.updated, skippedRows, warnings),
+    sourceRows: 0,
+    brandRows: upsertResult.updated,
+    skippedRows: skippedRows,
+    updatedAt: new Date(),
+  };
+}
+
+function roistatSourceDailyRecord_(item, metric, fact, comment) {
+  const id = [item.date, 'source-roistat', citySlug_(item.city), slug_(item.source), slug_(metric)].join('-');
+  return {
+    id: id,
+    date: item.date,
+    month: String(item.date).slice(0, 7),
+    week: weekOfMonth_(item.date),
+    city: 'источники',
+    channel: item.source,
+    metric: metric,
+    plan: 0,
+    fact: Math.round(Number(fact || 0)),
+    forecast: 0,
+    recommendations: 0,
+    omQualified: 0,
+    comment: comment,
+  };
+}
+
+function getRoistatFieldMap_(kind) {
+  const properties = PropertiesService.getScriptProperties();
+  const metricsDictionary = safeRoistatDictionary_('analytics/metrics-new');
+  const dimensionsDictionary = safeRoistatDictionary_('analytics/dimensions');
+  const warnings = [];
+
+  const metricMap = {
+    leads: roistatFieldOverride_('ROISTAT_METRIC_LEADS') || selectRoistatField_(metricsDictionary, ['leads', 'lead_count', 'leads_count'], ['лид', 'заявк'], 'leads'),
+    qualified: roistatFieldOverride_('ROISTAT_METRIC_QUALIFIED') || selectRoistatField_(metricsDictionary, ['qualified', 'qualified_leads', 'quality_leads', 'target_leads', 'ql', 'kval'], ['квал', 'целев'], ''),
+    sales: roistatFieldOverride_('ROISTAT_METRIC_SALES') || selectRoistatField_(metricsDictionary, ['sales', 'orders', 'sales_count', 'paid_orders'], ['продаж', 'сделк'], 'sales'),
+    revenue: roistatFieldOverride_('ROISTAT_METRIC_REVENUE') || selectRoistatField_(metricsDictionary, ['revenue', 'income', 'profit', 'sales_revenue', 'order_revenue'], ['выруч', 'доход', 'revenue'], ''),
+    budget: roistatFieldOverride_('ROISTAT_METRIC_BUDGET') || selectRoistatField_(metricsDictionary, ['marketing_cost', 'cost', 'expenses', 'ad_cost', 'advertising_cost', 'budget'], ['маркетинг', 'расход', 'затрат', 'бюджет', 'cost'], 'marketing_cost'),
+  };
+
+  if (!metricMap.qualified) warnings.push('Не нашла метрику КВАЛ в справочнике Roistat. Если КВАЛ не загрузится, задайте Script Property ROISTAT_METRIC_QUALIFIED.');
+  if (!metricMap.revenue) warnings.push('Не нашла метрику выручки в справочнике Roistat. Если выручка нужна, задайте Script Property ROISTAT_METRIC_REVENUE.');
+
+  const sourceDimensions = [
+    roistatDimensionOverride_('ROISTAT_DIMENSION_SOURCE') || selectRoistatField_(dimensionsDictionary, ['marker_level_1', 'utm_source', 'source'], ['источник', 'реклам'], 'marker_level_1'),
+    selectRoistatField_(dimensionsDictionary, ['marker_level_2', 'utm_medium'], ['канал', 'medium'], 'marker_level_2'),
+    selectRoistatField_(dimensionsDictionary, ['marker_level_3', 'utm_campaign'], ['кампан'], 'marker_level_3'),
+    selectRoistatField_(dimensionsDictionary, ['marker_level_4', 'utm_content'], ['content'], 'marker_level_4'),
+  ];
+  const hostDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_DOMAIN') || selectRoistatField_(dimensionsDictionary, ['host', 'domain'], ['домен', 'host'], 'host');
+  const cityDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_CITY') || selectRoistatField_(dimensionsDictionary, ['pipeline', 'funnel', 'project', 'city'], ['воронк', 'город', 'мск', 'спб'], '');
+  const leadTypeDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_LEAD_TYPE') || selectRoistatField_(dimensionsDictionary, ['lead_type', 'order_type', 'request_type'], ['тип лида', 'тип заявки'], '');
+
+  const dimensions = unique_(
+    []
+      .concat(kind === 'brands' ? [hostDimension] : sourceDimensions)
+      .concat(kind === 'brands' ? sourceDimensions.slice(0, 2) : [hostDimension])
+      .concat([cityDimension, leadTypeDimension])
+      .filter(Boolean),
+  );
+  const metrics = unique_(Object.keys(metricMap).map((key) => metricMap[key]).filter(Boolean));
+
+  if (!dimensions.length) warnings.push('Не нашла измерения Roistat для источников/доменов.');
+  if (!metrics.length) warnings.push('Не нашла метрики Roistat для импорта.');
+
+  return {
+    dimensions: dimensions,
+    allDimensions: unique_(dimensions.concat(sourceDimensions).concat([hostDimension, cityDimension, leadTypeDimension]).filter(Boolean)),
+    sourceDimensions: sourceDimensions.filter(Boolean),
+    domainDimension: hostDimension,
+    cityDimension: cityDimension,
+    leadTypeDimension: leadTypeDimension,
+    metrics: metrics,
+    metricMap: metricMap,
+    warnings: warnings,
+    projectId: properties.getProperty(CONFIG.roistatProjectProperty) || CONFIG.roistatDefaultProjectId,
+  };
+}
+
+function buildRoistatAnalyticsPayload_(fields, fromDate, toDate) {
+  return {
+    dimensions: fields.dimensions,
+    metrics: fields.metrics,
+    period: {
+      from: fromDate + 'T00:00:00+0300',
+      to: toDate + 'T23:59:59+0300',
+    },
+  };
+}
+
+function fetchRoistatAnalyticsData_(payload, fields, kind) {
+  const attempts = roistatAnalyticsAttempts_(payload, fields, kind);
+  const errors = [];
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    try {
+      const response = fetchRoistatEndpoint_('analytics/data', attempt.payload);
+      const warnings = index === 0
+        ? []
+        : ['Roistat отклонил полный запрос, импорт выполнен по упрощенному набору: ' + attempt.note + '. ' + roistatRequestFields_(attempt.payload)];
+      return { response: response, warnings: warnings };
+    } catch (error) {
+      errors.push(roistatUserError_(error));
+    }
+  }
+  throw new Error(errors.slice(0, 3).join(' | '));
+}
+
+function roistatAnalyticsAttempts_(payload, fields, kind) {
+  const metricSets = [
+    fields.metrics,
+    unique_([fields.metricMap.leads, fields.metricMap.qualified, fields.metricMap.sales].filter(Boolean)),
+    unique_([fields.metricMap.leads, fields.metricMap.sales].filter(Boolean)),
+    unique_([fields.metricMap.leads].filter(Boolean)),
+  ].filter((set) => set.length);
+
+  const sourceDimension = fields.sourceDimensions[0];
+  const secondSourceDimension = fields.sourceDimensions[1];
+  const dimensionSets = kind === 'brands'
+    ? [
+        [fields.domainDimension, sourceDimension, fields.cityDimension, fields.leadTypeDimension],
+        [fields.domainDimension, sourceDimension, fields.cityDimension],
+        [fields.domainDimension, fields.cityDimension],
+        [fields.domainDimension],
+      ]
+    : [
+        [sourceDimension, secondSourceDimension, fields.domainDimension, fields.cityDimension, fields.leadTypeDimension],
+        [sourceDimension, fields.domainDimension, fields.cityDimension],
+        [sourceDimension, fields.cityDimension],
+        [sourceDimension],
+      ];
+
+  const attempts = [];
+  dimensionSets.forEach((dimensions, dimensionIndex) => {
+    metricSets.forEach((metrics, metricIndex) => {
+      const cleanedDimensions = unique_((dimensions || []).filter(Boolean));
+      const cleanedMetrics = unique_((metrics || []).filter(Boolean));
+      if (!cleanedDimensions.length || !cleanedMetrics.length) return;
+      attempts.push({
+        payload: {
+          dimensions: cleanedDimensions,
+          metrics: cleanedMetrics,
+          period: payload.period,
+        },
+        note: 'вариант ' + (dimensionIndex + 1) + '/' + (metricIndex + 1),
+      });
+    });
+  });
+  return uniqueJson_(attempts);
+}
+
+function fetchRoistatEndpoint_(method, payload, httpMethod) {
+  const properties = PropertiesService.getScriptProperties();
+  const apiKey = properties.getProperty(CONFIG.roistatApiKeyProperty);
+  const projectId = properties.getProperty(CONFIG.roistatProjectProperty) || CONFIG.roistatDefaultProjectId;
+  if (!apiKey) {
+    throw new Error('Не задан ROISTAT_API_KEY в Script Properties.');
+  }
+
+  const requestMethod = String(httpMethod || 'post').toLowerCase();
+  const options = {
+    method: requestMethod,
+    headers: {
+      'Api-key': apiKey,
+    },
+    muteHttpExceptions: true,
+  };
+  if (requestMethod !== 'get') {
+    options.contentType = 'application/json';
+    options.payload = JSON.stringify(payload || {});
+  }
+
+  const response = UrlFetchApp.fetch('https://cloud.roistat.com/api/v1/project/' + method + '?project=' + encodeURIComponent(projectId), options);
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (ignore) {
+    parsed = null;
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error('Roistat HTTP ' + status + ': ' + sanitizeRoistatText_(text));
+  }
+  if (parsed && (parsed.status === 'error' || parsed.error)) {
+    throw new Error('Roistat error: ' + sanitizeRoistatText_(JSON.stringify(parsed.error || parsed)));
+  }
+
+  return parsed || {};
+}
+
+function fetchRoistatDictionary_(method) {
+  try {
+    return fetchRoistatEndpoint_(method, {}, 'post');
+  } catch (postError) {
+    try {
+      return fetchRoistatEndpoint_(method, {}, 'get');
+    } catch (getError) {
+      throw postError;
+    }
+  }
+}
+
+function safeRoistatDictionary_(method) {
+  try {
+    return normalizeRoistatDictionary_(fetchRoistatDictionary_(method));
+  } catch (ignore) {
+    return [];
+  }
+}
+
+function normalizeRoistatDictionary_(response) {
+  const result = [];
+  collectRoistatDictionaryItems_(response, result);
+  return result
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const name = String(item.name || item.key || item.id || item.metric || item.dimension || item.value || '').trim();
+      const title = String(item.title || item.label || item.display_name || item.name_ru || item.description || name).trim();
+      if (!name) return null;
+      return {
+        name: name,
+        title: title,
+        search: (name + ' ' + title).toLowerCase(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function collectRoistatDictionaryItems_(node, result) {
+  if (!node) return;
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectRoistatDictionaryItems_(item, result));
+    return;
+  }
+  if (typeof node !== 'object') return;
+  if (node.name || node.key || node.id || node.metric || node.dimension) {
+    result.push(node);
+  }
+  ['data', 'items', 'metrics', 'dimensions', 'list', 'fields'].forEach((key) => {
+    if (node[key]) collectRoistatDictionaryItems_(node[key], result);
+  });
+}
+
+function selectRoistatField_(dictionary, names, titleParts, fallback) {
+  const normalizedNames = names.map((name) => String(name).toLowerCase());
+  const exact = dictionary.find((item) => normalizedNames.indexOf(item.name.toLowerCase()) >= 0);
+  if (exact) return exact.name;
+
+  const byTitle = dictionary.find((item) => {
+    return titleParts.some((part) => item.search.indexOf(String(part).toLowerCase()) >= 0);
+  });
+  if (byTitle) return byTitle.name;
+
+  return fallback;
+}
+
+function roistatFieldOverride_(name) {
+  return String(PropertiesService.getScriptProperties().getProperty(name) || '').trim();
+}
+
+function roistatDimensionOverride_(name) {
+  return roistatFieldOverride_(name);
+}
+
+function extractRoistatRows_(response, fields, syncDate) {
+  const roots = response && response.data && response.data.items
+    ? response.data.items
+    : response && response.items
+      ? response.items
+      : Array.isArray(response && response.data)
+        ? response.data
+        : [];
+  const rows = [];
+  collectRoistatRows_(roots, {}, rows, fields, syncDate);
+  return rows;
+}
+
+function collectRoistatRows_(items, inheritedDimensions, rows, fields, syncDate) {
+  if (!Array.isArray(items)) return;
+  items.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const dimensions = Object.assign({}, inheritedDimensions, roistatObjectFromSection_(item.dimensions, fields.allDimensions));
+    fields.allDimensions.forEach((dimension) => {
+      if (item[dimension] !== undefined && dimensions[dimension] === undefined) {
+        dimensions[dimension] = roistatValue_(item[dimension]);
+      }
+    });
+    const metrics = roistatObjectFromSection_(item.metrics, fields.metrics);
+    fields.metrics.forEach((metric) => {
+      if (item[metric] !== undefined && metrics[metric] === undefined) {
+        metrics[metric] = Number(roistatValue_(item[metric]) || 0);
+      }
+    });
+
+    if (Object.keys(metrics).some((metric) => Number(metrics[metric] || 0) !== 0)) {
+      rows.push({
+        dimensions: dimensions,
+        metrics: metrics,
+        syncDate: syncDate,
+      });
+    }
+
+    if (Array.isArray(item.items)) collectRoistatRows_(item.items, dimensions, rows, fields, syncDate);
+    if (Array.isArray(item.children)) collectRoistatRows_(item.children, dimensions, rows, fields, syncDate);
+  });
+}
+
+function roistatObjectFromSection_(section, fieldOrder) {
+  const result = {};
+  if (!section) return result;
+  if (Array.isArray(section)) {
+    section.forEach((item, index) => {
+      if (item && typeof item === 'object') {
+        const name = String(item.name || item.key || item.id || item.metric || item.dimension || fieldOrder[index] || '').trim();
+        if (name) result[name] = roistatValue_(item);
+      } else if (fieldOrder[index]) {
+        result[fieldOrder[index]] = roistatValue_(item);
+      }
+    });
+    return result;
+  }
+  if (typeof section === 'object') {
+    Object.keys(section).forEach((key) => {
+      result[key] = roistatValue_(section[key]);
+    });
+  }
+  return result;
+}
+
+function roistatValue_(value) {
+  if (value && typeof value === 'object') {
+    if (value.value !== undefined) return value.value;
+    if (value.v !== undefined) return value.v;
+    if (value.title !== undefined) return value.title;
+    if (value.name !== undefined) return value.name;
+  }
+  return value;
+}
+
+function roistatMetricValue_(row, metricName) {
+  if (!metricName) return 0;
+  const value = row.metrics[metricName];
+  const numeric = Number(String(value || 0).replace(/\s/g, '').replace(',', '.'));
+  return isFinite(numeric) ? numeric : 0;
+}
+
+function roistatDimensionText_(row) {
+  return Object.keys(row.dimensions || {})
+    .map((key) => String(row.dimensions[key] || ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function normalizeRoistatDateRange_(payload) {
+  const fromDate = normalizeRoistatDate_(payload.fromDate || payload.from || payload.date || payload.startDate);
+  const toDate = normalizeRoistatDate_(payload.toDate || payload.to || payload.date || payload.endDate || fromDate);
+  if (!fromDate || !toDate) {
+    throw new Error('Не передан период Roistat.');
+  }
+  if (fromDate > toDate) {
+    throw new Error('Дата начала Roistat позже даты окончания.');
+  }
+  return { fromDate: fromDate, toDate: toDate };
+}
+
+function normalizeRoistatDate_(value) {
+  const raw = String(value || '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return isoMatch[1] + '-' + isoMatch[2] + '-' + isoMatch[3];
+  const ruMatch = raw.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  if (ruMatch) {
+    const year = ruMatch[3].length === 2 ? '20' + ruMatch[3] : ruMatch[3];
+    return year + '-' + ruMatch[2].padStart(2, '0') + '-' + ruMatch[1].padStart(2, '0');
+  }
+  return raw.length >= 10 ? raw.slice(0, 10) : '';
+}
+
+function eachDateInRange_(fromDate, toDate) {
+  const result = [];
+  const current = new Date(fromDate + 'T00:00:00Z');
+  const end = new Date(toDate + 'T00:00:00Z');
+  while (current <= end) {
+    result.push(Utilities.formatDate(current, 'GMT', 'yyyy-MM-dd'));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return result;
+}
+
+function normalizeRoistatCity_(text) {
+  const lower = String(text || '').toLowerCase();
+  if (lower.indexOf('спб') >= 0 || lower.indexOf('питер') >= 0 || lower.indexOf('санкт') >= 0 || lower.indexOf('spb') >= 0) return 'СПБ';
+  if (lower.indexOf('мск') >= 0 || lower.indexOf('москва') >= 0 || lower.indexOf('moscow') >= 0 || lower.indexOf('msk') >= 0) return 'МСК';
+  return '';
+}
+
+function isRoistatMessageLead_(text) {
+  const lower = String(text || '').toLowerCase();
+  return lower.indexOf('сообщ') >= 0 || lower.indexOf('message') >= 0 || lower.indexOf('msg') >= 0;
+}
+
+function canonicalRoistatSource_(text, domainValue) {
+  const lower = String((domainValue || '') + ' ' + (text || '')).toLowerCase();
+  const domain = normalizeRoistatDomain_(domainValue);
+  if (domain === 'изи-драйв.рф' || lower.indexOf('директ') >= 0) return 'Директ';
+  if (lower.indexOf('2gis') >= 0 || lower.indexOf('2гис') >= 0 || lower.indexOf('2 гис') >= 0 || lower.indexOf('link.2gis') >= 0) return '2ГИС';
+  if (lower.indexOf('gkart') >= 0 || lower.indexOf('google') >= 0 || lower.indexOf('гугл') >= 0 || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return 'Гугл Карты';
+  if (lower.indexOf('ykart') >= 0 || lower.indexOf('ykar') >= 0 || lower.indexOf('geoadv_maps') >= 0 || /(^|[:_\s-])yk($|[:_\s-])/.test(lower) || /(^|[:_\s-])ya($|[:_\s-])/.test(lower)) return 'Яндекс Карты';
+  if (lower.indexOf('seo') >= 0 || lower.indexOf('сео') >= 0 || lower.indexOf('сайт') >= 0) return 'SEO';
+  if (lower.indexOf('zoon') >= 0) return 'Zoon';
+  if (lower.indexOf('прям') >= 0 || lower.indexOf('direct visits') >= 0) return 'Прямые визиты';
+  if (lower.indexOf('кеш') >= 0 || lower.indexOf('кэш') >= 0 || lower.indexOf('cashback') >= 0) return 'Рек/кешбэк';
+  if (lower.indexOf('друг') >= 0 || lower.indexOf('other') >= 0) return 'Другие';
+  return 'Другие';
+}
+
+function canonicalRoistatBrand_(domainValue, text) {
+  const domain = normalizeRoistatDomain_(domainValue);
+  if (domain === 'изи-драйв.рф') return 'изи-драйв.рф';
+
+  const lower = String((domain || '') + ' ' + (text || '')).toLowerCase();
+  if (lower.indexOf('рулевой') >= 0 || lower.indexOf('rulevoi') >= 0 || lower.indexOf('rulevoy') >= 0) return 'Рулевой';
+  if (lower.indexOf('автодрайв') >= 0 || lower.indexOf('autodrive') >= 0) return 'Автодрайв';
+  if (lower.indexOf('изи драйв') >= 0 || lower.indexOf('изи-драйв') >= 0 || lower.indexOf('izidrive') >= 0 || lower.indexOf('easy') >= 0) return 'Изи Драйв';
+  if (lower.indexOf('гермес') >= 0 || lower.indexOf('germes') >= 0 || lower.indexOf('hermes') >= 0) return 'Гермес';
+  if (lower.indexOf('пора за руль') >= 0 || lower.indexOf('porazaryl') >= 0 || lower.indexOf('pora') >= 0) return 'Пора за руль';
+  if (lower.indexOf('академик') >= 0 || lower.indexOf('akadem') >= 0) return 'Академик';
+  if (lower.indexOf('безопасность') >= 0 || lower.indexOf('safety') >= 0) return 'Безопасность';
+  if (!domain) return '';
+  return beautifyDomainBrand_(domain);
+}
+
+function normalizeRoistatDomain_(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+    .trim();
+}
+
+function firstRoistatDomain_(text) {
+  const match = String(text || '').toLowerCase().match(/[a-zа-я0-9-]+\.(?:рф|ru|com|net|org)/i);
+  return match ? match[0] : '';
+}
+
+function beautifyDomainBrand_(domain) {
+  return String(domain || '')
+    .replace(/\.(рф|ru|com|net|org)$/i, '')
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function mondayOfDate_(dateIso) {
+  const date = new Date(dateIso + 'T00:00:00Z');
+  const day = date.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setUTCDate(date.getUTCDate() + diff);
+  return Utilities.formatDate(date, 'GMT', 'yyyy-MM-dd');
+}
+
+function citySlug_(city) {
+  return city === 'МСК' ? 'msk' : city === 'СПБ' ? 'spb' : 'all';
+}
+
+function slug_(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^a-zа-я0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function roistatResultMessage_(label, updated, skippedRows, warnings) {
+  const parts = [label + ': записано строк ' + updated];
+  if (skippedRows) parts.push('пропущено строк ' + skippedRows);
+  if (warnings && warnings.length) parts.push(unique_(warnings).slice(0, 3).join(' | '));
+  return parts.join('. ');
+}
+
+function roistatRequestFields_(payload) {
+  return 'dimensions=' + (payload.dimensions || []).join(', ') + '; metrics=' + (payload.metrics || []).join(', ');
+}
+
+function roistatUserError_(error) {
+  const message = sanitizeRoistatText_(error && error.message ? error.message : String(error));
+  if (message.indexOf('HTTP 400') >= 0 || message.toLowerCase().indexOf('bad request') >= 0) {
+    return 'Roistat вернул Bad Request: запрос собран с полем, которого нет в проекте, или Roistat не принимает формат периода. Проверьте ROISTAT_METRIC_QUALIFIED / ROISTAT_METRIC_REVENUE / ROISTAT_DIMENSION_CITY в Script Properties. Детали: ' + message;
+  }
+  return message;
+}
+
+function sanitizeRoistatText_(text) {
+  return String(text || '')
+    .replace(/api[-_ ]?key["':=\s]+[^"',\s}]+/ig, 'api-key=***')
+    .replace(/token["':=\s]+[^"',\s}]+/ig, 'token=***')
+    .slice(0, 900);
+}
+
+function logRoistatSync_(result) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.roistatSyncLog);
+  if (!sheet) return;
+  sheet.appendRow([
+    Utilities.getUuid(),
+    result.kind,
+    result.fromDate,
+    result.toDate,
+    result.status,
+    result.message,
+    Number(result.sourceRows || 0),
+    Number(result.brandRows || 0),
+    Number(result.skippedRows || 0),
+    result.updatedAt || new Date(),
+  ]);
 }
 
 function createMonth_(payload) {
@@ -993,6 +1784,16 @@ function sum_(rows, field) {
 
 function unique_(values) {
   return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function uniqueJson_(values) {
+  const seen = {};
+  return values.filter((value) => {
+    const key = JSON.stringify(value && value.payload ? value.payload : value);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
 }
 
 function rangesOverlap_(aStart, aEnd, bStart, bEnd) {
