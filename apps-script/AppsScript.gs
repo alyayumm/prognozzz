@@ -1898,7 +1898,7 @@ function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
             allocation.item.city,
             allocation.item.brand,
             allocation.item.domain,
-            ROISTAT_SOURCE_DIRECT,
+            ROISTAT_SOURCE_DIRECT
           );
           target[metric] += allocation.value;
           directMoved += allocation.value;
@@ -1921,7 +1921,7 @@ function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
           otherItem.city,
           otherItem.brand,
           otherItem.domain,
-          source,
+          source
         ));
         roistatAllocateAmount_(amount, receivers, () => 1).forEach((allocation) => {
           allocation.item[metric] += allocation.value;
