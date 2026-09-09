@@ -7936,11 +7936,20 @@ function isSourceMetaRecord(record: DailyRecord): boolean {
 }
 
 function isSourceValueRecord(record: DailyRecord): boolean {
-  return record.city === sourceRecordCity && !isSourceMetaRecord(record) && !isSuppressedLeadSource(record.channel);
+  return record.city === sourceRecordCity
+    && !isSourceMetaRecord(record)
+    && !isSuppressedLeadSource(record.channel)
+    && !isRoistatDirectOverlayRecord(record);
 }
 
 function sourceNameFromMeta(record: DailyRecord): string {
   return canonicalSourceName(record.channel.slice(sourceMetaChannelPrefix.length));
+}
+
+function isRoistatDirectOverlayRecord(record: DailyRecord): boolean {
+  return record.city === sourceRecordCity
+    && sourceNameEquals(record.channel, "Директ")
+    && (record.comment ?? "").includes("Roistat API");
 }
 
 function getSourceMeta(records: DailyRecord[]) {
