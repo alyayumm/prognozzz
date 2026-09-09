@@ -3635,6 +3635,12 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   font-size: 11px;
   font-weight: 950;
 }
+.source-efficiency-total {
+  background: linear-gradient(90deg, rgba(234, 241, 255, 0.88), rgba(255, 255, 255, 0.92));
+  box-shadow: inset 3px 0 0 var(--primary);
+  font-size: 13px;
+  font-weight: 950;
+}
 .source-efficiency-row strong {
   display: inline-flex;
   align-items: center;
