@@ -299,6 +299,7 @@ const sourceMetaChannelPrefix = "__source_meta__:";
 const sourceMetaCommentActive = "[SOURCE_META=active]";
 const sourceMetaCommentHidden = "[SOURCE_META=hidden]";
 const sourceCityCommentPattern = /\[SOURCE_CITY=(МСК|СПБ)\]/i;
+const sourceResidualAdjustmentComment = "[SOURCE_RESIDUAL=distributed]";
 const defaultLeadSources = ["SEO", "Яндекс Карты", "Директ", "2ГИС", "Гугл Карты", "Прямые визиты", "Рек/кешбэк"];
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
@@ -2310,9 +2311,13 @@ function SourcesAnalyticsDashboard({
   const selectedSourceBrand = sourceBrandOptions.find((option) => option.key === selectedSourceBrandKey);
   const isBrandSourceMode = selectedSourceBrandKey !== "all";
   const chartPeriodMode: SourcePeriodMode = isBrandSourceMode && periodMode === "day" ? "week" : periodMode;
+  const recordsWithSourceResiduals = useMemo(
+    () => reconcileSourceResidualsToReportFacts(records),
+    [records],
+  );
   const cityFilteredRecords = useMemo(
-    () => getSourceRecordsForCity(records, sourceCityFilter),
-    [records, sourceCityFilter],
+    () => getSourceRecordsForCity(recordsWithSourceResiduals, sourceCityFilter),
+    [recordsWithSourceResiduals, sourceCityFilter],
   );
   const scopedRecords = useMemo(
     () => getSourceRecordsForPeriod(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs),
@@ -2325,10 +2330,6 @@ function SourcesAnalyticsDashboard({
   const scopedBrandBudgets = useMemo(
     () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
     [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
-  );
-  const scopedMetrikaRows = useMemo(
-    () => getMetrikaRowsForPeriod(brandData.metrika ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
-    [brandData.metrika, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
   );
   const activeSources = useMemo(
     () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
@@ -2346,10 +2347,6 @@ function SourcesAnalyticsDashboard({
       ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
       : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
     [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
-  );
-  const metrikaInsights = useMemo(
-    () => buildMetrikaAttributionInsights(scopedMetrikaRows, sourceTotals, activeSources),
-    [scopedMetrikaRows, sourceTotals, activeSources],
   );
   const buckets = useMemo(
     () => isBrandSourceMode
@@ -2461,12 +2458,6 @@ function SourcesAnalyticsDashboard({
           </article>
         ))}
       </section>
-
-      <MetrikaAttributionPanel
-        rows={scopedMetrikaRows}
-        insights={metrikaInsights}
-        periodLabel={periodLabel}
-      />
 
       <section className="analytics-panel source-share-panel">
         <PanelHead
@@ -7680,6 +7671,105 @@ function getSourceRecordCityScope(record: DailyRecord | DailyValueUpdate): Sourc
 function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter): DailyRecord[] {
   if (city === "Все") return records;
   return records.filter((record) => !isSourceValueRecord(record) || getSourceRecordCityScope(record) === city);
+}
+
+function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRecord[] {
+  const adjusted = records.map((record) => ({ ...record }));
+  const targetByKey = new Map<string, number>();
+  const sourceByKey = new Map<string, number>();
+  const recipientsByKey = new Map<string, Array<{ index: number; weight: number }>>();
+
+  adjusted.forEach((record, index) => {
+    if (isDistributedSourceRecord(record)) return;
+
+    if (isEditableSourceCity(record.city) && metrics.includes(record.metric)) {
+      const key = sourceResidualGroupKey(record.date, record.city, record.metric);
+      targetByKey.set(key, (targetByKey.get(key) ?? 0) + netFact(record));
+      return;
+    }
+
+    if (!isSourceValueRecord(record)) return;
+
+    const sourceCity = getSourceRecordCityScope(record);
+    if (!isEditableSourceCity(sourceCity)) return;
+
+    const source = canonicalSourceName(record.channel);
+    if (!source || sourceNameEquals(source, "Неизвестно")) return;
+
+    const key = sourceResidualGroupKey(record.date, sourceCity, record.metric);
+    sourceByKey.set(key, (sourceByKey.get(key) ?? 0) + Math.max(0, Number(record.fact || 0)));
+
+    if (!canReceiveSourceResidual(source)) return;
+
+    const recipients = recipientsByKey.get(key) ?? [];
+    recipients.push({ index, weight: Math.max(0, Number(record.fact || 0)) });
+    recipientsByKey.set(key, recipients);
+  });
+
+  targetByKey.forEach((target, key) => {
+    const residual = Math.round(target) - Math.round(sourceByKey.get(key) ?? 0);
+    const recipients = recipientsByKey.get(key) ?? [];
+    if (residual <= 0 || recipients.length === 0) return;
+
+    allocateIntegerAmount(residual, recipients, (recipient) => recipient.weight).forEach(({ item, amount }) => {
+      if (amount <= 0) return;
+      const record = adjusted[item.index];
+      record.fact = Math.max(0, Number(record.fact || 0)) + amount;
+      record.comment = [record.comment, sourceResidualAdjustmentComment].filter(Boolean).join(" ");
+    });
+  });
+
+  return adjusted;
+}
+
+function isEditableSourceCity(value: unknown): value is EditableSourceCity {
+  return value === "МСК" || value === "СПБ";
+}
+
+function isDistributedSourceRecord(record: DailyRecord): boolean {
+  return (record.comment ?? "").includes(sourceResidualAdjustmentComment);
+}
+
+function canReceiveSourceResidual(source: string): boolean {
+  if (sourceNameEquals(source, "Другие")) return false;
+  if (sourceNameEquals(source, "Неизвестно")) return false;
+  if (sourceNameEquals(source, "Директ")) return false;
+  if (sourceNameEquals(source, "Рек/кешбэк")) return false;
+  return true;
+}
+
+function sourceResidualGroupKey(periodKey: string, city: EditableSourceCity, metric: Metric): string {
+  return `${periodKey}|${city}|${metric}`;
+}
+
+function allocateIntegerAmount<T>(
+  amount: number,
+  items: T[],
+  getWeight: (item: T) => number,
+): Array<{ item: T; amount: number }> {
+  if (amount <= 0 || items.length === 0) return [];
+
+  const weights = items.map((item) => Math.max(0, Number(getWeight(item) || 0)));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const rawShares = items.map((item, index) => {
+    const weight = totalWeight > 0 ? weights[index] : 1;
+    const base = totalWeight > 0 ? totalWeight : items.length;
+    const raw = (amount * weight) / base;
+    const roundedDown = Math.floor(raw);
+    return { item, amount: roundedDown, remainder: raw - roundedDown };
+  });
+  let left = amount - rawShares.reduce((sum, share) => sum + share.amount, 0);
+
+  rawShares
+    .slice()
+    .sort((a, b) => b.remainder - a.remainder)
+    .forEach((share) => {
+      if (left <= 0) return;
+      share.amount += 1;
+      left -= 1;
+    });
+
+  return rawShares.map(({ item, amount: allocated }) => ({ item, amount: allocated }));
 }
 
 function getSourceRecordsForPeriod(
