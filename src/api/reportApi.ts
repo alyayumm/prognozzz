@@ -23,10 +23,13 @@ type ApiAction =
   | "upsertBrandPerformance"
   | "upsertBrandBranches"
   | "getRoistatSyncStatus"
+  | "getYandexMetrikaSyncStatus"
+  | "getMetrikaBrandSources"
   | "getRoistatFields"
   | "refreshRoistatFields"
   | "syncRoistatSources"
   | "syncRoistatBrands"
+  | "syncYandexMetrikaBrandSources"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

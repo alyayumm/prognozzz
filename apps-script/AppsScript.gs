@@ -3,6 +3,10 @@ const CONFIG = {
   roistatApiKeyProperty: 'ROISTAT_API_KEY',
   roistatProjectProperty: 'ROISTAT_PROJECT_ID',
   roistatDefaultProjectId: '301351',
+  yandexMetrikaCounterIdProperty: 'YANDEX_METRIKA_COUNTER_ID',
+  yandexMetrikaTokenProperty: 'YANDEX_METRIKA_TOKEN',
+  yandexMetrikaGoalIdProperty: 'YANDEX_METRIKA_GOAL_ID',
+  yandexMetrikaAttributionProperty: 'YANDEX_METRIKA_ATTRIBUTION',
   sheets: {
     daily: 'Data_Daily',
     months: 'Month_Config',
@@ -15,6 +19,7 @@ const CONFIG = {
     brandAliases: 'Brand_Aliases',
     roistatSyncLog: 'Roistat_Sync_Log',
     roistatFields: 'Roistat_Fields',
+    metrikaDaily: 'Yandex_Metrika_Daily',
   },
 };
 
@@ -254,6 +259,26 @@ const HEADERS = {
     'title',
     'updatedAt',
   ],
+  Yandex_Metrika_Daily: [
+    'id',
+    'date',
+    'monthKey',
+    'city',
+    'brand',
+    'domain',
+    'source',
+    'trafficSource',
+    'utmSource',
+    'visits',
+    'users',
+    'pageviews',
+    'bounceRate',
+    'avgVisitDuration',
+    'goalVisits',
+    'goalRate',
+    'updatedAt',
+    'comment',
+  ],
 };
 
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
@@ -306,13 +331,16 @@ function doPost(e) {
       getRoistatFields: getRoistatFields_,
       refreshRoistatFields: refreshRoistatFields_,
       setRoistatRecommendedFields: setRoistatRecommendedFields_,
+      getYandexMetrikaSyncStatus: getYandexMetrikaSyncStatus_,
+      getMetrikaBrandSources: getMetrikaBrandSources_,
+      syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'syncYandexMetrikaBrandSources'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -337,6 +365,20 @@ function authorizeRoistatOnce() {
 
 function setRoistatRecommendedFieldsOnce() {
   return setRoistatRecommendedFields_();
+}
+
+function setYandexMetrikaCredentials(counterId, token, goalId) {
+  const properties = PropertiesService.getScriptProperties();
+  properties.setProperty(CONFIG.yandexMetrikaCounterIdProperty, String(counterId || '').trim());
+  properties.setProperty(CONFIG.yandexMetrikaTokenProperty, String(token || '').trim());
+  if (goalId !== undefined && goalId !== null && String(goalId).trim()) {
+    properties.setProperty(CONFIG.yandexMetrikaGoalIdProperty, String(goalId).trim());
+  }
+  return getYandexMetrikaSyncStatus_();
+}
+
+function setYandexMetrikaCredentialsOnce() {
+  return setYandexMetrikaCredentials('COUNTER_ID', 'OAUTH_TOKEN', '');
 }
 
 function setRoistatRecommendedFields_() {
@@ -394,6 +436,8 @@ function formatServiceSheetKeys_() {
     { sheet: CONFIG.sheets.brandBranches, column: 3 },
     { sheet: CONFIG.sheets.roistatSyncLog, column: 3 },
     { sheet: CONFIG.sheets.roistatSyncLog, column: 4 },
+    { sheet: CONFIG.sheets.metrikaDaily, column: 2 },
+    { sheet: CONFIG.sheets.metrikaDaily, column: 3 },
   ].forEach((entry) => {
     const sheet = ss.getSheetByName(entry.sheet);
     if (!sheet) return;
@@ -423,6 +467,7 @@ function getBrandDashboard_() {
     performance: getBrandPerformance_(),
     branches: getBrandBranches_(),
     aliases: getBrandAliases_(),
+    metrika: getMetrikaBrandSources_(),
   };
 }
 
@@ -907,6 +952,428 @@ function getRoistatSyncStatus_() {
 
 function getRoistatFields_() {
   return readObjects_(CONFIG.sheets.roistatFields);
+}
+
+function getYandexMetrikaSyncStatus_() {
+  const properties = PropertiesService.getScriptProperties();
+  const logs = readObjects_(CONFIG.sheets.roistatSyncLog)
+    .filter((row) => String(row.kind || '') === 'metrika')
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, 10);
+
+  return {
+    counterId: properties.getProperty(CONFIG.yandexMetrikaCounterIdProperty) || '',
+    hasToken: Boolean(properties.getProperty(CONFIG.yandexMetrikaTokenProperty)),
+    hasGoalId: Boolean(properties.getProperty(CONFIG.yandexMetrikaGoalIdProperty)),
+    logs: logs,
+  };
+}
+
+function getMetrikaBrandSources_() {
+  return readObjects_(CONFIG.sheets.metrikaDaily).map(normalizeMetrikaRecordForClient_);
+}
+
+function syncYandexMetrikaBrandSources_(payload) {
+  const range = normalizeRoistatDateRange_(payload);
+  const dates = eachDateInRange_(range.fromDate, range.toDate);
+
+  if (dates.length > 62) {
+    throw new Error('Метрика: выберите период до 62 дней за один импорт, чтобы не упереться в лимиты Apps Script.');
+  }
+
+  try {
+    const warnings = [];
+    const response = fetchYandexMetrikaStats_(range, warnings);
+    const rawRows = extractYandexMetrikaRows_(response);
+    const records = aggregateYandexMetrikaRows_(rawRows, warnings);
+    const writeResult = replaceMetrikaRowsForRange_(records, range);
+    const result = {
+      kind: 'metrika',
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      status: warnings.length || writeResult.skippedRows ? 'warning' : 'success',
+      message: metrikaResultMessage_(writeResult.updated, writeResult.skippedRows, warnings),
+      sourceRows: writeResult.updated,
+      brandRows: 0,
+      skippedRows: writeResult.skippedRows,
+      updatedAt: new Date(),
+    };
+    logRoistatSync_(result);
+    return result;
+  } catch (error) {
+    const result = {
+      kind: 'metrika',
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      status: 'error',
+      message: yandexMetrikaUserError_(error),
+      sourceRows: 0,
+      brandRows: 0,
+      skippedRows: 0,
+      updatedAt: new Date(),
+    };
+    logRoistatSync_(result);
+    throw new Error(result.message);
+  }
+}
+
+function fetchYandexMetrikaStats_(range, warnings) {
+  const properties = PropertiesService.getScriptProperties();
+  const goalId = String(properties.getProperty(CONFIG.yandexMetrikaGoalIdProperty) || '').trim();
+  const attribution = String(properties.getProperty(CONFIG.yandexMetrikaAttributionProperty) || 'lastsign').trim() || 'lastsign';
+  const customDimensions = String(properties.getProperty('YANDEX_METRIKA_DIMENSIONS') || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const customMetrics = String(properties.getProperty('YANDEX_METRIKA_METRICS') || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const baseMetrics = customMetrics.length
+    ? customMetrics
+    : ['ym:s:visits', 'ym:s:users', 'ym:s:pageviews', 'ym:s:bounceRate', 'ym:s:avgVisitDurationSeconds'];
+  const metricsWithGoals = goalId
+    ? baseMetrics.concat(['ym:s:goal' + goalId + 'visits', 'ym:s:goal' + goalId + 'conversionRate'])
+    : baseMetrics;
+  const metricSets = uniqueJson_([metricsWithGoals, baseMetrics].filter((metrics) => metrics.length));
+
+  const detailedAttributionDimensions = [
+    'ym:s:date',
+    'ym:s:startURL',
+    'ym:s:' + attribution + 'TrafficSource',
+    'ym:s:' + attribution + 'UTMSource',
+  ];
+  const dimensionsSets = uniqueJson_(
+    (customDimensions.length ? [customDimensions] : [])
+      .concat([
+        detailedAttributionDimensions,
+        ['ym:s:date', 'ym:s:startURL', 'ym:s:lastTrafficSource', 'ym:s:lastUTMSource'],
+        ['ym:s:date', 'ym:s:startURL'],
+        ['ym:s:date'],
+      ]),
+  );
+
+  const errors = [];
+  for (let dimensionIndex = 0; dimensionIndex < dimensionsSets.length; dimensionIndex += 1) {
+    for (let metricIndex = 0; metricIndex < metricSets.length; metricIndex += 1) {
+      const dimensions = dimensionsSets[dimensionIndex];
+      const metrics = metricSets[metricIndex];
+      try {
+        const response = fetchYandexMetrikaEndpoint_({
+          ids: properties.getProperty(CONFIG.yandexMetrikaCounterIdProperty),
+          date1: range.fromDate,
+          date2: range.toDate,
+          dimensions: dimensions.join(','),
+          metrics: metrics.join(','),
+          limit: 100000,
+          accuracy: 'full',
+          include_undefined: 'true',
+          lang: 'ru',
+        });
+        if (dimensionIndex > 0 || metricIndex > 0) {
+          warnings.push('Метрика приняла упрощенный запрос: dimensions=' + dimensions.join(', ') + '; metrics=' + metrics.join(', ') + '.');
+        }
+        return response;
+      } catch (error) {
+        errors.push(yandexMetrikaUserError_(error));
+      }
+    }
+  }
+
+  throw new Error(unique_(errors).slice(0, 3).join(' | '));
+}
+
+function fetchYandexMetrikaEndpoint_(params) {
+  const properties = PropertiesService.getScriptProperties();
+  const token = properties.getProperty(CONFIG.yandexMetrikaTokenProperty);
+  const counterId = params.ids || properties.getProperty(CONFIG.yandexMetrikaCounterIdProperty);
+
+  if (!counterId) {
+    throw new Error('Не задан YANDEX_METRIKA_COUNTER_ID в Script Properties.');
+  }
+  if (!token) {
+    throw new Error('Не задан YANDEX_METRIKA_TOKEN в Script Properties.');
+  }
+
+  const cleanedParams = Object.assign({}, params, { ids: counterId });
+  const query = Object.keys(cleanedParams)
+    .filter((key) => cleanedParams[key] !== undefined && cleanedParams[key] !== null && cleanedParams[key] !== '')
+    .map((key) => encodeURIComponent(key) + '=' + encodeURIComponent(cleanedParams[key]))
+    .join('&');
+  const response = UrlFetchApp.fetch('https://api-metrika.yandex.net/stat/v1/data?' + query, {
+    method: 'get',
+    headers: {
+      Authorization: 'OAuth ' + token,
+    },
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (ignore) {
+    parsed = null;
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error('Yandex Metrika HTTP ' + status + ': ' + sanitizeRoistatText_(text));
+  }
+  if (!parsed || parsed.errors || parsed.error) {
+    throw new Error('Yandex Metrika error: ' + sanitizeRoistatText_(JSON.stringify(parsed && (parsed.errors || parsed.error || parsed))));
+  }
+  return parsed;
+}
+
+function extractYandexMetrikaRows_(response) {
+  const query = response && response.query ? response.query : {};
+  const queryDimensions = metrikaList_(query.dimensions).map(metrikaDescriptorName_);
+  const queryMetrics = metrikaList_(query.metrics).map(metrikaDescriptorName_);
+  const data = response && Array.isArray(response.data) ? response.data : [];
+
+  return data.map((item) => {
+    const dimensions = {};
+    const metrics = {};
+    (item.dimensions || []).forEach((dimension, index) => {
+      const key = queryDimensions[index] || 'dimension_' + index;
+      dimensions[key] = metrikaDimensionValue_(dimension);
+    });
+    (item.metrics || []).forEach((metric, index) => {
+      const key = queryMetrics[index] || 'metric_' + index;
+      metrics[key] = Number(metric || 0);
+    });
+    return {
+      dimensions: dimensions,
+      metrics: metrics,
+    };
+  });
+}
+
+function aggregateYandexMetrikaRows_(rawRows, warnings) {
+  const aggregated = {};
+  let skippedRows = 0;
+
+  rawRows.forEach((row) => {
+    const date = normalizeRoistatDate_(metrikaDimensionBySuffix_(row, ':date'));
+    if (!date) {
+      skippedRows += 1;
+      return;
+    }
+
+    const startUrl = metrikaDimensionBySuffix_(row, ':starturl');
+    const trafficSource = metrikaDimensionBySuffix_(row, 'trafficsource');
+    const utmSource = metrikaDimensionBySuffix_(row, 'utmsource');
+    const domain = normalizeRoistatDomain_(metrikaDomainFromUrl_(startUrl));
+    const city = normalizeRoistatCity_([startUrl, domain, trafficSource, utmSource].join(' ')) || 'Все';
+    const brand = canonicalRoistatBrand_(domain, startUrl) || 'Без бренда';
+    const source = canonicalMetrikaSource_(trafficSource, utmSource, startUrl);
+    const key = [date, city, brand, domain, source].join('|');
+
+    if (!aggregated[key]) {
+      aggregated[key] = {
+        id: 'metrika-' + date + '-' + citySlug_(city) + '-' + slug_(brand) + '-' + slug_(source) + '-' + slug_(domain),
+        date: date,
+        monthKey: String(date).slice(0, 7),
+        city: city,
+        brand: brand,
+        domain: domain,
+        source: source,
+        trafficSource: trafficSource,
+        utmSource: utmSource,
+        visits: 0,
+        users: 0,
+        pageviews: 0,
+        bounceWeighted: 0,
+        durationWeighted: 0,
+        goalVisits: 0,
+        goalRateWeighted: 0,
+      };
+    }
+
+    const visits = Math.max(0, metrikaMetricBySuffix_(row, 'visits'));
+    const users = Math.max(0, metrikaMetricBySuffix_(row, 'users'));
+    const pageviews = Math.max(0, metrikaMetricBySuffix_(row, 'pageviews'));
+    const bounceRate = Math.max(0, metrikaMetricBySuffix_(row, 'bouncerate'));
+    const avgVisitDuration = Math.max(0, metrikaMetricBySuffix_(row, 'avgvisitdurationseconds'));
+    const goalVisits = Math.max(0, metrikaGoalVisits_(row));
+    const goalRate = Math.max(0, metrikaGoalRate_(row));
+
+    aggregated[key].visits += visits;
+    aggregated[key].users += users;
+    aggregated[key].pageviews += pageviews;
+    aggregated[key].goalVisits += goalVisits;
+    aggregated[key].bounceWeighted += bounceRate * visits;
+    aggregated[key].durationWeighted += avgVisitDuration * visits;
+    aggregated[key].goalRateWeighted += goalRate * visits;
+  });
+
+  if (skippedRows) warnings.push('Метрика: пропущено строк без даты ' + skippedRows + '.');
+
+  return Object.keys(aggregated).map((key) => {
+    const item = aggregated[key];
+    const visits = Number(item.visits || 0);
+    return {
+      id: item.id,
+      date: item.date,
+      monthKey: item.monthKey,
+      city: item.city,
+      brand: item.brand,
+      domain: item.domain,
+      source: item.source,
+      trafficSource: item.trafficSource,
+      utmSource: item.utmSource,
+      visits: Math.round(item.visits),
+      users: Math.round(item.users),
+      pageviews: Math.round(item.pageviews),
+      bounceRate: visits ? roundNumber_(item.bounceWeighted / visits, 2) : 0,
+      avgVisitDuration: visits ? roundNumber_(item.durationWeighted / visits, 2) : 0,
+      goalVisits: Math.round(item.goalVisits),
+      goalRate: visits ? roundNumber_(item.goalRateWeighted / visits, 2) : 0,
+      updatedAt: new Date(),
+      comment: 'Yandex Metrika API',
+    };
+  });
+}
+
+function replaceMetrikaRowsForRange_(records, range) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.metrikaDaily);
+  const existing = readObjects_(CONFIG.sheets.metrikaDaily).filter((row) => {
+    const date = normalizeRoistatDate_(row.date);
+    return date && (date < range.fromDate || date > range.toDate);
+  });
+  const nextObjects = existing.concat(records.map(normalizeMetrikaRecordForClient_));
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, HEADERS.Yandex_Metrika_Daily.length).setValues([HEADERS.Yandex_Metrika_Daily]);
+  sheet.setFrozenRows(1);
+  if (nextObjects.length) {
+    sheet.getRange(2, 1, nextObjects.length, HEADERS.Yandex_Metrika_Daily.length)
+      .setValues(nextObjects.map(metrikaRecordRow_));
+  }
+  sheet.autoResizeColumns(1, HEADERS.Yandex_Metrika_Daily.length);
+  formatServiceSheetKeys_();
+
+  return {
+    updated: records.length,
+    skippedRows: 0,
+  };
+}
+
+function metrikaRecordRow_(record) {
+  return HEADERS.Yandex_Metrika_Daily.map((header) => record[header] || '');
+}
+
+function normalizeMetrikaRecordForClient_(row) {
+  return {
+    id: String(row.id || ''),
+    date: normalizeRoistatDate_(row.date),
+    monthKey: String(row.monthKey || row.month || '').slice(0, 7),
+    city: normalizeRoistatCity_(row.city) || String(row.city || 'Все'),
+    brand: String(row.brand || 'Без бренда'),
+    domain: normalizeRoistatDomain_(row.domain),
+    source: canonicalMetrikaSource_(row.source || row.trafficSource, row.utmSource, row.domain),
+    trafficSource: String(row.trafficSource || ''),
+    utmSource: String(row.utmSource || ''),
+    visits: Math.round(Number(row.visits || 0)),
+    users: Math.round(Number(row.users || 0)),
+    pageviews: Math.round(Number(row.pageviews || 0)),
+    bounceRate: roundNumber_(Number(row.bounceRate || 0), 2),
+    avgVisitDuration: roundNumber_(Number(row.avgVisitDuration || 0), 2),
+    goalVisits: Math.round(Number(row.goalVisits || 0)),
+    goalRate: roundNumber_(Number(row.goalRate || 0), 2),
+    updatedAt: row.updatedAt || new Date(),
+    comment: String(row.comment || ''),
+  };
+}
+
+function metrikaDescriptorName_(descriptor) {
+  if (typeof descriptor === 'string') return descriptor;
+  if (!descriptor) return '';
+  return String(descriptor.name || descriptor.id || descriptor.key || '');
+}
+
+function metrikaList_(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function metrikaDimensionValue_(dimension) {
+  if (dimension === null || dimension === undefined) return '';
+  if (typeof dimension === 'string' || typeof dimension === 'number') return String(dimension);
+  return String(dimension.name || dimension.id || dimension.value || '');
+}
+
+function metrikaDimensionBySuffix_(row, suffix) {
+  const normalizedSuffix = String(suffix || '').toLowerCase().replace(/[^a-zа-я0-9]+/g, '');
+  const dimensions = row.dimensions || {};
+  const key = Object.keys(dimensions).find((item) => item.toLowerCase().replace(/[^a-zа-я0-9]+/g, '').indexOf(normalizedSuffix) >= 0);
+  return key ? String(dimensions[key] || '') : '';
+}
+
+function metrikaMetricBySuffix_(row, suffix) {
+  const normalizedSuffix = String(suffix || '').toLowerCase();
+  const metrics = row.metrics || {};
+  const key = Object.keys(metrics).find((item) => item.toLowerCase().indexOf(normalizedSuffix) >= 0);
+  return key ? Number(metrics[key] || 0) : 0;
+}
+
+function metrikaGoalVisits_(row) {
+  const metrics = row.metrics || {};
+  const key = Object.keys(metrics).find((item) => /goal\d+visits/i.test(item) || /goal\d+reaches/i.test(item));
+  return key ? Number(metrics[key] || 0) : 0;
+}
+
+function metrikaGoalRate_(row) {
+  const metrics = row.metrics || {};
+  const key = Object.keys(metrics).find((item) => /goal\d+conversionrate/i.test(item));
+  return key ? Number(metrics[key] || 0) : 0;
+}
+
+function canonicalMetrikaSource_(trafficSource, utmSource, url) {
+  const traffic = String(trafficSource || '').toLowerCase();
+  const utm = String(utmSource || '').toLowerCase();
+  const text = [traffic, utm, String(url || '').toLowerCase()].join(' ');
+  const domain = normalizeRoistatDomain_(metrikaDomainFromUrl_(url));
+
+  if (!text.trim() || traffic.indexOf('не определено') >= 0 || traffic.indexOf('undefined') >= 0 || traffic.indexOf('not set') >= 0) return 'Неизвестно';
+  if (traffic.indexOf('прям') >= 0 || traffic === 'direct' || traffic.indexOf('direct traffic') >= 0) return 'Прямые визиты';
+  if (domain === 'изи-драйв.рф' || traffic.indexOf('директ') >= 0 || utm.indexOf('direct') >= 0 || utm.indexOf('директ') >= 0 || text.indexOf('yandex_direct') >= 0 || text.indexOf('ydirect') >= 0) return 'Директ';
+  if (text.indexOf('2gis') >= 0 || text.indexOf('2гис') >= 0 || text.indexOf('2 гис') >= 0 || text.indexOf('link.2gis') >= 0) return '2ГИС';
+  if (text.indexOf('gkart') >= 0 || text.indexOf('google maps') >= 0 || text.indexOf('google') >= 0 || text.indexOf('гугл') >= 0) return 'Гугл Карты';
+  if (text.indexOf('ykart') >= 0 || text.indexOf('ykar') >= 0 || text.indexOf('geoadv_maps') >= 0 || text.indexOf('яндекс карты') >= 0 || /(^|[:_\s-])ya($|[:_\s-])/.test(text)) return 'Яндекс Карты';
+  if (text.indexOf('seo') >= 0 || text.indexOf('орган') >= 0 || text.indexOf('organic') >= 0 || text.indexOf('search') >= 0 || text.indexOf('поисков') >= 0) return 'SEO';
+  if (text.indexOf('zoon') >= 0) return 'Zoon';
+  if (text.indexOf('кеш') >= 0 || text.indexOf('кэш') >= 0 || text.indexOf('cashback') >= 0) return 'Рек/кешбэк';
+  return 'Неизвестно';
+}
+
+function metrikaDomainFromUrl_(value) {
+  const raw = String(value || '').trim();
+  const urlMatch = raw.match(/^https?:\/\/([^/?#]+)/i);
+  if (urlMatch) return urlMatch[1];
+  return firstRoistatDomain_(raw);
+}
+
+function metrikaResultMessage_(updated, skippedRows, warnings) {
+  const parts = ['Метрика: записано строк ' + updated];
+  if (skippedRows) parts.push('пропущено строк ' + skippedRows);
+  if (warnings && warnings.length) parts.push(unique_(warnings).slice(0, 3).join(' | '));
+  return parts.join('. ');
+}
+
+function yandexMetrikaUserError_(error) {
+  const message = sanitizeRoistatText_(error && error.message ? error.message : String(error));
+  if (message.indexOf('HTTP 400') >= 0 || message.toLowerCase().indexOf('bad request') >= 0) {
+    return 'Метрика вернула Bad Request: счетчик не принял часть метрик или измерений. Можно задать YANDEX_METRIKA_DIMENSIONS / YANDEX_METRIKA_METRICS в Script Properties. Детали: ' + message;
+  }
+  if (message.indexOf('HTTP 401') >= 0 || message.indexOf('HTTP 403') >= 0 || message.toLowerCase().indexOf('access') >= 0) {
+    return 'Метрика не дала доступ. Проверьте YANDEX_METRIKA_TOKEN и доступ токена к счетчику. Детали: ' + message;
+  }
+  return message;
 }
 
 function refreshRoistatFields_() {
@@ -2400,6 +2867,11 @@ function sum_(rows, field) {
 
 function unique_(values) {
   return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function roundNumber_(value, precision) {
+  const multiplier = Math.pow(10, Number(precision || 0));
+  return Math.round(Number(value || 0) * multiplier) / multiplier;
 }
 
 function uniqueJson_(values) {

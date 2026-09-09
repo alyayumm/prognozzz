@@ -151,6 +151,27 @@ export interface BrandAlias {
   brand: string;
 }
 
+export interface MetrikaBrandSourceDaily {
+  id: string;
+  date: string;
+  monthKey: string;
+  city: BrandCity | "Все";
+  brand: string;
+  domain: string;
+  source: string;
+  trafficSource: string;
+  utmSource: string;
+  visits: number;
+  users: number;
+  pageviews: number;
+  bounceRate: number;
+  avgVisitDuration: number;
+  goalVisits: number;
+  goalRate: number;
+  comment?: string;
+  updatedAt?: string;
+}
+
 export interface BrandEvent {
   id: string;
   brand: string;
@@ -179,4 +200,16 @@ export interface RoistatFieldsRefreshResult {
   metrics: number;
   dimensions: number;
   message: string;
+}
+
+export interface YandexMetrikaSyncResult {
+  kind: "metrika";
+  fromDate: string;
+  toDate: string;
+  status: "success" | "warning" | "error";
+  message: string;
+  sourceRows: number;
+  brandRows: number;
+  skippedRows: number;
+  updatedAt: string;
 }

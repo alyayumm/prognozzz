@@ -1,6 +1,6 @@
 import { importedBrandAliases, importedBrandBranches } from "../data/importedBrandBranches";
 import { callReportApi } from "./reportApi";
-import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly } from "../types";
+import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly, MetrikaBrandSourceDaily } from "../types";
 
 export type { BrandCity } from "../types";
 
@@ -39,6 +39,7 @@ export type BrandAnalyticsBundle = {
   aliases: BrandAlias[];
   budgets: BrandBudgetMonthly[];
   receivables: RevenueReceivableMonthly[];
+  metrika: MetrikaBrandSourceDaily[];
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
@@ -92,6 +93,7 @@ type BrandServiceDashboard = {
   branches?: Array<Record<string, unknown>>;
   aliases?: Array<Record<string, unknown>>;
   budgets?: Array<Record<string, unknown>>;
+  metrika?: Array<Record<string, unknown>>;
 };
 
 export type BrandBudgetMonthly = {
@@ -130,6 +132,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
   const appsPerformance = normalizeBrandPerformanceObjects(appsScriptSnapshot?.performance ?? []);
   const appsBranches = normalizeBrandBranchObjects(appsScriptSnapshot?.branches ?? []);
   const appsBudgets = normalizeBrandBudgetObjects(appsScriptSnapshot?.budgets ?? []);
+  const appsMetrika = normalizeMetrikaBrandSourceObjects(appsScriptSnapshot?.metrika ?? []);
   const aliases = mergeAliases(importedBrandAliases, mergeAliases(serviceAliases, appsAliases));
   const performance = appsPerformance.length ? appsPerformance : servicePerformance.length ? servicePerformance : publicPerformance;
   const budgetRows = drrBudgets.length ? drrBudgets : appsBudgets.length ? appsBudgets : publicBudgets;
@@ -141,6 +144,11 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
   const canonicalBudgets = budgetRows.map((record) => ({
     ...record,
     brand: canonicalBrandName(normalizeDrrBrandName(record.brand), aliases),
+    source: canonicalSourceName(record.source),
+  }));
+  const metrika = appsMetrika.map((record) => ({
+    ...record,
+    brand: canonicalBrandName(record.brand, aliases),
     source: canonicalSourceName(record.source),
   }));
   const branches = appsBranches.length ? appsBranches : serviceBranches;
@@ -160,6 +168,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     aliases,
     budgets: canonicalBudgets,
     receivables,
+    metrika,
   };
 }
 
@@ -606,6 +615,41 @@ function normalizeBrandBudgetObjects(rows: Array<Record<string, unknown>>): Bran
   });
 }
 
+function normalizeMetrikaBrandSourceObjects(rows: Array<Record<string, unknown>>): MetrikaBrandSourceDaily[] {
+  return rows.flatMap((row) => {
+    const date = normalizeDate(row.date || row["дата"]);
+    const monthKey = stringValue(row.monthKey || row.month || row["месяц"]) || date.slice(0, 7);
+    const brand = stringValue(row.brand || row["бренд"]) || "Без бренда";
+    const source = canonicalSourceName(stringValue(row.source || row["источник"]) || "Неизвестно");
+    if (!date || !monthKey || !brand || !source) return [];
+
+    return [{
+      id: stringValue(row.id) || `${date}-${stringValue(row.city || row["город"])}-${brand}-${source}`,
+      date,
+      monthKey,
+      city: normalizeMetrikaCity(stringValue(row.city || row["город"])),
+      brand,
+      domain: stringValue(row.domain || row["домен"]),
+      source,
+      trafficSource: stringValue(row.trafficSource || row["тип трафика"]),
+      utmSource: stringValue(row.utmSource || row["utm source"]),
+      visits: toNumber(stringValue(row.visits || row["визиты"])),
+      users: toNumber(stringValue(row.users || row["пользователи"])),
+      pageviews: toNumber(stringValue(row.pageviews || row["просмотры"])),
+      bounceRate: toNumber(stringValue(row.bounceRate || row["отказы"])),
+      avgVisitDuration: toNumber(stringValue(row.avgVisitDuration || row["среднее время"])),
+      goalVisits: toNumber(stringValue(row.goalVisits || row["цели"])),
+      goalRate: toNumber(stringValue(row.goalRate || row["конверсия цели"])),
+      comment: stringValue(row.comment || row["комментарий"]),
+      updatedAt: stringValue(row.updatedAt || row["обновлено"]),
+    }];
+  });
+}
+
+function normalizeMetrikaCity(value: string): BrandCity | "Все" {
+  return normalizeBrandCity(value) ?? "Все";
+}
+
 function rowsToObjects(table: GvizTable): Array<Record<string, string>> {
   const headerIndex = table.rows.findIndex((row) => rowToValues(row).some(Boolean));
   if (headerIndex < 0) return [];
@@ -724,6 +768,7 @@ function canonicalSourceName(value: string): string {
   const normalized = stringValue(value);
   const lower = normalized.toLowerCase();
   const domain = lower.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  if (lower.includes("unknown") || lower.includes("undefined") || lower.includes("неизвест")) return "Неизвестно";
   if (domain === "изи-драйв.рф" || lower.includes("директ")) return "Директ";
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites" || lower.includes("seo")) return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис")) return "2ГИС";

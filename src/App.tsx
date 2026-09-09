@@ -89,11 +89,13 @@ import type {
   BrandBranchWeekly,
   BrandEvent,
   BrandPerformanceWeekly,
+  MetrikaBrandSourceDaily,
   RoistatFieldsRefreshResult,
   RoistatSyncKind,
   RoistatSyncResult,
   WeekdayCoefficientKey,
   WeekSummary,
+  YandexMetrikaSyncResult,
 } from "./types";
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
@@ -130,6 +132,18 @@ type SourceMoneyTotals = {
   saleCost: number;
   roas: number | null;
   roasFact: number | null;
+};
+type MetrikaAttributionInsight = {
+  source: string;
+  visits: number;
+  users: number;
+  pageviews: number;
+  goalVisits: number;
+  goalRate: number;
+  leads: number;
+  leadRate: number;
+  knownShare: number;
+  unknownEstimate: number;
 };
 type ChartLinePoint = { x: number; y: number };
 type ChartLineSegment = ChartLinePoint[];
@@ -324,6 +338,7 @@ const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
   aliases: [],
   budgets: [],
   receivables: [],
+  metrika: [],
 };
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
@@ -690,6 +705,29 @@ export default function App() {
     }
   }
 
+  async function syncYandexMetrika(fromDate: string, toDate: string) {
+    if (!apiConfigured) {
+      setSavedMessage("Метрику нельзя загрузить в локальном режиме: нужен Apps Script URL.");
+      return;
+    }
+    if (!writePassword) {
+      setSavedMessage("Для импорта Метрики введите пароль админки.");
+      return;
+    }
+
+    setIsSavingDaily(true);
+    setSavedMessage("Загружаю Яндекс Метрику: визиты, клики и источники за выбранный период...");
+    try {
+      const result = await callReportApi<YandexMetrikaSyncResult>("syncYandexMetrikaBrandSources", { fromDate, toDate }, writePassword);
+      await refreshSharedSnapshotAfterWrite();
+      setSavedMessage(`${result.message} Данные Метрики обновлены в общей Google-таблице.`);
+    } catch (error) {
+      setSavedMessage(`Метрика не загрузилась: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
+    }
+  }
+
   async function refreshRoistatFields() {
     if (!apiConfigured) {
       setSavedMessage("Поля Roistat нельзя обновить в локальном режиме: нужен Apps Script URL.");
@@ -963,6 +1001,7 @@ export default function App() {
                 onUpdateForecastCoefficient={updateForecastCoefficient}
                 onSaveForecastCoefficients={persistForecastCoefficients}
                 onSyncRoistat={syncRoistat}
+                onSyncYandexMetrika={syncYandexMetrika}
                 onRefreshRoistatFields={refreshRoistatFields}
                 tab={adminTab}
                 setTab={setAdminTab}
@@ -2287,6 +2326,10 @@ function SourcesAnalyticsDashboard({
     () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
     [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
   );
+  const scopedMetrikaRows = useMemo(
+    () => getMetrikaRowsForPeriod(brandData.metrika ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
+    [brandData.metrika, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
+  );
   const activeSources = useMemo(
     () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
     [isBrandSourceMode, scopedBrandRows, scopedRecords, scopedBrandBudgets],
@@ -2303,6 +2346,10 @@ function SourcesAnalyticsDashboard({
       ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
       : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
     [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
+  );
+  const metrikaInsights = useMemo(
+    () => buildMetrikaAttributionInsights(scopedMetrikaRows, sourceTotals, activeSources),
+    [scopedMetrikaRows, sourceTotals, activeSources],
   );
   const buckets = useMemo(
     () => isBrandSourceMode
@@ -2414,6 +2461,12 @@ function SourcesAnalyticsDashboard({
           </article>
         ))}
       </section>
+
+      <MetrikaAttributionPanel
+        rows={scopedMetrikaRows}
+        insights={metrikaInsights}
+        periodLabel={periodLabel}
+      />
 
       <section className="analytics-panel source-share-panel">
         <PanelHead
@@ -2685,6 +2738,102 @@ function SourceEfficiencyTable({
       })}
       {rows.length === 0 && <p className="empty-state">Нет включенных источников для таблицы.</p>}
     </div>
+  );
+}
+
+function MetrikaAttributionPanel({
+  rows,
+  insights,
+  periodLabel,
+}: {
+  rows: MetrikaBrandSourceDaily[];
+  insights: MetrikaAttributionInsight[];
+  periodLabel: string;
+}) {
+  const totals = insights.reduce(
+    (acc, row) => {
+      acc.visits += row.visits;
+      acc.users += row.users;
+      acc.goalVisits += row.goalVisits;
+      acc.leads += row.leads;
+      acc.unknownEstimate += row.unknownEstimate;
+      return acc;
+    },
+    { visits: 0, users: 0, goalVisits: 0, leads: 0, unknownEstimate: 0 },
+  );
+  const unknownRow = insights.find((row) => sourceNameEquals(row.source, "Неизвестно"));
+  const topRows = insights
+    .filter((row) => row.visits > 0 || row.leads > 0 || row.unknownEstimate > 0)
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 8);
+
+  return (
+    <section className="analytics-panel metrika-panel">
+      <PanelHead
+        title="Атрибуция Метрики"
+        description="Сопоставляем визиты и цели Яндекс Метрики с фактами Roistat. Неизвестные источники раскладываются оценочно по долям известных визитов."
+      />
+
+      <div className="metrika-kpi-grid">
+        <article>
+          <span>Визиты</span>
+          <strong>{formatNumber(totals.visits)}</strong>
+          <small>{periodLabel}</small>
+        </article>
+        <article>
+          <span>Пользователи</span>
+          <strong>{formatNumber(totals.users)}</strong>
+          <small>без склейки с лидами</small>
+        </article>
+        <article>
+          <span>Цели Метрики</span>
+          <strong>{formatNumber(totals.goalVisits)}</strong>
+          <small>{formatPercentOne(safePercent(totals.goalVisits, totals.visits))} от визитов</small>
+        </article>
+        <article className={unknownRow?.visits ? "warning" : ""}>
+          <span>Неизвестно</span>
+          <strong>{formatNumber(unknownRow?.visits ?? 0)}</strong>
+          <small>{formatPercentOne(safePercent(unknownRow?.visits ?? 0, totals.visits))} визитов без понятного источника</small>
+        </article>
+      </div>
+
+      <div className="metrika-attribution-note">
+        <Info size={16} />
+        <span>
+          Исторически это оценка: если в старых заявках не было скрытых полей `ym_uid/clientID/roistat_visit`, путь конкретного клиента задним числом не восстановить.
+          Новые заявки нужно сохранять с hidden fields, тогда связка станет точной.
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="empty-state">
+          Строк Метрики пока нет. В админке откройте `Источники`, выберите период и нажмите `Метрика: визиты/цели`.
+        </p>
+      ) : (
+        <div className="metrika-table">
+          <div className="metrika-row metrika-head">
+            <span>Источник</span>
+            <span>Визиты</span>
+            <span>Доля известных</span>
+            <span>Лиды Roistat</span>
+            <span>Лид/визит</span>
+            <span>Цели</span>
+            <span>Оценка неизвестных</span>
+          </div>
+          {topRows.map((row) => (
+            <div className="metrika-row" key={row.source}>
+              <strong><i style={{ background: getLeadSourceColor(row.source) }} aria-hidden="true" />{row.source}</strong>
+              <span>{formatNumber(row.visits)}</span>
+              <span>{formatPercentOne(row.knownShare)}</span>
+              <span>{formatNumber(row.leads)}</span>
+              <span>{formatPercentOne(row.leadRate)}</span>
+              <span>{formatNumber(row.goalVisits)}</span>
+              <span>{row.unknownEstimate > 0 ? `≈ ${formatNumber(row.unknownEstimate)}` : "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4203,6 +4352,7 @@ function SourceAdminPanel({
   monthDates,
   onSaveDailyValues,
   onSyncRoistat,
+  onSyncYandexMetrika,
   onRefreshRoistatFields,
   isSavingDaily,
 }: {
@@ -4211,6 +4361,7 @@ function SourceAdminPanel({
   monthDates: string[];
   onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => Promise<void>;
   onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
+  onSyncYandexMetrika: (fromDate: string, toDate: string) => Promise<void>;
   onRefreshRoistatFields: () => Promise<void>;
   isSavingDaily: boolean;
 }) {
@@ -4272,6 +4423,10 @@ function SourceAdminPanel({
     await onSyncRoistat(kind, fromDate, toDate);
   }
 
+  async function syncMetrika(fromDate = syncFromDate, toDate = syncToDate) {
+    await onSyncYandexMetrika(fromDate, toDate);
+  }
+
   return (
     <section className="analytics-panel source-editor-panel">
       <PanelHead
@@ -4297,6 +4452,9 @@ function SourceAdminPanel({
           </button>
           <button className="select-button" type="button" onClick={() => syncRoistat("brands")} disabled={isSavingDaily}>
             по домену: бренды
+          </button>
+          <button className="select-button" type="button" onClick={() => syncMetrika()} disabled={isSavingDaily}>
+            Метрика: визиты/цели
           </button>
           <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
             Поля Roistat
@@ -5282,6 +5440,7 @@ function AdminDashboard({
   onUpdateForecastCoefficient,
   onSaveForecastCoefficients,
   onSyncRoistat,
+  onSyncYandexMetrika,
   onRefreshRoistatFields,
   tab,
   setTab,
@@ -5304,6 +5463,7 @@ function AdminDashboard({
   onUpdateForecastCoefficient: (city: City, metric: Metric, weekday: WeekdayCoefficientKey, value: number) => void;
   onSaveForecastCoefficients: () => void;
   onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
+  onSyncYandexMetrika: (fromDate: string, toDate: string) => Promise<void>;
   onRefreshRoistatFields: () => Promise<void>;
   tab: AdminTab;
   setTab: (tab: AdminTab) => void;
@@ -5396,6 +5556,7 @@ function AdminDashboard({
           monthDates={dates}
           onSaveDailyValues={onSaveDailyValues}
           onSyncRoistat={onSyncRoistat}
+          onSyncYandexMetrika={onSyncYandexMetrika}
           onRefreshRoistatFields={onRefreshRoistatFields}
           isSavingDaily={isSavingDaily}
         />
@@ -7441,6 +7602,7 @@ function canonicalSourceName(value: string): string {
   const normalized = normalizeSourceName(value);
   const lower = normalized.toLowerCase();
   const domain = lower.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  if (lower.includes("unknown") || lower.includes("undefined") || lower.includes("неизвест")) return "Неизвестно";
   if (domain === "изи-драйв.рф" || lower.includes("директ")) return "Директ";
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites") return "SEO";
   if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис") || lower.includes("link.2gis")) return "2ГИС";
@@ -7868,6 +8030,73 @@ function buildBrandSourceChartBuckets(
   });
 
   return buckets;
+}
+
+function getMetrikaRowsForPeriod(
+  rows: MetrikaBrandSourceDaily[],
+  selectedBrandKey: string,
+  city: SourceCityFilter,
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+  monthConfigs: MonthConfig[],
+): MetrikaBrandSourceDaily[] {
+  const monthKeys = periodMode === "monthToMonth" ? new Set(monthConfigs.map((item) => item.monthKey)) : null;
+  return rows.filter((row) => {
+    if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
+    if (city !== "Все" && row.city !== city && row.city !== "Все") return false;
+    return monthKeys ? monthKeys.has(row.monthKey) : row.monthKey === config.monthKey;
+  });
+}
+
+function buildMetrikaAttributionInsights(
+  rows: MetrikaBrandSourceDaily[],
+  sourceTotals: SourceMoneyTotals[],
+  activeSources: string[],
+): MetrikaAttributionInsight[] {
+  const metrikaSources = [...new Set(rows.map((row) => canonicalSourceName(row.source)).filter(Boolean))];
+  const sources = [...activeSources, ...metrikaSources].reduce<string[]>((acc, source) => {
+    if (!source || isSuppressedLeadSource(source)) return acc;
+    if (!acc.some((item) => sourceNameEquals(item, source))) acc.push(source);
+    return acc;
+  }, []);
+  const unknownLabel = "Неизвестно";
+  if (rows.some((row) => sourceNameEquals(row.source, unknownLabel)) && !sources.some((source) => sourceNameEquals(source, unknownLabel))) {
+    sources.push(unknownLabel);
+  }
+
+  const totalKnownVisits = rows
+    .filter((row) => !sourceNameEquals(row.source, unknownLabel))
+    .reduce((sum, row) => sum + Math.max(0, Number(row.visits || 0)), 0);
+  const unknownVisits = rows
+    .filter((row) => sourceNameEquals(row.source, unknownLabel))
+    .reduce((sum, row) => sum + Math.max(0, Number(row.visits || 0)), 0);
+
+  return sources.map((source) => {
+    const sourceRows = rows.filter((row) => sourceNameEquals(row.source, source));
+    const visits = sourceRows.reduce((sum, row) => sum + Math.max(0, Number(row.visits || 0)), 0);
+    const users = sourceRows.reduce((sum, row) => sum + Math.max(0, Number(row.users || 0)), 0);
+    const pageviews = sourceRows.reduce((sum, row) => sum + Math.max(0, Number(row.pageviews || 0)), 0);
+    const goalVisits = sourceRows.reduce((sum, row) => sum + Math.max(0, Number(row.goalVisits || 0)), 0);
+    const sourceFact = sourceTotals.find((item) => sourceNameEquals(item.source, source));
+    const leads = sourceFact?.totals["Лиды"] ?? 0;
+    const knownShare = !sourceNameEquals(source, unknownLabel) ? safePercent(visits, totalKnownVisits) : 0;
+    const unknownEstimate = !sourceNameEquals(source, unknownLabel) && totalKnownVisits > 0
+      ? Math.round(unknownVisits * (visits / totalKnownVisits))
+      : 0;
+
+    return {
+      source,
+      visits,
+      users,
+      pageviews,
+      goalVisits,
+      goalRate: safePercent(goalVisits, visits),
+      leads,
+      leadRate: safePercent(leads, visits),
+      knownShare,
+      unknownEstimate,
+    };
+  });
 }
 
 function findSourceDailyRecord(
@@ -8421,6 +8650,16 @@ function formatNullablePercent(value: number | null | undefined): string {
 function percentValueForUi(numerator: number, denominator: number): number | null {
   if (!denominator) return null;
   return (numerator / denominator) * 100;
+}
+
+function safePercent(value: number, total: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+  return (value / total) * 100;
+}
+
+function formatPercentOne(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return `${formatCompactDecimal(Math.round(value * 10) / 10)}%`;
 }
 
 function clampPercent(value: number): number {
