@@ -498,7 +498,7 @@ function parseDrrBudgetSheet(
 
     const sourceBudgetTotal = budgetRows.reduce((sum, item) => sum + item.budget, 0);
     if (totalBudget > sourceBudgetTotal + 1) {
-      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Другая реклама", budget: totalBudget - sourceBudgetTotal });
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Другие", budget: totalBudget - sourceBudgetTotal });
     }
 
     output.push(...budgetRows);
@@ -771,7 +771,7 @@ function canonicalSourceName(value: string): string {
   if (lower.includes("unknown") || lower.includes("undefined") || lower.includes("неизвест")) return "Неизвестно";
   if (domain === "изи-драйв.рф" || lower.includes("директ")) return "Директ";
   if (lower === "сайт" || lower === "сайты" || lower === "site" || lower === "sites" || lower.includes("seo")) return "SEO";
-  if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис")) return "2ГИС";
+  if (lower.includes("2gis") || lower.includes("2гис") || lower.includes("2 гис") || lower.includes("link.2gis")) return "2ГИС";
   if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return "Гугл Карты";
   if (
     lower.includes("ykart")
@@ -782,6 +782,15 @@ function canonicalSourceName(value: string): string {
   ) return "Яндекс Карты";
   if (lower.includes("яндекс") && lower.includes("карт")) return "Яндекс Карты";
   if (lower.includes("прям")) return "Прямые визиты";
+  if (
+    lower === "основные"
+    || lower === "другое"
+    || lower === "другие"
+    || lower === "другая реклама"
+    || lower === "другие источники"
+    || lower === "другой источник"
+    || lower.includes("other")
+  ) return "Другие";
   return normalized || "Все источники";
 }
 
@@ -789,7 +798,7 @@ function canonicalDrrOtherSource(value: string): string {
   const lower = stringValue(value).toLowerCase();
   if (lower.includes("директ")) return "Директ";
   if (lower.includes("кеш") || lower.includes("cashback")) return "Рек/кешбэк";
-  return "Другая реклама";
+  return "Другие";
 }
 
 function applyBrandBudgets(

@@ -7609,7 +7609,15 @@ function canonicalSourceName(value: string): string {
   if (lower.includes("google") || lower.includes("гугл") || lower.includes("gkart") || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return "Гугл Карты";
   if (lower.includes("ykart") || lower.includes("ykar") || /(^|[:_\s-])yk($|[:_\s-])/.test(lower) || /(^|[:_\s-])ya($|[:_\s-])/.test(lower) || lower.includes("geoadv_maps")) return "Яндекс Карты";
   if (lower === "прямой" || lower === "прямые" || lower === "прямые визиты" || lower === "direct visits") return "Прямые визиты";
-  if (lower === "основные" || lower === "другое" || lower === "другие") return "Другие";
+  if (
+    lower === "основные"
+    || lower === "другое"
+    || lower === "другие"
+    || lower === "другая реклама"
+    || lower === "другие источники"
+    || lower === "другой источник"
+    || lower.includes("other")
+  ) return "Другие";
   return normalized;
 }
 
