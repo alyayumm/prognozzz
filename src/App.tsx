@@ -106,7 +106,7 @@ type MonthDraft = CreateMonthPayload;
 type DailyAdminMetricDraft = { fact: number; recommendations: number; omQualified: number };
 type DailyAdminDraft = Record<City, Record<Metric, DailyAdminMetricDraft>>;
 type SourceMetricDraft = Record<Metric, number>;
-type SourcePeriodMode = "day" | "week" | "month";
+type SourcePeriodMode = "day" | "week" | "month" | "monthToMonth";
 type SourceCityFilter = "Все" | "МСК" | "СПБ";
 type EditableSourceCity = Exclude<SourceCityFilter, "Все">;
 type BrandTab = "overview" | "compare" | "brand" | "free";
@@ -289,7 +289,8 @@ const defaultLeadSources = ["SEO", "Яндекс Карты", "Директ", "2
 const sourcePeriodOptions: Array<{ value: SourcePeriodMode; label: string }> = [
   { value: "day", label: "По дням" },
   { value: "week", label: "По неделям" },
-  { value: "month", label: "По месяцам" },
+  { value: "month", label: "По месяцу" },
+  { value: "monthToMonth", label: "Месяц к месяцу" },
 ];
 const sourceCityOptions: SourceCityFilter[] = ["Все", "МСК", "СПБ"];
 const brandTabs: Array<{ value: BrandTab; label: string }> = [
@@ -2275,16 +2276,16 @@ function SourcesAnalyticsDashboard({
     [records, sourceCityFilter],
   );
   const scopedRecords = useMemo(
-    () => getSourceRecordsForPeriod(cityFilteredRecords, periodMode, selectedMonthConfig),
-    [cityFilteredRecords, periodMode, selectedMonthConfig],
+    () => getSourceRecordsForPeriod(cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs),
+    [cityFilteredRecords, periodMode, selectedMonthConfig, monthConfigs],
   );
   const scopedBrandRows = useMemo(
-    () => getSourceBrandRowsForPeriod(sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig),
-    [sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig],
+    () => getSourceBrandRowsForPeriod(sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig, monthConfigs),
+    [sourceBrandRows, selectedSourceBrandKey, sourceCityFilter, chartPeriodMode, selectedMonthConfig, monthConfigs],
   );
   const scopedBrandBudgets = useMemo(
-    () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig),
-    [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig],
+    () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
+    [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
   );
   const activeSources = useMemo(
     () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
@@ -2305,20 +2306,21 @@ function SourcesAnalyticsDashboard({
   );
   const buckets = useMemo(
     () => isBrandSourceMode
-      ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources)
-      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, activeSources),
-    [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, cityFilteredRecords, periodMode],
+      ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, monthConfigs)
+      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, activeSources, monthConfigs),
+    [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, monthConfigs, cityFilteredRecords, periodMode],
   );
   const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
     acc[metric] = sourceTotals.reduce((sum, item) => sum + item.totals[metric], 0);
     return acc;
   }, {} as Record<Metric, number>);
-  const periodLabel = selectedMonthConfig.label;
+  const periodLabel = sourcePeriodRangeLabel(periodMode, selectedMonthConfig, monthConfigs);
   const strongestMetric = metrics.reduce((best, metric) => (summaryTotals[metric] > summaryTotals[best] ? metric : best), "Лиды" as Metric);
   const strongestSource = sourceTotals
     .map((item) => ({ source: item.source, value: item.totals[strongestMetric] }))
     .sort((a, b) => b.value - a.value)[0];
   const activePeriodLabel = sourcePeriodOptions.find((option) => option.value === chartPeriodMode)?.label ?? "По дням";
+  const chartDescription = getSourceChartDescription(chartPeriodMode);
 
   const toggleSource = (source: string) => {
     const key = sourceKey(source);
@@ -2344,7 +2346,7 @@ function SourcesAnalyticsDashboard({
       <section className="analytics-panel source-control-panel">
         <div>
           <span>Срез</span>
-          <div className="source-period-toggle" role="group" aria-label="Переключить период источников">
+          <div className="source-period-toggle source-grain-toggle" role="group" aria-label="Переключить период источников">
             {sourcePeriodOptions.map((option) => (
               <button
                 key={option.value}
@@ -2433,7 +2435,7 @@ function SourcesAnalyticsDashboard({
       <section className="analytics-panel source-chart-panel">
         <PanelHead
           title={`Динамика источников: ${activePeriodLabel.toLowerCase()}`}
-          description="Ниже отдельные графики по лидам, КВАЛ и продажам. Любой источник можно временно выключить."
+          description={chartDescription}
         />
         <div className="source-chart-stack">
           {metrics.map((metric) => (
@@ -6444,6 +6446,29 @@ function getShortMonthLabel(config: MonthConfig): string {
   return monthName.length <= 3 ? monthName : monthName.slice(0, 3);
 }
 
+function sourcePeriodRangeLabel(periodMode: SourcePeriodMode, selectedConfig: MonthConfig, monthConfigs: MonthConfig[]): string {
+  if (periodMode !== "monthToMonth") return selectedConfig.label;
+  const sortedMonths = [...monthConfigs].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const first = sortedMonths[0];
+  const last = sortedMonths[sortedMonths.length - 1];
+  if (!first || !last) return selectedConfig.label;
+  if (first.monthKey === last.monthKey) return first.label;
+  return `${first.label} - ${last.label}`;
+}
+
+function getSourceChartDescription(periodMode: SourcePeriodMode): string {
+  if (periodMode === "day") {
+    return "По дням каждая точка показывает дневной факт источника; так видно средний дневной ритм внутри выбранного месяца.";
+  }
+  if (periodMode === "week") {
+    return "По неделям каждая точка показывает сумму недели, как в остальных отчетных вкладках.";
+  }
+  if (periodMode === "month") {
+    return "По месяцу показывается итог выбранного месяца, без смешивания с соседними периодами.";
+  }
+  return "Месяц к месяцу сравнивает месячные итоги по всей доступной истории.";
+}
+
 function getLeadFactForCity(records: DailyRecord[], date: string, city: City): number {
   if (city === "сообщения") return 0;
   return records
@@ -7487,8 +7512,17 @@ function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter)
   return records.filter((record) => !isSourceValueRecord(record) || getSourceRecordCityScope(record) === city);
 }
 
-function getSourceRecordsForPeriod(records: DailyRecord[], periodMode: SourcePeriodMode, config: MonthConfig): DailyRecord[] {
+function getSourceRecordsForPeriod(
+  records: DailyRecord[],
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+  monthConfigs: MonthConfig[],
+): DailyRecord[] {
   const sourceRecords = records.filter(isSourceValueRecord);
+  if (periodMode === "monthToMonth") {
+    const monthKeys = new Set(monthConfigs.map((item) => item.monthKey));
+    return sourceRecords.filter((record) => monthKeys.has(record.date.slice(0, 7)));
+  }
   return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
 }
 
@@ -7497,8 +7531,11 @@ function buildSourceChartBuckets(
   periodMode: SourcePeriodMode,
   config: MonthConfig,
   sources: string[],
+  monthConfigs: MonthConfig[],
 ): SourceChartBucket[] {
-  const buckets = periodMode === "month"
+  const buckets = periodMode === "monthToMonth"
+    ? buildAllMonthSourceBuckets(monthConfigs, sources)
+    : periodMode === "month"
     ? [{
       key: config.monthKey,
       label: getShortMonthLabel(config),
@@ -7510,9 +7547,11 @@ function buildSourceChartBuckets(
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   records.filter(isSourceValueRecord).forEach((record) => {
-    if (!record.date.startsWith(config.monthKey)) return;
+    if (periodMode !== "monthToMonth" && !record.date.startsWith(config.monthKey)) return;
 
-    const bucketKey = periodMode === "month"
+    const bucketKey = periodMode === "monthToMonth"
+      ? record.date.slice(0, 7)
+      : periodMode === "month"
       ? config.monthKey
       : periodMode === "week"
         ? `${config.monthKey}-week-${getWeekOfMonth(record.date)}`
@@ -7550,6 +7589,17 @@ function buildMonthSourceBuckets(periodMode: SourcePeriodMode, config: MonthConf
       values: createEmptySourceValues(sources),
     };
   });
+}
+
+function buildAllMonthSourceBuckets(monthConfigs: MonthConfig[], sources: string[]): SourceChartBucket[] {
+  return [...monthConfigs]
+    .sort((a, b) => a.monthKey.localeCompare(b.monthKey))
+    .map((config) => ({
+      key: config.monthKey,
+      label: getShortMonthLabel(config),
+      caption: String(config.year),
+      values: createEmptySourceValues(sources),
+    }));
 }
 
 function buildSourceConicGradient(rows: Array<{ color: string; value: number }>, total: number): string {
@@ -7696,11 +7746,13 @@ function getSourceBudgetsForPeriod(
   city: SourceCityFilter,
   periodMode: SourcePeriodMode,
   config: MonthConfig,
+  monthConfigs: MonthConfig[],
 ): BrandBudgetMonthly[] {
+  const monthKeys = periodMode === "monthToMonth" ? new Set(monthConfigs.map((item) => item.monthKey)) : null;
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    return row.monthKey === config.monthKey;
+    return monthKeys ? monthKeys.has(row.monthKey) : row.monthKey === config.monthKey;
   });
 }
 
@@ -7721,11 +7773,13 @@ function getSourceBrandRowsForPeriod(
   city: SourceCityFilter,
   periodMode: SourcePeriodMode,
   config: MonthConfig,
+  monthConfigs: MonthConfig[],
 ): BrandPerformanceWeekly[] {
+  const monthKeys = periodMode === "monthToMonth" ? new Set(monthConfigs.map((item) => item.monthKey)) : null;
   return rows.filter((row) => {
     if (selectedBrandKey !== "all" && normalizeBrandDashboardKey(row.brand) !== selectedBrandKey) return false;
     if (city !== "Все" && row.city !== city) return false;
-    return row.monthKey === config.monthKey;
+    return monthKeys ? monthKeys.has(row.monthKey) : row.monthKey === config.monthKey;
   });
 }
 
@@ -7784,8 +7838,11 @@ function buildBrandSourceChartBuckets(
   periodMode: SourcePeriodMode,
   config: MonthConfig,
   sources: string[],
+  monthConfigs: MonthConfig[],
 ): SourceChartBucket[] {
-  const buckets = periodMode === "month"
+  const buckets = periodMode === "monthToMonth"
+    ? buildAllMonthSourceBuckets(monthConfigs, sources)
+    : periodMode === "month"
     ? [{
       key: config.monthKey,
       label: getShortMonthLabel(config),
@@ -7796,7 +7853,11 @@ function buildBrandSourceChartBuckets(
   const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   rows.forEach((row) => {
-    const bucketKey = periodMode === "month" ? config.monthKey : `${row.monthKey}-week-${getWeekOfMonth(row.weekStart)}`;
+    const bucketKey = periodMode === "monthToMonth"
+      ? row.monthKey
+      : periodMode === "month"
+        ? config.monthKey
+        : `${row.monthKey}-week-${getWeekOfMonth(row.weekStart)}`;
     const bucket = bucketByKey.get(bucketKey);
     if (!bucket) return;
     const source = findSourceLabel(row.source, sources);
