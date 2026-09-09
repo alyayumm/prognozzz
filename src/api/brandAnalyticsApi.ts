@@ -44,8 +44,10 @@ export type BrandAnalyticsBundle = {
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
 const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
-const receivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
-const receivablesSummarySheet = "Август Итог";
+const receivablesSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
+const receivablesPsSheet = "Выгрузка PS";
+const legacyReceivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
+const legacyReceivablesSummarySheet = "Август Итог";
 const legacyBrandSheets: BrandCity[] = ["МСК", "СПБ"];
 const brandServiceSheets = {
   performance: "Brand_Performance_Weekly",
@@ -93,6 +95,7 @@ type BrandServiceDashboard = {
   branches?: Array<Record<string, unknown>>;
   aliases?: Array<Record<string, unknown>>;
   budgets?: Array<Record<string, unknown>>;
+  receivables?: Array<Record<string, unknown>>;
   metrika?: Array<Record<string, unknown>>;
 };
 
@@ -107,6 +110,7 @@ export type BrandBudgetMonthly = {
 export type RevenueReceivableMonthly = {
   monthKey: string;
   label: string;
+  city?: BrandCity | null;
   debtAmount: number;
   returnedAmount: number;
   badAmount: number;
@@ -125,17 +129,19 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     loadOptionalBrandGvizSheet(brandServiceSheets.aliases).then(parseBrandAliasesSheet).catch(() => []),
     loadDrrBudgetRows().catch(() => []),
     loadPublicBrandBudgetCsv().catch(() => []),
-    loadGvizSheet(receivablesSpreadsheetId, receivablesSummarySheet, "select B,C,D,E,F,G,H,I,J,K").then(parseReceivableMonthlySheet).catch(() => []),
+    loadReceivableRows().catch(() => []),
   ]);
 
   const appsAliases = normalizeBrandAliasObjects(appsScriptSnapshot?.aliases ?? []);
   const appsPerformance = normalizeBrandPerformanceObjects(appsScriptSnapshot?.performance ?? []);
   const appsBranches = normalizeBrandBranchObjects(appsScriptSnapshot?.branches ?? []);
   const appsBudgets = normalizeBrandBudgetObjects(appsScriptSnapshot?.budgets ?? []);
+  const appsReceivables = normalizeReceivableObjects(appsScriptSnapshot?.receivables ?? []);
   const appsMetrika = normalizeMetrikaBrandSourceObjects(appsScriptSnapshot?.metrika ?? []);
   const aliases = mergeAliases(importedBrandAliases, mergeAliases(serviceAliases, appsAliases));
   const performance = appsPerformance.length ? appsPerformance : servicePerformance.length ? servicePerformance : publicPerformance;
   const budgetRows = drrBudgets.length ? drrBudgets : appsBudgets.length ? appsBudgets : publicBudgets;
+  const receivableRows = appsReceivables.length ? appsReceivables : receivables;
   const canonicalPerformance = performance.map((record) => ({
     ...record,
     brand: canonicalBrandName(record.brand, aliases),
@@ -157,7 +163,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
       const roas = record.roas;
       return { ...record, brand: canonicalBrandName(record.brand, aliases), roasFact: roas };
     }),
-    performance: applyBrandBudgets(applyActualRevenueFromReceivables(canonicalPerformance, receivables), canonicalBudgets),
+    performance: applyBrandBudgets(applyActualRevenueFromReceivables(canonicalPerformance, receivableRows), canonicalBudgets),
     branches: branches.length
       ? branches.map((record) => ({
         ...record,
@@ -167,7 +173,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
       : importedBrandBranches,
     aliases,
     budgets: canonicalBudgets,
-    receivables,
+    receivables: receivableRows,
     metrika,
   };
 }
@@ -506,6 +512,65 @@ function parseDrrBudgetSheet(
   return output;
 }
 
+async function loadReceivableRows(): Promise<RevenueReceivableMonthly[]> {
+  const liveRows = await loadGvizSheet(
+    receivablesSpreadsheetId,
+    receivablesPsSheet,
+    "select S,Z,AD,AH where S is not null",
+  )
+    .then(parseReceivablePsSheet)
+    .catch(() => []);
+
+  if (liveRows.length) return liveRows;
+
+  return loadGvizSheet(
+    legacyReceivablesSpreadsheetId,
+    legacyReceivablesSummarySheet,
+    "select B,C,D,E,F,G,H,I,J,K",
+  ).then(parseReceivableMonthlySheet);
+}
+
+function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
+  const byMonthCity = new Map<string, RevenueReceivableMonthly>();
+
+  table.rows.forEach((row) => {
+    const city = normalizeBrandCity(readCell(row, 0));
+    const date = normalizeDate(readCell(row, 1));
+    const monthKey = date.slice(0, 7);
+    const revenue = toNumber(readCell(row, 2));
+    const theoryDebt = toNumber(readCell(row, 3));
+
+    if (!city || !monthKey || !date) return;
+
+    const key = `${monthKey}|${city}`;
+    const item = byMonthCity.get(key) ?? {
+      monthKey,
+      city,
+      label: `${monthKey} ${city}`,
+      debtAmount: 0,
+      returnedAmount: 0,
+      badAmount: 0,
+      outstandingAmount: 0,
+      debtCount: 0,
+      badCount: 0,
+    };
+
+    item.debtAmount += theoryDebt;
+    item.outstandingAmount += theoryDebt;
+    if (theoryDebt > 0) item.debtCount += 1;
+    if (revenue <= 0 && theoryDebt > 0) item.badCount += 1;
+    byMonthCity.set(key, item);
+  });
+
+  return [...byMonthCity.values()]
+    .map((item) => ({
+      ...item,
+      debtAmount: roundMoney(item.debtAmount),
+      outstandingAmount: roundMoney(item.outstandingAmount),
+    }))
+    .sort((a, b) => `${a.monthKey}|${a.city ?? ""}`.localeCompare(`${b.monthKey}|${b.city ?? ""}`));
+}
+
 function parseReceivableMonthlySheet(table: GvizTable): RevenueReceivableMonthly[] {
   const monthIndexByName: Record<string, number> = {
     январь: 1,
@@ -575,15 +640,36 @@ function applyActualRevenueFromReceivables(
   performance: BrandPerformanceWeekly[],
   receivables: RevenueReceivableMonthly[],
 ): BrandPerformanceWeekly[] {
-  const receivableByMonth = new Map(receivables.map((row) => [row.monthKey, row]));
+  const receivableByMonthCity = new Map<string, RevenueReceivableMonthly>();
+  const receivableByMonth = new Map<string, RevenueReceivableMonthly>();
+  receivables.forEach((row) => {
+    if (row.city) {
+      const key = `${row.monthKey}|${row.city}`;
+      const existing = receivableByMonthCity.get(key);
+      receivableByMonthCity.set(key, mergeReceivableRows(existing, row));
+      return;
+    }
+    const existing = receivableByMonth.get(row.monthKey);
+    receivableByMonth.set(row.monthKey, mergeReceivableRows(existing, row));
+  });
+
   const revenueByMonth = new Map<string, number>();
+  const revenueByMonthCity = new Map<string, number>();
   performance.forEach((row) => {
     revenueByMonth.set(row.monthKey, (revenueByMonth.get(row.monthKey) ?? 0) + Math.max(0, row.revenue));
+    revenueByMonthCity.set(
+      `${row.monthKey}|${row.city}`,
+      (revenueByMonthCity.get(`${row.monthKey}|${row.city}`) ?? 0) + Math.max(0, row.revenue),
+    );
   });
 
   return performance.map((row) => {
-    const monthRevenue = revenueByMonth.get(row.monthKey) ?? 0;
-    const receivable = receivableByMonth.get(row.monthKey);
+    const cityKey = `${row.monthKey}|${row.city}`;
+    const cityReceivable = receivableByMonthCity.get(cityKey);
+    const receivable = cityReceivable ?? receivableByMonth.get(row.monthKey);
+    const monthRevenue = cityReceivable
+      ? revenueByMonthCity.get(cityKey) ?? 0
+      : revenueByMonth.get(row.monthKey) ?? 0;
     const baseActualRevenue = Number.isFinite(row.actualRevenue) ? row.actualRevenue : row.revenue;
     if (!receivable || monthRevenue <= 0 || row.revenue <= 0) {
       return { ...row, actualRevenue: Math.max(0, baseActualRevenue) };
@@ -592,6 +678,42 @@ function applyActualRevenueFromReceivables(
     const debtShare = receivable.debtAmount * (row.revenue / monthRevenue);
     const actualRevenue = Math.max(0, row.revenue - debtShare);
     return { ...row, actualRevenue: roundMoney(actualRevenue) };
+  });
+}
+
+function mergeReceivableRows(
+  left: RevenueReceivableMonthly | undefined,
+  right: RevenueReceivableMonthly,
+): RevenueReceivableMonthly {
+  if (!left) return { ...right };
+  return {
+    ...left,
+    debtAmount: left.debtAmount + right.debtAmount,
+    returnedAmount: left.returnedAmount + right.returnedAmount,
+    badAmount: left.badAmount + right.badAmount,
+    outstandingAmount: left.outstandingAmount + right.outstandingAmount,
+    debtCount: left.debtCount + right.debtCount,
+    badCount: left.badCount + right.badCount,
+  };
+}
+
+function normalizeReceivableObjects(rows: Array<Record<string, unknown>>): RevenueReceivableMonthly[] {
+  return rows.flatMap((row) => {
+    const monthKey = stringValue(row.monthKey || row.month || row["месяц"]);
+    const city = normalizeBrandCity(stringValue(row.city || row["город"]));
+    const debtAmount = toNumber(stringValue(row.debtAmount || row["задолженность"] || row["сумма задолженности по теории"]));
+    if (!monthKey || debtAmount <= 0) return [];
+    return [{
+      monthKey,
+      city,
+      label: stringValue(row.label || row["период"]) || `${monthKey}${city ? ` ${city}` : ""}`,
+      debtAmount,
+      returnedAmount: toNumber(stringValue(row.returnedAmount || row["возврат"])),
+      badAmount: toNumber(stringValue(row.badAmount || row["плохая задолженность"])),
+      outstandingAmount: toNumber(stringValue(row.outstandingAmount || row["остаток"] || row["сумма задолженности по теории"])) || debtAmount,
+      debtCount: toNumber(stringValue(row.debtCount || row["количество"])),
+      badCount: toNumber(stringValue(row.badCount || row["плохих"])),
+    }];
   });
 }
 

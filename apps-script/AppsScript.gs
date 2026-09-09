@@ -5,6 +5,8 @@ const CONFIG = {
   roistatDefaultProjectId: '301351',
   roistatDirectSpreadsheetId: '1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc',
   roistatDirectMonthlySheet: 'помесячно',
+  receivablesSpreadsheetId: '1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI',
+  receivablesPsSheet: 'Выгрузка PS',
   yandexMetrikaCounterIdProperty: 'YANDEX_METRIKA_COUNTER_ID',
   yandexMetrikaTokenProperty: 'YANDEX_METRIKA_TOKEN',
   yandexMetrikaGoalIdProperty: 'YANDEX_METRIKA_GOAL_ID',
@@ -471,16 +473,134 @@ function getMonthData_(payload) {
 }
 
 function getBrandDashboard_() {
+  const receivables = getBrandReceivables_();
   return {
-    performance: getBrandPerformance_(),
+    performance: brandPerformanceWithActualRevenue_(readObjects_(CONFIG.sheets.brandPerformance), receivables),
     branches: getBrandBranches_(),
     aliases: getBrandAliases_(),
     metrika: getMetrikaBrandSources_(),
+    receivables: receivables,
   };
 }
 
 function getBrandPerformance_() {
-  return readObjects_(CONFIG.sheets.brandPerformance);
+  return brandPerformanceWithActualRevenue_(readObjects_(CONFIG.sheets.brandPerformance), getBrandReceivables_());
+}
+
+function getBrandReceivables_() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.receivablesSpreadsheetId);
+    const sheet = spreadsheet.getSheetByName(CONFIG.receivablesPsSheet);
+    if (!sheet) return [];
+
+    const lastRow = Math.min(Math.max(sheet.getLastRow(), 1), 8000);
+    if (lastRow < 2) return [];
+
+    const rows = sheet.getRange(2, 19, lastRow - 1, 16).getDisplayValues();
+    const byKey = {};
+
+    rows.forEach((row) => {
+      const city = normalizeReceivableCity_(row[0]);
+      const date = normalizeReceivableDate_(row[7]);
+      const monthKey = date ? String(date).slice(0, 7) : '';
+      const revenue = salesNumber_(row[11]);
+      const debt = salesNumber_(row[15]);
+
+      if (!city || !monthKey) return;
+
+      const key = monthKey + '|' + city;
+      if (!byKey[key]) {
+        byKey[key] = {
+          monthKey: monthKey,
+          city: city,
+          label: monthKey + ' ' + city,
+          debtAmount: 0,
+          returnedAmount: 0,
+          badAmount: 0,
+          outstandingAmount: 0,
+          debtCount: 0,
+          badCount: 0,
+        };
+      }
+
+      byKey[key].debtAmount += debt;
+      byKey[key].outstandingAmount += debt;
+      if (debt > 0) byKey[key].debtCount += 1;
+      if (debt > 0 && revenue <= 0) byKey[key].badCount += 1;
+    });
+
+    return Object.keys(byKey).map((key) => {
+      const item = byKey[key];
+      item.debtAmount = Math.round(item.debtAmount);
+      item.outstandingAmount = Math.round(item.outstandingAmount);
+      return item;
+    }).sort((a, b) => (a.monthKey + a.city).localeCompare(b.monthKey + b.city));
+  } catch (error) {
+    return [];
+  }
+}
+
+function brandPerformanceWithActualRevenue_(records, receivables) {
+  if (!receivables || !receivables.length) {
+    return records.map((record) => {
+      const revenue = salesNumber_(record.revenue);
+      const actualRevenue = salesNumber_(record.actualRevenue || record.factRevenue) || revenue;
+      return Object.assign({}, record, { actualRevenue: Math.max(0, actualRevenue) });
+    });
+  }
+
+  const receivableByMonthCity = {};
+  const revenueByMonthCity = {};
+
+  receivables.forEach((row) => {
+    if (!row.city) return;
+    const key = row.monthKey + '|' + row.city;
+    receivableByMonthCity[key] = (receivableByMonthCity[key] || 0) + salesNumber_(row.debtAmount);
+  });
+
+  records.forEach((record) => {
+    const monthKey = normalizeMonthKey_(record.monthKey || record.month || record.weekStart);
+    const city = normalizeReceivableCity_(record.city);
+    const key = monthKey + '|' + city;
+    if (!monthKey || !city) return;
+    revenueByMonthCity[key] = (revenueByMonthCity[key] || 0) + Math.max(0, salesNumber_(record.revenue));
+  });
+
+  return records.map((record) => {
+    const monthKey = normalizeMonthKey_(record.monthKey || record.month || record.weekStart);
+    const city = normalizeReceivableCity_(record.city);
+    const key = monthKey + '|' + city;
+    const revenue = Math.max(0, salesNumber_(record.revenue));
+    const budget = Math.max(0, salesNumber_(record.budget));
+    const monthRevenue = revenueByMonthCity[key] || 0;
+    const debt = receivableByMonthCity[key] || 0;
+    const debtShare = monthRevenue > 0 && revenue > 0 ? debt * (revenue / monthRevenue) : 0;
+    const actualRevenue = Math.max(0, Math.round(revenue - debtShare));
+    return Object.assign({}, record, {
+      actualRevenue: actualRevenue,
+      roasFact: budget > 0 ? actualRevenue / budget : salesNumber_(record.roasFact),
+    });
+  });
+}
+
+function normalizeReceivableDate_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  const raw = String(value || '').trim();
+  const ru = raw.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if (ru) return ru[3] + '-' + ru[2].padStart(2, '0') + '-' + ru[1].padStart(2, '0');
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return iso[1] + '-' + iso[2].padStart(2, '0') + '-' + iso[3].padStart(2, '0');
+  return '';
+}
+
+function normalizeReceivableCity_(value) {
+  const normalized = salesNormalizeText_(value);
+  if (!normalized) return '';
+  if (normalized.indexOf('мск') >= 0 || normalized.indexOf('москва') >= 0 || normalized.indexOf('moscow') >= 0) return 'МСК';
+  if (normalized.indexOf('спб') >= 0 || normalized.indexOf('петербург') >= 0 || normalized.indexOf('spb') >= 0) return 'СПБ';
+  return '';
 }
 
 function getBrandBranches_() {
