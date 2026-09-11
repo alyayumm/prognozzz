@@ -83,8 +83,9 @@ const monthKeysByLabel: Record<string, string> = {
 };
 
 type GvizCell = { v?: string | number | null; f?: string | null } | null;
+type GvizColumn = { id?: string | null; label?: string | null; type?: string | null };
 type GvizRow = { c?: GvizCell[] | null };
-type GvizTable = { rows: GvizRow[] };
+type GvizTable = { cols?: GvizColumn[]; rows: GvizRow[] };
 type GvizResponse = {
   status?: string;
   table?: GvizTable;
@@ -531,6 +532,9 @@ async function loadReceivableRows(): Promise<RevenueReceivableMonthly[]> {
 }
 
 function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
+  const objectRows = normalizeReceivableObjects(rowsToObjects(table));
+  if (objectRows.length) return objectRows;
+
   const byMonthCity = new Map<string, RevenueReceivableMonthly>();
 
   table.rows.forEach((row) => {
@@ -699,20 +703,37 @@ function mergeReceivableRows(
 
 function normalizeReceivableObjects(rows: Array<Record<string, unknown>>): RevenueReceivableMonthly[] {
   return rows.flatMap((row) => {
-    const monthKey = stringValue(row.monthKey || row.month || row["месяц"]);
-    const city = normalizeBrandCity(stringValue(row.city || row["город"]));
-    const debtAmount = toNumber(stringValue(row.debtAmount || row["задолженность"] || row["сумма задолженности по теории"]));
+    const date = normalizeDate(readObjectField(row, ["date", "дата", "дата создания", "создан", "создана"]));
+    const monthKey = stringValue(readObjectField(row, ["monthKey", "month", "месяц"])) || date.slice(0, 7);
+    const city = normalizeBrandCity(stringValue(readObjectField(row, ["city", "город", "воронка", "направление"])));
+    const debtAmount = toNumber(stringValue(readObjectField(row, [
+      "debtAmount",
+      "задолженность по теории",
+      "сумма задолженности по теории",
+      "задолженность",
+    ])));
+    const revenue = toNumber(stringValue(readObjectField(row, [
+      "revenue",
+      "выручка",
+      "потенциальная выручка",
+      "сумма продажи",
+    ])));
     if (!monthKey || debtAmount <= 0) return [];
     return [{
       monthKey,
       city,
-      label: stringValue(row.label || row["период"]) || `${monthKey}${city ? ` ${city}` : ""}`,
+      label: stringValue(readObjectField(row, ["label", "период"])) || `${monthKey}${city ? ` ${city}` : ""}`,
       debtAmount,
-      returnedAmount: toNumber(stringValue(row.returnedAmount || row["возврат"])),
-      badAmount: toNumber(stringValue(row.badAmount || row["плохая задолженность"])),
-      outstandingAmount: toNumber(stringValue(row.outstandingAmount || row["остаток"] || row["сумма задолженности по теории"])) || debtAmount,
-      debtCount: toNumber(stringValue(row.debtCount || row["количество"])),
-      badCount: toNumber(stringValue(row.badCount || row["плохих"])),
+      returnedAmount: toNumber(stringValue(readObjectField(row, ["returnedAmount", "возврат"]))),
+      badAmount: toNumber(stringValue(readObjectField(row, ["badAmount", "плохая задолженность"]))),
+      outstandingAmount: toNumber(stringValue(readObjectField(row, [
+        "outstandingAmount",
+        "остаток",
+        "задолженность по теории",
+        "сумма задолженности по теории",
+      ]))) || debtAmount,
+      debtCount: toNumber(stringValue(readObjectField(row, ["debtCount", "количество"]))) || (debtAmount > 0 ? 1 : 0),
+      badCount: toNumber(stringValue(readObjectField(row, ["badCount", "плохих"]))) || (revenue <= 0 && debtAmount > 0 ? 1 : 0),
     }];
   });
 }
@@ -773,6 +794,20 @@ function normalizeMetrikaCity(value: string): BrandCity | "Все" {
 }
 
 function rowsToObjects(table: GvizTable): Array<Record<string, string>> {
+  const columnHeaders = (table.cols ?? []).map((column) => normalizeHeader(column.label || column.id || ""));
+  if (columnHeaders.some(Boolean)) {
+    return table.rows.flatMap((row) => {
+      const values = rowToValues(row);
+      if (!values.some(Boolean)) return [];
+      const object: Record<string, string> = {};
+      columnHeaders.forEach((header, index) => {
+        if (!header) return;
+        object[header] = values[index] ?? "";
+      });
+      return [object];
+    });
+  }
+
   const headerIndex = table.rows.findIndex((row) => rowToValues(row).some(Boolean));
   if (headerIndex < 0) return [];
   const headers = rowToValues(table.rows[headerIndex]).map(normalizeHeader);
@@ -794,6 +829,26 @@ function rowToValues(row: GvizRow | undefined): string[] {
 
 function normalizeHeader(value: string): string {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function readObjectField(row: Record<string, unknown>, candidates: string[]): unknown {
+  for (const candidate of candidates) {
+    if (row[candidate] !== undefined) return row[candidate];
+  }
+
+  const normalizedCandidates = candidates.map(normalizeHeaderKey);
+  const entry = Object.entries(row).find(([key]) => {
+    const normalizedKey = normalizeHeaderKey(key);
+    return normalizedCandidates.some((candidate) => normalizedKey === candidate || normalizedKey.includes(candidate));
+  });
+  return entry?.[1];
+}
+
+function normalizeHeaderKey(value: string): string {
+  return normalizeHeader(value)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/g, "");
 }
 
 function readCell(row: GvizRow | undefined, index: number): string {

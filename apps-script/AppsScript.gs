@@ -496,17 +496,21 @@ function getBrandReceivables_() {
     const lastRow = Math.min(Math.max(sheet.getLastRow(), 1), 8000);
     if (lastRow < 2) return [];
 
-    const rows = sheet.getRange(2, 19, lastRow - 1, 16).getDisplayValues();
+    const values = sheet.getRange(1, 1, lastRow, sheet.getLastColumn()).getDisplayValues();
+    const layout = findReceivablePsLayout_(values);
+    const rows = layout
+      ? values.slice(layout.headerRow + 1)
+      : sheet.getRange(2, 19, lastRow - 1, 16).getDisplayValues();
     const byKey = {};
 
     rows.forEach((row) => {
-      const city = normalizeReceivableCity_(row[0]);
-      const date = normalizeReceivableDate_(row[7]);
+      const city = normalizeReceivableCity_(layout ? row[layout.city] : row[0]);
+      const date = normalizeReceivableDate_(layout ? row[layout.date] : row[7]);
       const monthKey = date ? String(date).slice(0, 7) : '';
-      const revenue = salesNumber_(row[11]);
-      const debt = salesNumber_(row[15]);
+      const revenue = salesNumber_(layout && layout.revenue >= 0 ? row[layout.revenue] : row[11]);
+      const debt = salesNumber_(layout ? row[layout.debt] : row[15]);
 
-      if (!city || !monthKey) return;
+      if (!city || !monthKey || debt <= 0) return;
 
       const key = monthKey + '|' + city;
       if (!byKey[key]) {
@@ -538,6 +542,42 @@ function getBrandReceivables_() {
   } catch (error) {
     return [];
   }
+}
+
+function findReceivablePsLayout_(values) {
+  const maxRows = Math.min(values.length, 25);
+  for (let rowIndex = 0; rowIndex < maxRows; rowIndex += 1) {
+    const headers = values[rowIndex].map(receivableHeaderKey_);
+    const city = findReceivableColumn_(headers, ['city', 'город', 'воронка', 'направление']);
+    const date = findReceivableColumn_(headers, ['date', 'дата', 'датасоздания', 'создан', 'создана']);
+    const revenue = findReceivableColumn_(headers, ['revenue', 'выручка', 'потенциальнаявыручка', 'суммапродажи']);
+    const debt = findReceivableColumn_(headers, [
+      'debtamount',
+      'задолженностьпотеории',
+      'суммазадолженностипотеории',
+      'задолженность',
+    ]);
+
+    if (city >= 0 && date >= 0 && debt >= 0) {
+      return { headerRow: rowIndex, city: city, date: date, revenue: revenue, debt: debt };
+    }
+  }
+  return null;
+}
+
+function findReceivableColumn_(headers, candidates) {
+  const normalizedCandidates = candidates.map(receivableHeaderKey_);
+  for (let index = 0; index < headers.length; index += 1) {
+    if (normalizedCandidates.indexOf(headers[index]) >= 0) return index;
+  }
+  for (let index = 0; index < headers.length; index += 1) {
+    if (normalizedCandidates.some((candidate) => headers[index].indexOf(candidate) >= 0)) return index;
+  }
+  return -1;
+}
+
+function receivableHeaderKey_(value) {
+  return salesNormalizeText_(value).replace(/[^a-zа-я0-9]+/g, '');
 }
 
 function brandPerformanceWithActualRevenue_(records, receivables) {
