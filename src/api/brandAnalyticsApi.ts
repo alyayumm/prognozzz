@@ -142,7 +142,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
   const aliases = mergeAliases(importedBrandAliases, mergeAliases(serviceAliases, appsAliases));
   const performance = appsPerformance.length ? appsPerformance : servicePerformance.length ? servicePerformance : publicPerformance;
   const budgetRows = drrBudgets.length ? drrBudgets : appsBudgets.length ? appsBudgets : publicBudgets;
-  const receivableRows = appsReceivables.length ? appsReceivables : receivables;
+  const receivableRows = combineReceivableSources(appsReceivables, receivables);
   const canonicalPerformance = performance.map((record) => ({
     ...record,
     brand: canonicalBrandName(record.brand, aliases),
@@ -699,6 +699,21 @@ function mergeReceivableRows(
     debtCount: left.debtCount + right.debtCount,
     badCount: left.badCount + right.badCount,
   };
+}
+
+function combineReceivableSources(
+  appsRows: RevenueReceivableMonthly[],
+  sheetRows: RevenueReceivableMonthly[],
+): RevenueReceivableMonthly[] {
+  const byKey = new Map<string, RevenueReceivableMonthly>();
+  appsRows.forEach((row) => {
+    byKey.set(`${row.monthKey}|${row.city ?? ""}`, { ...row });
+  });
+  sheetRows.forEach((row) => {
+    byKey.set(`${row.monthKey}|${row.city ?? ""}`, { ...row });
+  });
+  return [...byKey.values()]
+    .sort((a, b) => `${a.monthKey}|${a.city ?? ""}`.localeCompare(`${b.monthKey}|${b.city ?? ""}`));
 }
 
 function normalizeReceivableObjects(rows: Array<Record<string, unknown>>): RevenueReceivableMonthly[] {
