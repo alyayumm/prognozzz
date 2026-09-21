@@ -47,7 +47,7 @@ const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
 const receivablesSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const directMonthlySpreadsheetId = "1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc";
 const receivablesPsSheet = "Выгрузка PS";
-const directMonthlySheet = "помесячно";
+const directMonthlySheets = ["помесячно", "далее"];
 const legacyReceivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
 const legacyReceivablesSummarySheet = "Август Итог";
 const legacyBrandSheets: BrandCity[] = ["МСК", "СПБ"];
@@ -314,7 +314,7 @@ function loadGvizSheet(spreadsheetId: string, sheetName: string, query = "select
     const timeoutId = window.setTimeout(() => {
       cleanup();
       reject(new Error(`Google Sheet timeout: ${sheetName}`));
-    }, 20000);
+    }, 90000);
 
     function cleanup() {
       window.clearTimeout(timeoutId);
@@ -544,7 +544,19 @@ async function loadReceivableRows(): Promise<RevenueReceivableMonthly[]> {
 }
 
 async function loadDirectMonthlyPerformanceRows(): Promise<BrandPerformanceWeekly[]> {
-  return loadGvizSheet(directMonthlySpreadsheetId, directMonthlySheet).then(parseDirectMonthlyPerformanceSheet);
+  const tables = await Promise.all(
+    directMonthlySheets.map((sheetName) =>
+      loadGvizSheet(directMonthlySpreadsheetId, sheetName)
+        .then(parseDirectMonthlyPerformanceSheet)
+        .catch(() => []),
+    ),
+  );
+  const rowsByKey = new Map<string, BrandPerformanceWeekly>();
+  tables.flat().forEach((row) => {
+    rowsByKey.set(directPerformanceKey(row), row);
+  });
+  return [...rowsByKey.values()]
+    .sort((a, b) => directPerformanceKey(a).localeCompare(directPerformanceKey(b), "ru"));
 }
 
 function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
@@ -557,7 +569,7 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
     const city = normalizeBrandCity(readCell(row, 0));
     const date = normalizeDate(readCell(row, 1));
     const monthKey = date.slice(0, 7);
-    const revenue = toNumber(readCell(row, 2));
+    const revenue = 0;
     const actualRevenue = toNumber(readCell(row, 3));
     const theoryDebt = toNumber(readCell(row, 4));
 
@@ -619,8 +631,7 @@ function parseDirectMonthlyPerformanceSheet(table: GvizTable): BrandPerformanceW
     const brandConfig = directMonthlyBrandConfig(group.title);
     if (!brandConfig) return [];
 
-    return group.monthColumns.flatMap(({ index, monthIndex }) => {
-      const monthKey = `2026-${String(monthIndex).padStart(2, "0")}`;
+    return group.monthColumns.flatMap(({ index, monthKey }) => {
       const leads = cellNumber(table, rowIndex.leads, index);
       const qualified = cellNumber(table, rowIndex.qualified, index);
       const sales = cellNumber(table, rowIndex.sales, index);
@@ -660,9 +671,9 @@ function parseDirectMonthlyPerformanceSheet(table: GvizTable): BrandPerformanceW
   });
 }
 
-function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthColumns: Array<{ index: number; monthIndex: number }> }> {
-  const groups: Array<{ title: string; monthColumns: Array<{ index: number; monthIndex: number }> }> = [];
-  let current: { title: string; monthColumns: Array<{ index: number; monthIndex: number }> } | null = null;
+function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthColumns: Array<{ index: number; monthKey: string }> }> {
+  const groups: Array<{ title: string; monthColumns: Array<{ index: number; monthKey: string }> }> = [];
+  let current: { title: string; monthColumns: Array<{ index: number; monthKey: string }> } | null = null;
 
   (table.cols ?? []).forEach((column, index) => {
     const label = normalizeHeader(column.label || "");
@@ -676,8 +687,8 @@ function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthC
       return;
     }
 
-    const monthIndex = monthIndexFromRuLabel(label);
-    if (!monthIndex) {
+    const monthKey = monthKeyFromDirectLabel(label);
+    if (!monthKey) {
       current = null;
       return;
     }
@@ -689,7 +700,7 @@ function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthC
     }
 
     if (!current) return;
-    current.monthColumns.push({ index, monthIndex });
+    current.monthColumns.push({ index, monthKey });
   });
 
   return groups;
@@ -698,6 +709,14 @@ function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthC
 function directGroupTitleFromLabel(label: string): string {
   const monthMatch = label.match(/^(.*?)\s+(март|апрель|май|июнь|июль|август|сентябрь|октябрь|ноябрь|декабрь|январь|февраль)\s*$/i);
   return monthMatch ? normalizeHeader(monthMatch[1]) : "";
+}
+
+function monthKeyFromDirectLabel(label: string): string | null {
+  const monthIndex = monthIndexFromRuLabel(label);
+  if (!monthIndex) return null;
+  const yearMatch = label.match(/(20\d{2})/);
+  const year = yearMatch ? Number(yearMatch[1]) : 2026;
+  return `${year}-${String(monthIndex).padStart(2, "0")}`;
 }
 
 function monthIndexFromRuLabel(label: string): number | null {

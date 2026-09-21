@@ -924,6 +924,7 @@ export default function App() {
                 records={currentMonthRecords}
                 forecastCoefficients={forecastCoefficients}
                 receivables={brandData.receivables}
+                performanceRows={brandData.performance.length ? brandData.performance : legacyBrandRecordsToPerformance(brandData.records)}
               />
             )}
             {mode === "monthDaily" && (
@@ -1279,6 +1280,7 @@ function MonthDashboard({
   records,
   forecastCoefficients,
   receivables,
+  performanceRows,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -1298,6 +1300,7 @@ function MonthDashboard({
   records: DailyRecord[];
   forecastCoefficients: ForecastCoefficients;
   receivables: RevenueReceivableMonthly[];
+  performanceRows: BrandPerformanceWeekly[];
 }) {
   const monthForecast = buildMonthEndForecast(
     records,
@@ -1311,7 +1314,7 @@ function MonthDashboard({
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
   );
   const insights = buildAttentionItems(totals, events);
-  const finance = buildMonthFinanceSummary(receivables, config.monthKey, selectedScope);
+  const finance = buildMonthFinanceSummary(receivables, performanceRows, config.monthKey, selectedScope);
 
   return (
     <div className="page-stack">
@@ -1386,13 +1389,13 @@ function MonthFinancePanel({
     <section className="month-finance-panel">
       <PanelHead
         title="Выручка и дебиторка"
-        description="Фактическая выручка берется из PS: уже оплаченная часть. Дебиторка — сумма задолженности по теории."
+        description="Потенциальная выручка берется из Roistat, фактическая выручка и дебиторка — из PS."
       />
       <div className="month-finance-grid">
         <article>
           <span>Потенциальная выручка</span>
           <strong>{formatBrandCurrency(finance.revenue, { allowZero: true })}</strong>
-          <small>выручка из Выгрузка PS</small>
+          <small>выручка из Roistat</small>
         </article>
         <article>
           <span>Фактическая выручка</span>
@@ -1425,6 +1428,7 @@ function MonthFinancePanel({
 
 function buildMonthFinanceSummary(
   rows: RevenueReceivableMonthly[],
+  performanceRows: BrandPerformanceWeekly[],
   monthKey: string,
   selectedScope: ReportScope,
 ): MonthFinanceSummary {
@@ -1434,18 +1438,25 @@ function buildMonthFinanceSummary(
     return row.city === selectedScope;
   });
 
+  const performanceScopeRows = performanceRows.filter((row) => {
+    if (row.monthKey !== monthKey) return false;
+    if (selectedScope === "Все") return row.city === "МСК" || row.city === "СПБ";
+    return row.city === selectedScope;
+  });
+
   const citySummaries = (["МСК", "СПБ"] as BrandCity[]).map((city) => {
     const cityRows = scopedRows.filter((row) => row.city === city);
+    const cityPerformanceRows = performanceScopeRows.filter((row) => row.city === city);
     return {
       city,
-      revenue: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+      revenue: roundUiMoney(cityPerformanceRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
       actualRevenue: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
       debtAmount: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
     };
   });
 
   return {
-    revenue: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+    revenue: roundUiMoney(performanceScopeRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
     actualRevenue: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
     debtAmount: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
     debtCount: scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row.debtCount || 0)), 0),
