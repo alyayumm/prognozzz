@@ -1,6 +1,6 @@
 import { importedBrandAliases, importedBrandBranches } from "../data/importedBrandBranches";
 import { callReportApi } from "./reportApi";
-import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly, MetrikaBrandSourceDaily } from "../types";
+import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly, MetrikaBrandSourceDaily, SourceRevenueDaily } from "../types";
 
 export type { BrandCity } from "../types";
 
@@ -40,11 +40,13 @@ export type BrandAnalyticsBundle = {
   budgets: BrandBudgetMonthly[];
   receivables: RevenueReceivableMonthly[];
   metrika: MetrikaBrandSourceDaily[];
+  sourceRevenue: SourceRevenueDaily[];
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
 const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
 const receivablesSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
+const receivablesAmoSheet = "Выгрузка amoCRM";
 const receivablesPsSheet = "Выгрузка PS";
 const legacyReceivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
 const legacyReceivablesSummarySheet = "Август Итог";
@@ -122,7 +124,7 @@ export type RevenueReceivableMonthly = {
 
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
-  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables] = await Promise.all([
+  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables, sourceRevenue] = await Promise.all([
     loadLegacyBrandRecords(),
     loadOptionalBrandGvizSheet(brandServiceSheets.performance).then(parseBrandPerformanceSheet).catch(() => []),
     loadPublicBrandPerformanceCsv().catch(() => []),
@@ -131,6 +133,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     loadDrrBudgetRows().catch(() => []),
     loadPublicBrandBudgetCsv().catch(() => []),
     loadReceivableRows().catch(() => []),
+    loadSourceRevenueRows().catch(() => []),
   ]);
 
   const appsAliases = normalizeBrandAliasObjects(appsScriptSnapshot?.aliases ?? []);
@@ -176,6 +179,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     budgets: canonicalBudgets,
     receivables: receivableRows,
     metrika,
+    sourceRevenue: sourceRevenue.map((record) => ({ ...record, source: canonicalSourceName(record.source) })),
   };
 }
 
@@ -573,6 +577,97 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
       outstandingAmount: roundMoney(item.outstandingAmount),
     }))
     .sort((a, b) => `${a.monthKey}|${a.city ?? ""}`.localeCompare(`${b.monthKey}|${b.city ?? ""}`));
+}
+
+async function loadSourceRevenueRows(): Promise<SourceRevenueDaily[]> {
+  const [amoTable, psTable] = await Promise.all([
+    loadGvizSheet(
+      receivablesSpreadsheetId,
+      receivablesAmoSheet,
+      "select CX,DB,GB,GC,GD,GF,GG,HH",
+    ),
+    loadGvizSheet(
+      receivablesSpreadsheetId,
+      receivablesPsSheet,
+      "select S,V,Z,AD,AE,AH,AI where V is not null",
+    ),
+  ]);
+
+  return parseSourceRevenueRows(amoTable, psTable);
+}
+
+function parseSourceRevenueRows(amoTable: GvizTable, psTable: GvizTable): SourceRevenueDaily[] {
+  const amoSourceByPhone = buildAmoSourceByPhone(amoTable);
+  const byKey = new Map<string, SourceRevenueDaily>();
+
+  psTable.rows.forEach((row) => {
+    const city = normalizeBrandCity(readCell(row, 0));
+    const phoneKeys = collectPhoneKeys(readCell(row, 1));
+    const date = normalizeDate(readCell(row, 2));
+    const monthKey = date.slice(0, 7);
+    if (!city || !date || !monthKey || !phoneKeys.length) return;
+
+    const matchedSource = phoneKeys.map((phone) => amoSourceByPhone.get(phone)).find(Boolean);
+    const source = canonicalSourceName(matchedSource || "");
+    if (!source || source === "Другие" || source === "Неизвестно") return;
+
+    const revenue = toNumber(readCell(row, 3));
+    const actualRevenue = toNumber(readCell(row, 4));
+    const debt = toNumber(readCell(row, 5));
+    const key = `${date}|${city}|${source}`;
+    const item = byKey.get(key) ?? {
+      id: key,
+      date,
+      monthKey,
+      city,
+      source,
+      revenue: 0,
+      actualRevenue: 0,
+      debt: 0,
+    };
+
+    item.revenue += revenue;
+    item.actualRevenue += actualRevenue;
+    item.debt += debt;
+    byKey.set(key, item);
+  });
+
+  return [...byKey.values()]
+    .map((item) => ({
+      ...item,
+      revenue: roundMoney(item.revenue),
+      actualRevenue: roundMoney(item.actualRevenue),
+      debt: roundMoney(item.debt),
+    }))
+    .sort((a, b) => `${a.date}|${a.city}|${a.source}`.localeCompare(`${b.date}|${b.city}|${b.source}`, "ru"));
+}
+
+function buildAmoSourceByPhone(table: GvizTable): Map<string, string> {
+  const map = new Map<string, string>();
+
+  table.rows.forEach((row) => {
+    const domain = readCell(row, 0);
+    const rawSource = readCell(row, 1);
+    let source = canonicalSourceName(rawSource || domain);
+    if (canonicalSourceName(domain) === "Директ") source = "Директ";
+    if (!source || source === "Другие" || source === "Неизвестно") return;
+
+    [2, 3, 4, 5, 6, 7].forEach((index) => {
+      collectPhoneKeys(readCell(row, index)).forEach((phone) => {
+        if (!map.has(phone)) map.set(phone, source);
+      });
+    });
+  });
+
+  return map;
+}
+
+function collectPhoneKeys(value: string): string[] {
+  return stringValue(value)
+    .split(/[,;\n]/)
+    .map((part) => part.replace(/\D/g, ""))
+    .map((digits) => (digits.length >= 10 ? digits.slice(-10) : ""))
+    .filter(Boolean);
 }
 
 function parseReceivableMonthlySheet(table: GvizTable): RevenueReceivableMonthly[] {

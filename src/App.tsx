@@ -90,6 +90,7 @@ import type {
   BrandEvent,
   BrandPerformanceWeekly,
   MetrikaBrandSourceDaily,
+  SourceRevenueDaily,
   RoistatFieldsRefreshResult,
   RoistatSyncKind,
   RoistatSyncResult,
@@ -348,6 +349,7 @@ const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
   budgets: [],
   receivables: [],
   metrika: [],
+  sourceRevenue: [],
 };
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
@@ -2339,6 +2341,10 @@ function SourcesAnalyticsDashboard({
     () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
     [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
   );
+  const scopedSourceRevenueRows = useMemo(
+    () => getSourceRevenueRowsForPeriod(brandData.sourceRevenue ?? [], sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
+    [brandData.sourceRevenue, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
+  );
   const activeSources = useMemo(
     () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
     [isBrandSourceMode, scopedBrandRows, scopedRecords, scopedBrandBudgets],
@@ -2353,8 +2359,8 @@ function SourcesAnalyticsDashboard({
   const sourceTotals = useMemo(
     () => isBrandSourceMode
       ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
-      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
-    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
+      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows, scopedSourceRevenueRows),
+    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets, scopedSourceRevenueRows],
   );
   const buckets = useMemo(
     () => isBrandSourceMode
@@ -7842,6 +7848,21 @@ function getSourceRecordsForPeriod(
   return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
 }
 
+function getSourceRevenueRowsForPeriod(
+  rows: SourceRevenueDaily[],
+  city: SourceCityFilter,
+  periodMode: SourcePeriodMode,
+  config: MonthConfig,
+  monthConfigs: MonthConfig[],
+): SourceRevenueDaily[] {
+  const cityFiltered = city === "Все" ? rows : rows.filter((row) => row.city === city);
+  if (periodMode === "monthToMonth") {
+    const monthKeys = new Set(monthConfigs.map((item) => item.monthKey));
+    return cityFiltered.filter((row) => monthKeys.has(row.monthKey));
+  }
+  return cityFiltered.filter((row) => row.monthKey === config.monthKey);
+}
+
 function buildSourceChartBuckets(
   records: DailyRecord[],
   periodMode: SourcePeriodMode,
@@ -8030,6 +8051,7 @@ function getSourceMoneyTotalsFromDaily(
   sources: string[],
   budgetRows: BrandBudgetMonthly[] = [],
   performanceRows: BrandPerformanceWeekly[] = [],
+  sourceRevenueRows: SourceRevenueDaily[] = [],
 ): SourceMoneyTotals[] {
   const periodMonthCount = countSourcePeriodMonths(records, budgetRows, performanceRows);
   const rawTotals = sources.map((source) => {
@@ -8037,7 +8059,11 @@ function getSourceMoneyTotalsFromDaily(
     const totals = getSourceMetricTotals(records, source);
     const moneyRecords = sourceRecords.filter((record) => record.metric === "Продажи");
     const commentRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
+    const commentActualRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["факт. выручка", "факт выручка", "оплачено", "уже оплаченная часть"]), 0);
     const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
+    const matchedSourceRevenueRows = sourceRevenueRows.filter((row) => sourceNameEquals(row.source, source));
+    const linkedRevenue = matchedSourceRevenueRows.reduce((sum, row) => sum + row.revenue, 0);
+    const linkedActualRevenue = matchedSourceRevenueRows.reduce((sum, row) => sum + row.actualRevenue, 0);
     const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
     const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);
     const performanceActualRevenue = performanceSourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
@@ -8045,8 +8071,14 @@ function getSourceMoneyTotalsFromDaily(
     const drrBudget = budgetRows
       .filter((row) => sourceNameEquals(row.source, source))
       .reduce((sum, row) => sum + row.budget, 0);
-    const revenue = commentRevenue > 0 ? commentRevenue : performanceRevenue;
-    const actualRevenue = performanceActualRevenue > 0 ? performanceActualRevenue : revenue;
+    const revenue = commentRevenue > 0 ? commentRevenue : linkedRevenue > 0 ? linkedRevenue : performanceRevenue;
+    const actualRevenue = commentActualRevenue > 0
+      ? commentActualRevenue
+      : linkedActualRevenue > 0
+      ? linkedActualRevenue
+      : performanceActualRevenue > 0
+      ? performanceActualRevenue
+      : revenue;
     const sourceHasActivity = Object.values(totals).some((value) => value > 0) || revenue > 0 || actualRevenue > 0 || sourceRecords.length > 0;
     const sourceBudgetFallback = sourceHasActivity ? fallbackMonthlySourceBudget(source) * periodMonthCount : 0;
     const budget = commentBudget > 0
@@ -8151,12 +8183,16 @@ function getSourceBudgetsForPeriod(
 function sourceMoneyFromComment(comment: string | undefined, labels: string[]): number {
   const text = String(comment || "").replace(/\u00a0/g, " ");
   for (const label of labels) {
-    const match = text.match(new RegExp(`${label}\\s*[:=]?\\s*([\\d\\s.,]+)`, "i"));
+    const match = text.match(new RegExp(`${escapeRegExp(label)}\\s*[:=]?\\s*([\\d\\s.,]+)`, "i"));
     if (!match) continue;
     const parsed = Number(match[1].replace(/\s/g, "").replace(",", "."));
     if (Number.isFinite(parsed)) return parsed;
   }
   return 0;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getSourceBrandRowsForPeriod(

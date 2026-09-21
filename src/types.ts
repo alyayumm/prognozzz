@@ -172,6 +172,17 @@ export interface MetrikaBrandSourceDaily {
   updatedAt?: string;
 }
 
+export interface SourceRevenueDaily {
+  id: string;
+  date: string;
+  monthKey: string;
+  city: BrandCity;
+  source: string;
+  revenue: number;
+  actualRevenue: number;
+  debt: number;
+}
+
 export interface BrandEvent {
   id: string;
   brand: string;

@@ -301,7 +301,7 @@ const ROISTAT_METRIC_KEYS = ['leads', 'qualified', 'sales', 'revenue', 'budget']
 const ROISTAT_SOURCE_OTHER = 'Другие';
 const ROISTAT_SOURCE_DIRECT = 'Директ';
 const ROISTAT_SOURCE_CASHBACK = 'Рек/кешбэк';
-const ROISTAT_SOURCE_FALLBACK_DISTRIBUTION = ['SEO', 'Яндекс Карты', 'Директ', '2ГИС', 'Гугл Карты', 'Прямые визиты', 'Zoon'];
+const ROISTAT_SOURCE_FALLBACK_DISTRIBUTION = ['SEO', 'Яндекс Карты', '2ГИС', 'Гугл Карты', 'Прямые визиты', 'Zoon'];
 
 function doPost(e) {
   try {
@@ -1632,14 +1632,11 @@ function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
 
   rawRows.forEach((row) => {
     const dimensionText = roistatDimensionText_(row);
-    if (isRoistatMessageLead_(dimensionText)) {
-      skippedRows += 1;
-      return;
-    }
-
     const date = stringifyDate_(row.syncDate || range.fromDate);
     const city = normalizeRoistatCity_(dimensionText);
-    const source = canonicalRoistatSource_(dimensionText, row.dimensions[fields.domainDimension]);
+    const source = isRoistatMessageLead_(dimensionText)
+      ? ROISTAT_SOURCE_OTHER
+      : canonicalRoistatSource_(dimensionText, row.dimensions[fields.domainDimension]);
     if (!city || !source) {
       skippedRows += 1;
       return;
@@ -1686,16 +1683,13 @@ function writeRoistatBrandRows_(rawRows, fields, range, warnings) {
 
   rawRows.forEach((row) => {
     const dimensionText = roistatDimensionText_(row);
-    if (isRoistatMessageLead_(dimensionText)) {
-      skippedRows += 1;
-      return;
-    }
-
     const date = stringifyDate_(row.syncDate || range.fromDate);
     const city = normalizeRoistatCity_(dimensionText);
     const domain = normalizeRoistatDomain_(row.dimensions[fields.domainDimension] || firstRoistatDomain_(dimensionText));
     const brand = canonicalRoistatBrand_(domain, dimensionText);
-    const source = canonicalRoistatSource_(dimensionText, domain);
+    const source = isRoistatMessageLead_(dimensionText)
+      ? ROISTAT_SOURCE_OTHER
+      : canonicalRoistatSource_(dimensionText, domain);
     if (!city || !brand || !source) {
       skippedRows += 1;
       return;
@@ -1823,7 +1817,7 @@ function roistatCanReceiveOther_(source, directLocked) {
     && source !== ROISTAT_SOURCE_OTHER
     && source !== ROISTAT_SOURCE_CASHBACK
     && source !== 'Неизвестно'
-    && !(directLocked && source === ROISTAT_SOURCE_DIRECT);
+    && source !== ROISTAT_SOURCE_DIRECT;
 }
 
 function roistatAllocateAmount_(amount, recipients, weightGetter) {
@@ -1980,28 +1974,12 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
     if (item.source === ROISTAT_SOURCE_OTHER) groups[groupKey].other.push(item);
   });
 
-  let directMoved = 0;
   let otherMoved = 0;
   Object.keys(groups).forEach((groupKey) => {
     const group = groups[groupKey];
     if (!group.other.length) return;
     const directTarget = directMonthly.byMonthCity[groupKey];
     const directLocked = directTarget && roistatHasAnyMetric_(directTarget);
-
-    if (directLocked) {
-      ROISTAT_METRIC_KEYS.forEach((metric) => {
-        const currentDirect = roistatSumMetric_(group.items.filter((item) => item.source === ROISTAT_SOURCE_DIRECT), metric);
-        const need = Math.max(0, Math.round(Number(directTarget[metric] || 0) - currentDirect));
-        const transfer = Math.min(need, Math.round(roistatSumMetric_(group.other, metric)));
-        if (transfer <= 0) return;
-        roistatAllocateAmount_(transfer, group.other, (item) => item[metric]).forEach((allocation) => {
-          allocation.item[metric] = Math.max(0, Number(allocation.item[metric] || 0) - allocation.value);
-          const target = ensureRoistatSourceAggregate_(aggregated, allocation.item.date, allocation.item.city, ROISTAT_SOURCE_DIRECT);
-          target[metric] += allocation.value;
-          directMoved += allocation.value;
-        });
-      });
-    }
 
     const knownSources = unique_(group.items.map((item) => item.source).filter((source) => roistatCanReceiveOther_(source, directLocked)));
     const receiverSources = knownSources.length
@@ -2013,7 +1991,7 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
         const amount = Math.round(Number(otherItem[metric] || 0));
         if (amount <= 0 || !receiverSources.length) return;
         const receivers = receiverSources.map((source) => ensureRoistatSourceAggregate_(aggregated, otherItem.date, otherItem.city, source));
-        roistatAllocateAmount_(amount, receivers, () => 1).forEach((allocation) => {
+        roistatAllocateAmount_(amount, receivers, (item) => item[metric]).forEach((allocation) => {
           allocation.item[metric] += allocation.value;
         });
         otherItem[metric] = 0;
@@ -2022,8 +2000,7 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
     });
   });
 
-  if (directMoved) warnings.push('Директ: часть строк "Другие" перенесена в Директ по помесячной таблице без увеличения общего итога.');
-  if (otherMoved) warnings.push('Другие источники распределены равномерно по рабочим инструментам; Рек/кешбэк не затронут.');
+  if (otherMoved) warnings.push('Другие источники и мессенджеры распределены пропорционально по рабочим источникам; Директ и Рек/кешбэк не затронуты.');
 }
 
 function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
@@ -2036,35 +2013,12 @@ function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
     if (item.source === ROISTAT_SOURCE_OTHER) groups[groupKey].other.push(item);
   });
 
-  let directMoved = 0;
   let otherMoved = 0;
   Object.keys(groups).forEach((groupKey) => {
     const group = groups[groupKey];
     if (!group.other.length) return;
     const directTarget = directMonthly.byMonthCityBrand[groupKey];
     const directLocked = directTarget && roistatHasAnyMetric_(directTarget);
-
-    if (directLocked) {
-      ROISTAT_METRIC_KEYS.forEach((metric) => {
-        const currentDirect = roistatSumMetric_(group.items.filter((item) => item.source === ROISTAT_SOURCE_DIRECT), metric);
-        const need = Math.max(0, Math.round(Number(directTarget[metric] || 0) - currentDirect));
-        const transfer = Math.min(need, Math.round(roistatSumMetric_(group.other, metric)));
-        if (transfer <= 0) return;
-        roistatAllocateAmount_(transfer, group.other, (item) => item[metric]).forEach((allocation) => {
-          allocation.item[metric] = Math.max(0, Number(allocation.item[metric] || 0) - allocation.value);
-          const target = ensureRoistatBrandAggregate_(
-            aggregated,
-            allocation.item.weekStart,
-            allocation.item.city,
-            allocation.item.brand,
-            allocation.item.domain,
-            ROISTAT_SOURCE_DIRECT
-          );
-          target[metric] += allocation.value;
-          directMoved += allocation.value;
-        });
-      });
-    }
 
     const knownSources = unique_(group.items.map((item) => item.source).filter((source) => roistatCanReceiveOther_(source, directLocked)));
     const receiverSources = knownSources.length
@@ -2083,7 +2037,7 @@ function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
           otherItem.domain,
           source
         ));
-        roistatAllocateAmount_(amount, receivers, () => 1).forEach((allocation) => {
+        roistatAllocateAmount_(amount, receivers, (item) => item[metric]).forEach((allocation) => {
           allocation.item[metric] += allocation.value;
         });
         otherItem[metric] = 0;
@@ -2092,8 +2046,7 @@ function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
     });
   });
 
-  if (directMoved) warnings.push('Бренды: часть строк "Другие" перенесена в Директ по помесячной таблице без увеличения общего итога.');
-  if (otherMoved) warnings.push('Бренды: строки "Другие" распределены равномерно по рабочим источникам; Рек/кешбэк не затронут.');
+  if (otherMoved) warnings.push('Бренды: строки "Другие" и мессенджеры распределены пропорционально по рабочим источникам; Директ и Рек/кешбэк не затронуты.');
 }
 
 function getRoistatFieldMap_(kind) {
