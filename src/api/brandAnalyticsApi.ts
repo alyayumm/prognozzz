@@ -1,6 +1,6 @@
 import { importedBrandAliases, importedBrandBranches } from "../data/importedBrandBranches";
 import { callReportApi } from "./reportApi";
-import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly, MetrikaBrandSourceDaily, SourceRevenueDaily } from "../types";
+import type { BrandAlias, BrandBranchWeekly, BrandCity, BrandPerformanceWeekly, MetrikaBrandSourceDaily } from "../types";
 
 export type { BrandCity } from "../types";
 
@@ -40,14 +40,14 @@ export type BrandAnalyticsBundle = {
   budgets: BrandBudgetMonthly[];
   receivables: RevenueReceivableMonthly[];
   metrika: MetrikaBrandSourceDaily[];
-  sourceRevenue: SourceRevenueDaily[];
 };
 
 const brandSpreadsheetId = "1sV1GFMn_Nag1xZQcSSypb57-0i5KtgCJbPgo95rO8oo";
 const drrBudgetSpreadsheetId = "1tl-e_HAxxgGv24l19GaKaVz_6NYDuLqEwQH5esjER3o";
 const receivablesSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
-const receivablesAmoSheet = "Выгрузка amoCRM";
+const directMonthlySpreadsheetId = "1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc";
 const receivablesPsSheet = "Выгрузка PS";
+const directMonthlySheet = "помесячно";
 const legacyReceivablesSpreadsheetId = "1jCRGGd0HyTj-8RM6IE1Dolh0tNt_DebknhNXgvVOZ3M";
 const legacyReceivablesSummarySheet = "Август Итог";
 const legacyBrandSheets: BrandCity[] = ["МСК", "СПБ"];
@@ -114,6 +114,8 @@ export type RevenueReceivableMonthly = {
   monthKey: string;
   label: string;
   city?: BrandCity | null;
+  revenue: number;
+  actualRevenue: number;
   debtAmount: number;
   returnedAmount: number;
   badAmount: number;
@@ -124,7 +126,7 @@ export type RevenueReceivableMonthly = {
 
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
-  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables, sourceRevenue] = await Promise.all([
+  const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables, directMonthlyPerformance] = await Promise.all([
     loadLegacyBrandRecords(),
     loadOptionalBrandGvizSheet(brandServiceSheets.performance).then(parseBrandPerformanceSheet).catch(() => []),
     loadPublicBrandPerformanceCsv().catch(() => []),
@@ -133,7 +135,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     loadDrrBudgetRows().catch(() => []),
     loadPublicBrandBudgetCsv().catch(() => []),
     loadReceivableRows().catch(() => []),
-    loadSourceRevenueRows().catch(() => []),
+    loadDirectMonthlyPerformanceRows().catch(() => []),
   ]);
 
   const appsAliases = normalizeBrandAliasObjects(appsScriptSnapshot?.aliases ?? []);
@@ -161,13 +163,20 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     brand: canonicalBrandName(record.brand, aliases),
     source: canonicalSourceName(record.source),
   }));
+  const directPerformance = directMonthlyPerformance.map((record) => ({
+    ...record,
+    brand: canonicalBrandName(record.brand, aliases),
+    source: canonicalSourceName(record.source),
+  }));
+  const budgetedPerformance = applyBrandBudgets(applyActualRevenueFromReceivables(canonicalPerformance, receivableRows), canonicalBudgets);
+  const performanceWithDirect = mergeDirectMonthlyPerformance(budgetedPerformance, directPerformance);
   const branches = appsBranches.length ? appsBranches : serviceBranches;
   return {
     records: legacyRecords.map((record) => {
       const roas = record.roas;
       return { ...record, brand: canonicalBrandName(record.brand, aliases), roasFact: roas };
     }),
-    performance: applyBrandBudgets(applyActualRevenueFromReceivables(canonicalPerformance, receivableRows), canonicalBudgets),
+    performance: performanceWithDirect,
     branches: branches.length
       ? branches.map((record) => ({
         ...record,
@@ -179,7 +188,6 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     budgets: canonicalBudgets,
     receivables: receivableRows,
     metrika,
-    sourceRevenue: sourceRevenue.map((record) => ({ ...record, source: canonicalSourceName(record.source) })),
   };
 }
 
@@ -521,7 +529,7 @@ async function loadReceivableRows(): Promise<RevenueReceivableMonthly[]> {
   const liveRows = await loadGvizSheet(
     receivablesSpreadsheetId,
     receivablesPsSheet,
-    "select S,Z,AD,AH where S is not null",
+    "select S,Z,AD,AE,AH where S is not null",
   )
     .then(parseReceivablePsSheet)
     .catch(() => []);
@@ -535,6 +543,10 @@ async function loadReceivableRows(): Promise<RevenueReceivableMonthly[]> {
   ).then(parseReceivableMonthlySheet);
 }
 
+async function loadDirectMonthlyPerformanceRows(): Promise<BrandPerformanceWeekly[]> {
+  return loadGvizSheet(directMonthlySpreadsheetId, directMonthlySheet).then(parseDirectMonthlyPerformanceSheet);
+}
+
 function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
   const objectRows = normalizeReceivableObjects(rowsToObjects(table));
   if (objectRows.length) return objectRows;
@@ -546,7 +558,8 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
     const date = normalizeDate(readCell(row, 1));
     const monthKey = date.slice(0, 7);
     const revenue = toNumber(readCell(row, 2));
-    const theoryDebt = toNumber(readCell(row, 3));
+    const actualRevenue = toNumber(readCell(row, 3));
+    const theoryDebt = toNumber(readCell(row, 4));
 
     if (!city || !monthKey || !date) return;
 
@@ -555,6 +568,8 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
       monthKey,
       city,
       label: `${monthKey} ${city}`,
+      revenue: 0,
+      actualRevenue: 0,
       debtAmount: 0,
       returnedAmount: 0,
       badAmount: 0,
@@ -563,6 +578,8 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
       badCount: 0,
     };
 
+    item.revenue += revenue;
+    item.actualRevenue += actualRevenue;
     item.debtAmount += theoryDebt;
     item.outstandingAmount += theoryDebt;
     if (theoryDebt > 0) item.debtCount += 1;
@@ -573,101 +590,175 @@ function parseReceivablePsSheet(table: GvizTable): RevenueReceivableMonthly[] {
   return [...byMonthCity.values()]
     .map((item) => ({
       ...item,
+      revenue: roundMoney(item.revenue),
+      actualRevenue: roundMoney(item.actualRevenue),
       debtAmount: roundMoney(item.debtAmount),
       outstandingAmount: roundMoney(item.outstandingAmount),
     }))
     .sort((a, b) => `${a.monthKey}|${a.city ?? ""}`.localeCompare(`${b.monthKey}|${b.city ?? ""}`));
 }
 
-async function loadSourceRevenueRows(): Promise<SourceRevenueDaily[]> {
-  const [amoTable, psTable] = await Promise.all([
-    loadGvizSheet(
-      receivablesSpreadsheetId,
-      receivablesAmoSheet,
-      "select CX,DB,GB,GC,GD,GF,GG,HH",
-    ),
-    loadGvizSheet(
-      receivablesSpreadsheetId,
-      receivablesPsSheet,
-      "select S,V,Z,AD,AE,AH,AI where V is not null",
-    ),
-  ]);
+function parseDirectMonthlyPerformanceSheet(table: GvizTable): BrandPerformanceWeekly[] {
+  const labels = table.rows.map((row) => normalizeHeader(readCell(row, 1)).toLowerCase().replace(/ё/g, "е"));
+  const rowIndex = {
+    clicks: labels.findIndex((label) => label === "клики"),
+    cpc: labels.findIndex((label) => label === "цена клика"),
+    leads: labels.findIndex((label) => label === "лид"),
+    cpl: labels.findIndex((label) => label === "цена лида"),
+    qualified: labels.findIndex((label) => label === "квал"),
+    cpql: labels.findIndex((label) => label === "цена квала"),
+    sales: labels.findIndex((label) => label === "продажа"),
+    saleCost: labels.findIndex((label) => label === "цена продажи"),
+    revenue: labels.findIndex((label) => label === "выручка (₽)" || label === "выручка"),
+  };
 
-  return parseSourceRevenueRows(amoTable, psTable);
-}
+  if (rowIndex.leads < 0 || rowIndex.qualified < 0 || rowIndex.sales < 0) return [];
 
-function parseSourceRevenueRows(amoTable: GvizTable, psTable: GvizTable): SourceRevenueDaily[] {
-  const amoSourceByPhone = buildAmoSourceByPhone(amoTable);
-  const byKey = new Map<string, SourceRevenueDaily>();
+  const groups = getDirectMonthlyGroups(table);
+  return groups.flatMap((group) => {
+    const brandConfig = directMonthlyBrandConfig(group.title);
+    if (!brandConfig) return [];
 
-  psTable.rows.forEach((row) => {
-    const city = normalizeBrandCity(readCell(row, 0));
-    const phoneKeys = collectPhoneKeys(readCell(row, 1));
-    const date = normalizeDate(readCell(row, 2));
-    const monthKey = date.slice(0, 7);
-    if (!city || !date || !monthKey || !phoneKeys.length) return;
+    return group.monthColumns.flatMap(({ index, monthIndex }) => {
+      const monthKey = `2026-${String(monthIndex).padStart(2, "0")}`;
+      const leads = cellNumber(table, rowIndex.leads, index);
+      const qualified = cellNumber(table, rowIndex.qualified, index);
+      const sales = cellNumber(table, rowIndex.sales, index);
+      const revenue = rowIndex.revenue >= 0 ? cellNumber(table, rowIndex.revenue, index) : 0;
+      const clicks = rowIndex.clicks >= 0 ? cellNumber(table, rowIndex.clicks, index) : 0;
+      const cpc = rowIndex.cpc >= 0 ? cellNumber(table, rowIndex.cpc, index) : 0;
+      const cpl = rowIndex.cpl >= 0 ? cellNumber(table, rowIndex.cpl, index) : 0;
+      const cpql = rowIndex.cpql >= 0 ? cellNumber(table, rowIndex.cpql, index) : 0;
+      const saleCost = rowIndex.saleCost >= 0 ? cellNumber(table, rowIndex.saleCost, index) : 0;
+      const budget = directBudgetFromMonthlyRows({ clicks, cpc, leads, cpl, qualified, cpql, sales, saleCost });
 
-    const matchedSource = phoneKeys.map((phone) => amoSourceByPhone.get(phone)).find(Boolean);
-    const source = canonicalSourceName(matchedSource || "");
-    if (!source || source === "Другие" || source === "Неизвестно") return;
+      if (leads <= 0 && qualified <= 0 && sales <= 0 && revenue <= 0 && budget <= 0) return [];
 
-    const revenue = toNumber(readCell(row, 3));
-    const actualRevenue = toNumber(readCell(row, 4));
-    const debt = toNumber(readCell(row, 5));
-    const key = `${date}|${city}|${source}`;
-    const item = byKey.get(key) ?? {
-      id: key,
-      date,
-      monthKey,
-      city,
-      source,
-      revenue: 0,
-      actualRevenue: 0,
-      debt: 0,
-    };
-
-    item.revenue += revenue;
-    item.actualRevenue += actualRevenue;
-    item.debt += debt;
-    byKey.set(key, item);
-  });
-
-  return [...byKey.values()]
-    .map((item) => ({
-      ...item,
-      revenue: roundMoney(item.revenue),
-      actualRevenue: roundMoney(item.actualRevenue),
-      debt: roundMoney(item.debt),
-    }))
-    .sort((a, b) => `${a.date}|${a.city}|${a.source}`.localeCompare(`${b.date}|${b.city}|${b.source}`, "ru"));
-}
-
-function buildAmoSourceByPhone(table: GvizTable): Map<string, string> {
-  const map = new Map<string, string>();
-
-  table.rows.forEach((row) => {
-    const domain = readCell(row, 0);
-    const rawSource = readCell(row, 1);
-    let source = canonicalSourceName(rawSource || domain);
-    if (canonicalSourceName(domain) === "Директ") source = "Директ";
-    if (!source || source === "Другие" || source === "Неизвестно") return;
-
-    [2, 3, 4, 5, 6, 7].forEach((index) => {
-      collectPhoneKeys(readCell(row, index)).forEach((phone) => {
-        if (!map.has(phone)) map.set(phone, source);
-      });
+      const roas = budget > 0 ? revenue / budget : null;
+      return [{
+        id: `direct-monthly-${monthKey}-${brandConfig.city}-${normalizeBrandKey(brandConfig.brand)}`,
+        weekStart: `${monthKey}-01`,
+        monthKey,
+        city: brandConfig.city,
+        brand: brandConfig.brand,
+        domain: inferDomainFromBrand(brandConfig.brand),
+        source: "Директ",
+        leads,
+        qualified,
+        sales,
+        revenue,
+        actualRevenue: revenue,
+        budget,
+        roas,
+        roasFact: roas === null ? null : roas / 2,
+        cpl: leads > 0 && budget > 0 ? budget / leads : 0,
+        cpql: qualified > 0 && budget > 0 ? budget / qualified : 0,
+        saleCost: sales > 0 && budget > 0 ? budget / sales : 0,
+        avgCheck: sales > 0 ? revenue / sales : 0,
+      }];
     });
   });
-
-  return map;
 }
 
-function collectPhoneKeys(value: string): string[] {
-  return stringValue(value)
-    .split(/[,;\n]/)
-    .map((part) => part.replace(/\D/g, ""))
-    .map((digits) => (digits.length >= 10 ? digits.slice(-10) : ""))
-    .filter(Boolean);
+function getDirectMonthlyGroups(table: GvizTable): Array<{ title: string; monthColumns: Array<{ index: number; monthIndex: number }> }> {
+  const groups: Array<{ title: string; monthColumns: Array<{ index: number; monthIndex: number }> }> = [];
+  let current: { title: string; monthColumns: Array<{ index: number; monthIndex: number }> } | null = null;
+
+  (table.cols ?? []).forEach((column, index) => {
+    const label = normalizeHeader(column.label || "");
+    if (!label) {
+      current = null;
+      return;
+    }
+
+    if (isDirectTotalColumn(label)) {
+      current = null;
+      return;
+    }
+
+    const monthIndex = monthIndexFromRuLabel(label);
+    if (!monthIndex) {
+      current = null;
+      return;
+    }
+
+    const title = directGroupTitleFromLabel(label);
+    if (title) {
+      current = { title, monthColumns: [] };
+      groups.push(current);
+    }
+
+    if (!current) return;
+    current.monthColumns.push({ index, monthIndex });
+  });
+
+  return groups;
+}
+
+function directGroupTitleFromLabel(label: string): string {
+  const monthMatch = label.match(/^(.*?)\s+(март|апрель|май|июнь|июль|август|сентябрь|октябрь|ноябрь|декабрь|январь|февраль)\s*$/i);
+  return monthMatch ? normalizeHeader(monthMatch[1]) : "";
+}
+
+function monthIndexFromRuLabel(label: string): number | null {
+  const normalized = label.toLowerCase().replace(/ё/g, "е");
+  const monthNames: Record<string, number> = {
+    январь: 1,
+    февраля: 2,
+    февраль: 2,
+    март: 3,
+    апрель: 4,
+    май: 5,
+    июнь: 6,
+    июль: 7,
+    август: 8,
+    сентябрь: 9,
+    октябрь: 10,
+    ноябрь: 11,
+    декабрь: 12,
+  };
+
+  const entry = Object.entries(monthNames).find(([month]) => normalized.includes(month));
+  return entry?.[1] ?? null;
+}
+
+function isDirectTotalColumn(label: string): boolean {
+  return label.toLowerCase().replace(/ё/g, "е").includes("итог");
+}
+
+function directMonthlyBrandConfig(title: string): { city: BrandCity; brand: string } | null {
+  const normalized = title.toLowerCase().replace(/ё/g, "е");
+  if (normalized.includes("всего")) return null;
+  if (normalized.includes("автосити")) return { city: "СПБ", brand: "АвтоСити" };
+  if (normalized.includes("автодрайв") && normalized.includes("спб")) return { city: "СПБ", brand: "АвтоДрайв" };
+  if (normalized.includes("автодрайв") && normalized.includes("мск")) return { city: "МСК", brand: "АвтоДрайв" };
+  if (normalized.includes("изидрайв") || normalized.includes("изи драйв") || normalized.includes("изи-драйв")) return { city: "МСК", brand: "изи-драйв.рф" };
+  return null;
+}
+
+function cellNumber(table: GvizTable, rowIndex: number, colIndex: number): number {
+  if (rowIndex < 0) return 0;
+  return toNumber(readCell(table.rows[rowIndex], colIndex));
+}
+
+function directBudgetFromMonthlyRows(values: {
+  clicks: number;
+  cpc: number;
+  leads: number;
+  cpl: number;
+  qualified: number;
+  cpql: number;
+  sales: number;
+  saleCost: number;
+}): number {
+  const candidates = [
+    values.sales * values.saleCost,
+    values.qualified * values.cpql,
+    values.leads * values.cpl,
+    values.clicks * values.cpc,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  return candidates.length ? roundMoney(candidates[0]) : 0;
 }
 
 function parseReceivableMonthlySheet(table: GvizTable): RevenueReceivableMonthly[] {
@@ -712,6 +803,8 @@ function parseReceivableMonthlySheet(table: GvizTable): RevenueReceivableMonthly
     byMonth.set(monthKey, {
       monthKey,
       label,
+      revenue: 0,
+      actualRevenue: 0,
       debtAmount,
       returnedAmount: toNumber(readCell(row, 6)),
       badAmount,
@@ -787,6 +880,8 @@ function mergeReceivableRows(
   if (!left) return { ...right };
   return {
     ...left,
+    revenue: left.revenue + right.revenue,
+    actualRevenue: left.actualRevenue + right.actualRevenue,
     debtAmount: left.debtAmount + right.debtAmount,
     returnedAmount: left.returnedAmount + right.returnedAmount,
     badAmount: left.badAmount + right.badAmount,
@@ -811,11 +906,43 @@ function combineReceivableSources(
     .sort((a, b) => `${a.monthKey}|${a.city ?? ""}`.localeCompare(`${b.monthKey}|${b.city ?? ""}`));
 }
 
+function mergeDirectMonthlyPerformance(
+  performance: BrandPerformanceWeekly[],
+  directRows: BrandPerformanceWeekly[],
+): BrandPerformanceWeekly[] {
+  if (!directRows.length) return performance;
+
+  const directKeys = new Set(directRows.map(directPerformanceKey));
+  const filteredPerformance = performance.filter((row) => {
+    if (!sourceNameEquals(row.source, "Директ")) return true;
+    return !directKeys.has(directPerformanceKey(row));
+  });
+
+  return [...filteredPerformance, ...directRows]
+    .sort((a, b) => `${a.monthKey}|${a.city}|${a.brand}|${a.source}`.localeCompare(`${b.monthKey}|${b.city}|${b.brand}|${b.source}`, "ru"));
+}
+
+function directPerformanceKey(row: Pick<BrandPerformanceWeekly, "monthKey" | "city" | "brand" | "source">): string {
+  return `${row.monthKey}|${row.city}|${normalizeBrandKey(row.brand)}|${canonicalSourceName(row.source)}`;
+}
+
+function sourceNameEquals(left: string, right: string): boolean {
+  return canonicalSourceName(left).toLowerCase() === canonicalSourceName(right).toLowerCase();
+}
+
 function normalizeReceivableObjects(rows: Array<Record<string, unknown>>): RevenueReceivableMonthly[] {
   return rows.flatMap((row) => {
     const date = normalizeDate(readObjectField(row, ["date", "дата", "дата создания", "создан", "создана"]));
     const monthKey = stringValue(readObjectField(row, ["monthKey", "month", "месяц"])) || date.slice(0, 7);
     const city = normalizeBrandCity(stringValue(readObjectField(row, ["city", "город", "воронка", "направление"])));
+    const actualRevenue = toNumber(stringValue(readObjectField(row, [
+      "actualRevenue",
+      "факт. выручка",
+      "факт выручка",
+      "уже оплаченная часть",
+      "оплаченная часть",
+      "оплачено",
+    ])));
     const debtAmount = toNumber(stringValue(readObjectField(row, [
       "debtAmount",
       "задолженность по теории",
@@ -828,11 +955,13 @@ function normalizeReceivableObjects(rows: Array<Record<string, unknown>>): Reven
       "потенциальная выручка",
       "сумма продажи",
     ])));
-    if (!monthKey || debtAmount <= 0) return [];
+    if (!monthKey || (debtAmount <= 0 && actualRevenue <= 0 && revenue <= 0)) return [];
     return [{
       monthKey,
       city,
       label: stringValue(readObjectField(row, ["label", "период"])) || `${monthKey}${city ? ` ${city}` : ""}`,
+      revenue,
+      actualRevenue,
       debtAmount,
       returnedAmount: toNumber(stringValue(readObjectField(row, ["returnedAmount", "возврат"]))),
       badAmount: toNumber(stringValue(readObjectField(row, ["badAmount", "плохая задолженность"]))),

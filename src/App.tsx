@@ -35,6 +35,7 @@ import {
   type BrandAnalyticsRecord,
   type BrandBudgetMonthly,
   type BrandCity,
+  type RevenueReceivableMonthly,
 } from "./api/brandAnalyticsApi";
 import {
   dakoroManagers,
@@ -90,7 +91,6 @@ import type {
   BrandEvent,
   BrandPerformanceWeekly,
   MetrikaBrandSourceDaily,
-  SourceRevenueDaily,
   RoistatFieldsRefreshResult,
   RoistatSyncKind,
   RoistatSyncResult,
@@ -349,7 +349,6 @@ const emptyBrandAnalyticsBundle: BrandAnalyticsBundle = {
   budgets: [],
   receivables: [],
   metrika: [],
-  sourceRevenue: [],
 };
 const noLeadSourceOption = "__none__";
 const otherLeadSourceOption = "другое";
@@ -924,6 +923,7 @@ export default function App() {
                 onCreateMonth={createMonthFromPanel}
                 records={currentMonthRecords}
                 forecastCoefficients={forecastCoefficients}
+                receivables={brandData.receivables}
               />
             )}
             {mode === "monthDaily" && (
@@ -1278,6 +1278,7 @@ function MonthDashboard({
   onCreateMonth,
   records,
   forecastCoefficients,
+  receivables,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -1296,6 +1297,7 @@ function MonthDashboard({
   onCreateMonth: (draft: MonthDraft) => void;
   records: DailyRecord[];
   forecastCoefficients: ForecastCoefficients;
+  receivables: RevenueReceivableMonthly[];
 }) {
   const monthForecast = buildMonthEndForecast(
     records,
@@ -1309,6 +1311,7 @@ function MonthDashboard({
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
   );
   const insights = buildAttentionItems(totals, events);
+  const finance = buildMonthFinanceSummary(receivables, config.monthKey, selectedScope);
 
   return (
     <div className="page-stack">
@@ -1326,6 +1329,7 @@ function MonthDashboard({
       />
 
       <MetricKpiStrip totals={totals} isClosedMonth={monthTiming.isClosed} summaries={summaries} trafficMode={trafficMode} />
+      <MonthFinancePanel finance={finance} selectedScope={selectedScope} />
       <MonthEndForecastPanel projection={monthForecast} trafficMode={trafficMode} />
       <PlanCompletionWidget totals={totals} periodLabel="План месяца" trafficMode={trafficMode} />
       <RecommendationWeekPanel weeks={weeks} />
@@ -1354,6 +1358,107 @@ function MonthDashboard({
       <InsightPanel items={insights} />
     </div>
   );
+}
+
+type MonthFinanceSummary = {
+  revenue: number;
+  actualRevenue: number;
+  debtAmount: number;
+  debtCount: number;
+  cities: Array<{
+    city: BrandCity;
+    revenue: number;
+    actualRevenue: number;
+    debtAmount: number;
+  }>;
+};
+
+function MonthFinancePanel({
+  finance,
+  selectedScope,
+}: {
+  finance: MonthFinanceSummary;
+  selectedScope: ReportScope;
+}) {
+  const hasRows = finance.revenue > 0 || finance.actualRevenue > 0 || finance.debtAmount > 0;
+
+  return (
+    <section className="month-finance-panel">
+      <PanelHead
+        title="Выручка и дебиторка"
+        description="Фактическая выручка берется из PS: уже оплаченная часть. Дебиторка — сумма задолженности по теории."
+      />
+      <div className="month-finance-grid">
+        <article>
+          <span>Потенциальная выручка</span>
+          <strong>{formatBrandCurrency(finance.revenue, { allowZero: true })}</strong>
+          <small>выручка из Выгрузка PS</small>
+        </article>
+        <article>
+          <span>Фактическая выручка</span>
+          <strong>{formatBrandCurrency(finance.actualRevenue, { allowZero: true })}</strong>
+          <small>уже оплаченная часть</small>
+        </article>
+        <article className={finance.debtAmount > 0 ? "debt" : ""}>
+          <span>Дебиторка</span>
+          <strong>{formatBrandCurrency(finance.debtAmount, { allowZero: true })}</strong>
+          <small>{finance.debtCount ? `${formatNumber(finance.debtCount)} строк с долгом` : "долга нет"}</small>
+        </article>
+      </div>
+      {selectedScope === "Все" && (
+        <div className="month-finance-city-grid">
+          {finance.cities.map((item) => (
+            <div key={item.city}>
+              <b>{item.city}</b>
+              <span>факт {formatBrandCurrency(item.actualRevenue, { allowZero: true })}</span>
+              <span>дебиторка {formatBrandCurrency(item.debtAmount, { allowZero: true })}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {!hasRows && (
+        <p className="month-finance-empty">По этому месяцу в PS пока нет оплаченной части или задолженности.</p>
+      )}
+    </section>
+  );
+}
+
+function buildMonthFinanceSummary(
+  rows: RevenueReceivableMonthly[],
+  monthKey: string,
+  selectedScope: ReportScope,
+): MonthFinanceSummary {
+  const scopedRows = rows.filter((row) => {
+    if (row.monthKey !== monthKey) return false;
+    if (selectedScope === "Все") return row.city === "МСК" || row.city === "СПБ";
+    return row.city === selectedScope;
+  });
+
+  const citySummaries = (["МСК", "СПБ"] as BrandCity[]).map((city) => {
+    const cityRows = scopedRows.filter((row) => row.city === city);
+    return {
+      city,
+      revenue: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+      actualRevenue: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
+      debtAmount: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
+    };
+  });
+
+  return {
+    revenue: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+    actualRevenue: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
+    debtAmount: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
+    debtCount: scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row.debtCount || 0)), 0),
+    cities: citySummaries,
+  };
+}
+
+function safeMoney(value: number | undefined): number {
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function roundUiMoney(value: number): number {
+  return Math.round(value);
 }
 
 function TrafficToggle({ value, onChange }: { value: TrafficMode; onChange: (value: TrafficMode) => void }) {
@@ -2341,10 +2446,6 @@ function SourcesAnalyticsDashboard({
     () => getSourceBudgetsForPeriod(brandData.budgets ?? [], selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
     [brandData.budgets, selectedSourceBrandKey, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
   );
-  const scopedSourceRevenueRows = useMemo(
-    () => getSourceRevenueRowsForPeriod(brandData.sourceRevenue ?? [], sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs),
-    [brandData.sourceRevenue, sourceCityFilter, periodMode, selectedMonthConfig, monthConfigs],
-  );
   const activeSources = useMemo(
     () => isBrandSourceMode ? getActiveSourcesFromBrandPerformance(scopedBrandRows) : getActiveLeadSources(scopedRecords, scopedBrandBudgets),
     [isBrandSourceMode, scopedBrandRows, scopedRecords, scopedBrandBudgets],
@@ -2359,13 +2460,13 @@ function SourcesAnalyticsDashboard({
   const sourceTotals = useMemo(
     () => isBrandSourceMode
       ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
-      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows, scopedSourceRevenueRows),
-    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets, scopedSourceRevenueRows],
+      : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
+    [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
   );
   const buckets = useMemo(
     () => isBrandSourceMode
       ? buildBrandSourceChartBuckets(scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, monthConfigs)
-      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, activeSources, monthConfigs),
+      : buildSourceChartBuckets(cityFilteredRecords, periodMode, selectedMonthConfig, activeSources, monthConfigs, scopedBrandRows),
     [isBrandSourceMode, scopedBrandRows, chartPeriodMode, selectedMonthConfig, activeSources, monthConfigs, cityFilteredRecords, periodMode],
   );
   const summaryTotals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
@@ -7848,27 +7949,13 @@ function getSourceRecordsForPeriod(
   return sourceRecords.filter((record) => record.date.startsWith(config.monthKey));
 }
 
-function getSourceRevenueRowsForPeriod(
-  rows: SourceRevenueDaily[],
-  city: SourceCityFilter,
-  periodMode: SourcePeriodMode,
-  config: MonthConfig,
-  monthConfigs: MonthConfig[],
-): SourceRevenueDaily[] {
-  const cityFiltered = city === "Все" ? rows : rows.filter((row) => row.city === city);
-  if (periodMode === "monthToMonth") {
-    const monthKeys = new Set(monthConfigs.map((item) => item.monthKey));
-    return cityFiltered.filter((row) => monthKeys.has(row.monthKey));
-  }
-  return cityFiltered.filter((row) => row.monthKey === config.monthKey);
-}
-
 function buildSourceChartBuckets(
   records: DailyRecord[],
   periodMode: SourcePeriodMode,
   config: MonthConfig,
   sources: string[],
   monthConfigs: MonthConfig[],
+  performanceRows: BrandPerformanceWeekly[] = [],
 ): SourceChartBucket[] {
   const buckets = periodMode === "monthToMonth"
     ? buildAllMonthSourceBuckets(monthConfigs, sources)
@@ -7902,7 +7989,34 @@ function buildSourceChartBuckets(
     bucket.values[source][record.metric] += Math.max(0, Number(record.fact || 0));
   });
 
+  applyDirectMonthlyRowsToSourceBuckets(buckets, periodMode, sources, performanceRows);
+
   return buckets;
+}
+
+function applyDirectMonthlyRowsToSourceBuckets(
+  buckets: SourceChartBucket[],
+  periodMode: SourcePeriodMode,
+  sources: string[],
+  performanceRows: BrandPerformanceWeekly[],
+) {
+  if (periodMode !== "month" && periodMode !== "monthToMonth") return;
+  const directSource = findSourceLabel("Директ", sources);
+  if (!directSource) return;
+
+  buckets.forEach((bucket) => {
+    bucket.values[directSource] = { Лиды: 0, Квалы: 0, Продажи: 0 };
+  });
+
+  performanceRows
+    .filter((row) => sourceNameEquals(row.source, directSource))
+    .forEach((row) => {
+      const bucket = buckets.find((item) => item.key === row.monthKey);
+      if (!bucket || !bucket.values[directSource]) return;
+      bucket.values[directSource]["Лиды"] += Math.max(0, Number(row.leads || 0));
+      bucket.values[directSource]["Квалы"] += Math.max(0, Number(row.qualified || 0));
+      bucket.values[directSource]["Продажи"] += Math.max(0, Number(row.sales || 0));
+    });
 }
 
 function buildMonthSourceBuckets(periodMode: SourcePeriodMode, config: MonthConfig, sources: string[]): SourceChartBucket[] {
@@ -8046,37 +8160,43 @@ function getSourceMetricTotals(records: DailyRecord[], source: string): Record<M
   }, {} as Record<Metric, number>);
 }
 
+function getSourceMetricTotalsFromPerformance(rows: BrandPerformanceWeekly[]): Record<Metric, number> {
+  return {
+    Лиды: Math.round(rows.reduce((sum, row) => sum + Math.max(0, Number(row.leads || 0)), 0)),
+    Квалы: Math.round(rows.reduce((sum, row) => sum + Math.max(0, Number(row.qualified || 0)), 0)),
+    Продажи: Math.round(rows.reduce((sum, row) => sum + Math.max(0, Number(row.sales || 0)), 0)),
+  };
+}
+
+function hasAnySourceMetric(totals: Record<Metric, number>): boolean {
+  return metrics.some((metric) => totals[metric] > 0);
+}
+
 function getSourceMoneyTotalsFromDaily(
   records: DailyRecord[],
   sources: string[],
   budgetRows: BrandBudgetMonthly[] = [],
   performanceRows: BrandPerformanceWeekly[] = [],
-  sourceRevenueRows: SourceRevenueDaily[] = [],
 ): SourceMoneyTotals[] {
   const periodMonthCount = countSourcePeriodMonths(records, budgetRows, performanceRows);
   const rawTotals = sources.map((source) => {
     const sourceRecords = records.filter((record) => isSourceValueRecord(record) && sourceNameEquals(record.channel, source));
-    const totals = getSourceMetricTotals(records, source);
     const moneyRecords = sourceRecords.filter((record) => record.metric === "Продажи");
     const commentRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
-    const commentActualRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["факт. выручка", "факт выручка", "оплачено", "уже оплаченная часть"]), 0);
     const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
-    const matchedSourceRevenueRows = sourceRevenueRows.filter((row) => sourceNameEquals(row.source, source));
-    const linkedRevenue = matchedSourceRevenueRows.reduce((sum, row) => sum + row.revenue, 0);
-    const linkedActualRevenue = matchedSourceRevenueRows.reduce((sum, row) => sum + row.actualRevenue, 0);
     const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
+    const performanceTotals = getSourceMetricTotalsFromPerformance(performanceSourceRows);
+    const totals = sourceNameEquals(source, "Директ") && hasAnySourceMetric(performanceTotals)
+      ? performanceTotals
+      : getSourceMetricTotals(records, source);
     const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);
     const performanceActualRevenue = performanceSourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
     const performanceBudget = performanceSourceRows.reduce((sum, row) => sum + row.budget, 0);
     const drrBudget = budgetRows
       .filter((row) => sourceNameEquals(row.source, source))
       .reduce((sum, row) => sum + row.budget, 0);
-    const revenue = commentRevenue > 0 ? commentRevenue : linkedRevenue > 0 ? linkedRevenue : performanceRevenue;
-    const actualRevenue = commentActualRevenue > 0
-      ? commentActualRevenue
-      : linkedActualRevenue > 0
-      ? linkedActualRevenue
-      : performanceActualRevenue > 0
+    const revenue = commentRevenue > 0 ? commentRevenue : performanceRevenue;
+    const actualRevenue = performanceActualRevenue > 0
       ? performanceActualRevenue
       : revenue;
     const sourceHasActivity = Object.values(totals).some((value) => value > 0) || revenue > 0 || actualRevenue > 0 || sourceRecords.length > 0;

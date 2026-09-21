@@ -757,6 +757,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .funnel-panel,
 .conversion-panel,
 .attention-panel,
+.month-finance-panel,
 .month-control-panel,
 .daily-editor-panel {
   background: var(--surface);
@@ -885,6 +886,68 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   height: 100%;
   background: linear-gradient(90deg, var(--blue), var(--soft-blue));
   border-radius: 999px;
+}
+
+.month-finance-panel {
+  padding: 15px;
+}
+.month-finance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.month-finance-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(28, 70, 245, 0.16);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--glass-highlight);
+}
+.month-finance-grid article.debt {
+  border-color: rgba(251, 98, 88, 0.26);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(255, 233, 230, 0.38));
+}
+.month-finance-grid span,
+.month-finance-city-grid b {
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+.month-finance-grid strong {
+  color: var(--navy);
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 850;
+}
+.month-finance-grid small,
+.month-finance-city-grid span,
+.month-finance-empty {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+.month-finance-city-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.month-finance-city-grid div {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(28, 70, 245, 0.12);
+  border-radius: 16px;
+  background: rgba(234, 241, 255, 0.42);
+}
+.month-finance-empty {
+  margin: 10px 0 0;
 }
 
 .month-end-forecast-panel {
@@ -5170,7 +5233,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .weekly-sync-grid,
   .plan-need-grid,
   .recommendation-grid,
+  .month-finance-grid,
   .daily-kpi-summary { grid-template-columns: 1fr; }
+  .month-finance-city-grid { grid-template-columns: 1fr; }
   .admin-total-strip,
   .admin-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .month-matrix-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -5223,6 +5288,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .kpi-strip,
   .funnel-flow,
   .conversion-grid,
+  .month-finance-grid,
+  .month-finance-city-grid,
   .month-end-forecast-grid,
   .calendar-grid,
   .source-kpi-strip,
@@ -5276,6 +5343,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .brand-compare-mirror-row,
   .brand-compare-detail-row { min-width: 720px; }
   .brand-compare-mirror-head { padding-left: 180px; }
+  .month-finance-city-grid div { grid-template-columns: 1fr; }
   .brand-source-row { grid-template-columns: 1fr; }
   .brand-compare-title { display: grid; }
   .brand-compare-numbers-focused { grid-template-columns: 1fr; }
