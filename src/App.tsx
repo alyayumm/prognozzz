@@ -922,6 +922,7 @@ export default function App() {
                 selectMonth={selectMonth}
                 onCreateMonth={createMonthFromPanel}
                 records={currentMonthRecords}
+                sourceRecords={currentMonthAllRecords}
                 forecastCoefficients={forecastCoefficients}
                 receivables={brandData.receivables}
                 performanceRows={brandData.performance.length ? brandData.performance : legacyBrandRecordsToPerformance(brandData.records)}
@@ -1278,6 +1279,7 @@ function MonthDashboard({
   selectMonth,
   onCreateMonth,
   records,
+  sourceRecords,
   forecastCoefficients,
   receivables,
   performanceRows,
@@ -1298,6 +1300,7 @@ function MonthDashboard({
   selectMonth: (monthKey: string) => void;
   onCreateMonth: (draft: MonthDraft) => void;
   records: DailyRecord[];
+  sourceRecords: DailyRecord[];
   forecastCoefficients: ForecastCoefficients;
   receivables: RevenueReceivableMonthly[];
   performanceRows: BrandPerformanceWeekly[];
@@ -1314,7 +1317,7 @@ function MonthDashboard({
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
   );
   const insights = buildAttentionItems(totals, events);
-  const finance = buildMonthFinanceSummary(receivables, performanceRows, config.monthKey, selectedScope);
+  const finance = buildMonthFinanceSummary(receivables, sourceRecords, performanceRows, config.monthKey, selectedScope);
 
   return (
     <div className="page-stack">
@@ -1428,6 +1431,7 @@ function MonthFinancePanel({
 
 function buildMonthFinanceSummary(
   rows: RevenueReceivableMonthly[],
+  sourceRecords: DailyRecord[],
   performanceRows: BrandPerformanceWeekly[],
   monthKey: string,
   selectedScope: ReportScope,
@@ -1438,30 +1442,46 @@ function buildMonthFinanceSummary(
     return row.city === selectedScope;
   });
 
-  const performanceScopeRows = performanceRows.filter((row) => {
-    if (row.monthKey !== monthKey) return false;
-    if (selectedScope === "Все") return row.city === "МСК" || row.city === "СПБ";
-    return row.city === selectedScope;
-  });
-
   const citySummaries = (["МСК", "СПБ"] as BrandCity[]).map((city) => {
     const cityRows = scopedRows.filter((row) => row.city === city);
-    const cityPerformanceRows = performanceScopeRows.filter((row) => row.city === city);
     return {
       city,
-      revenue: roundUiMoney(cityPerformanceRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+      revenue: buildMonthPotentialRevenue(sourceRecords, performanceRows, monthKey, city),
       actualRevenue: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
       debtAmount: roundUiMoney(cityRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
     };
   });
 
   return {
-    revenue: roundUiMoney(performanceScopeRows.reduce((sum, row) => sum + safeMoney(row.revenue), 0)),
+    revenue: buildMonthPotentialRevenue(sourceRecords, performanceRows, monthKey, selectedScope),
     actualRevenue: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.actualRevenue), 0)),
     debtAmount: roundUiMoney(scopedRows.reduce((sum, row) => sum + safeMoney(row.debtAmount), 0)),
     debtCount: scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row.debtCount || 0)), 0),
     cities: citySummaries,
   };
+}
+
+function buildMonthPotentialRevenue(
+  sourceRecords: DailyRecord[],
+  performanceRows: BrandPerformanceWeekly[],
+  monthKey: string,
+  selectedScope: ReportScope,
+): number {
+  const scopedSourceRecords = getSourceRecordsForCity(
+    sourceRecords.filter((record) => record.date.startsWith(monthKey)),
+    selectedScope,
+  ).filter(isSourceValueRecord);
+  const scopedPerformanceRows = performanceRows.filter((row) => {
+    if (row.monthKey !== monthKey) return false;
+    if (selectedScope === "Все") return row.city === "МСК" || row.city === "СПБ";
+    return row.city === selectedScope;
+  });
+  const sourceNames = new Set<string>([
+    ...getActiveLeadSources(scopedSourceRecords),
+    ...getActiveSourcesFromBrandPerformance(scopedPerformanceRows),
+  ]);
+  const sourceTotals = getSourceMoneyTotalsFromDaily(scopedSourceRecords, [...sourceNames], [], scopedPerformanceRows);
+  return roundUiMoney(sourceTotals.reduce((sum, row) => sum + safeMoney(row.revenue), 0));
 }
 
 function safeMoney(value: number | undefined): number {
