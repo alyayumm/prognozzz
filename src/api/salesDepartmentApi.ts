@@ -218,21 +218,19 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
 export async function loadSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): Promise<SalesDepartmentSnapshot> {
   const context = getSalesMonthContext(requestedMonthKey);
 
-  try {
-    return await loadSalesDepartmentGvizSnapshot(context);
-  } catch (error) {
-    const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-    if (serviceSnapshot) {
-      return {
-        ...serviceSnapshot,
-        warnings: [
-          ...serviceSnapshot.warnings,
-          "Свежая Google-таблица отдела продаж не загрузилась, показан Apps Script-снимок.",
-        ],
-      };
-    }
-    throw error;
-  }
+  const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
+  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot)) return serviceSnapshot;
+
+  const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot) || !serviceSnapshot) return gvizSnapshot;
+
+  return {
+    ...serviceSnapshot,
+    warnings: [
+      ...serviceSnapshot.warnings,
+      "Прямое чтение Google Sheets не вернуло данные, показан Apps Script-снимок.",
+    ],
+  };
 }
 
 async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
@@ -378,6 +376,14 @@ function getSalesMonthContext(requestedMonthKey: string): SalesMonthContext {
     monthYear,
     monthIndex,
   };
+}
+
+function isUsableSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boolean {
+  return snapshot.totals.totalTraffic > 0
+    || snapshot.totals.factQualified > 0
+    || snapshot.totals.factDeals > 0
+    || snapshot.daily.some((day) => day.totalTraffic > 0 || day.totalDeals > 0)
+    || snapshot.managers.some((manager) => manager.totalTraffic > 0 || manager.factQualified > 0 || manager.factDeals > 0);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

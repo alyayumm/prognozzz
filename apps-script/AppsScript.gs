@@ -655,22 +655,36 @@ function getSalesDepartmentDashboard_(payload) {
   const config = SALES_DEPARTMENT_CONFIG;
   const warnings = [];
 
-  const planByManager = salesStaticPlanByManager_();
-  const dynamicsByManager = salesReadStaticDynamicsByManager_();
-  const daily = [];
-  const psByManager = salesStaticPsByManager_();
+  const live = salesReadLiveDepartmentData_(config, warnings);
+  const planByManager = salesHasAnyObjectValues_(live.planByManager)
+    ? live.planByManager
+    : salesStaticPlanByManager_();
+  const dynamicsByManager = salesHasUsableDynamics_(live.dynamicsByManager)
+    ? live.dynamicsByManager
+    : salesReadStaticDynamicsByManager_();
+  const daily = live.daily || [];
+  const psByManager = salesHasAnyObjectValues_(live.psByManager)
+    ? live.psByManager
+    : salesStaticPsByManager_();
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
-  const latestActualDate = salesCurrentMonthDateKey_(config);
+  const latestActualDate = salesLatestActualDate_(daily) || salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
     1,
     latestActualDate
       ? salesCountWorkingDaysUntil_(config.monthYear, config.monthIndex, latestActualDate)
       : 1,
   );
-  const activeCalendarDays = workingDaysPassed;
+  const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || workingDaysPassed;
 
-  warnings.push('Данные отдела продаж загружены из быстрого снимка "Динамика" и "Выгрузка PS" от 08.09.2026, потому что исходная таблица долго отдает формульные диапазоны.');
-  warnings.push('Дневная динамика временно не читается сервером: лист отвечает слишком долго. Основные показатели взяты из "Динамика".');
+  if (!salesHasUsableDynamics_(live.dynamicsByManager)) {
+    warnings.push('Динамика отдела продаж не прочиталась из живого листа, показан резервный снимок.');
+  }
+  if (!daily.length) {
+    warnings.push('Дневная динамика не прочиталась из живого листа, дата факта посчитана календарно.');
+  }
+  if (!salesHasAnyObjectValues_(live.psByManager)) {
+    warnings.push('Выгрузка PS не прочиталась из живого листа, VIP/выручка показаны из резервного снимка.');
+  }
 
   const managers = config.managers.map((name) => {
     const plan = planByManager[name] || salesEmptyPlan_();
@@ -746,6 +760,61 @@ function getSalesDepartmentDashboard_(payload) {
       plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit#gid=0',
     },
   };
+}
+
+function salesReadLiveDepartmentData_(config, warnings) {
+  const result = {
+    planByManager: {},
+    dynamicsByManager: {},
+    daily: [],
+    psByManager: {},
+  };
+
+  try {
+    const planSpreadsheet = SpreadsheetApp.openById(config.planSpreadsheetId);
+    const planSheet = planSpreadsheet.getSheetByName(config.planSheet);
+    if (planSheet) {
+      result.planByManager = salesParsePlanSheet_(salesReadDisplayRange_(planSheet, 'A1:J20'));
+    }
+  } catch (error) {
+    warnings.push('Не удалось прочитать живой план менеджеров: ' + salesErrorMessage_(error));
+  }
+
+  try {
+    const dynamicsSpreadsheet = SpreadsheetApp.openById(config.dynamicsSpreadsheetId);
+    const dynamicsSheet = dynamicsSpreadsheet.getSheetByName(config.dynamicsSheet);
+    const dailySheet = dynamicsSpreadsheet.getSheetByName(config.dailySheet);
+    const psSheet = dynamicsSpreadsheet.getSheetByName(config.psSheet);
+
+    result.dynamicsByManager = salesReadDynamicsByManager_(dynamicsSheet, warnings);
+    if (dailySheet) {
+      result.daily = salesParseDailySheet_(salesReadDisplayRange_(dailySheet, 'A1:AF20'));
+    }
+    result.psByManager = salesParsePsSheet_(psSheet, config.monthKey);
+  } catch (error) {
+    warnings.push('Не удалось прочитать живую таблицу отдела продаж: ' + salesErrorMessage_(error));
+  }
+
+  return result;
+}
+
+function salesHasUsableDynamics_(byManager) {
+  if (!byManager) return false;
+  return Object.keys(byManager).some((name) => {
+    const row = byManager[name] || {};
+    return salesNumber_(row['Обращения всего']) > 0
+      || salesNumber_(row['Факт обращения']) > 0
+      || salesNumber_(row['Факт Договоры']) > 0;
+  });
+}
+
+function salesHasAnyObjectValues_(object) {
+  if (!object) return false;
+  return Object.keys(object).some((key) => Boolean(object[key]));
+}
+
+function salesErrorMessage_(error) {
+  return error && error.message ? error.message : String(error || 'unknown error');
 }
 
 function salesReadDisplayRange_(sheet, range) {
