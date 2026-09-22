@@ -1595,7 +1595,7 @@ function SalesDepartmentDashboard({
   useEffect(() => {
     let ignore = false;
     setLoadState("loading");
-    loadSalesDepartmentSnapshot()
+    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey)
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
@@ -1610,7 +1610,7 @@ function SalesDepartmentDashboard({
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [selectedMonthConfig.monthKey]);
 
   const managers = snapshot?.managers ?? [];
   const totals = snapshot?.totals;

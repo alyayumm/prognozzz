@@ -142,22 +142,28 @@ type ManagerPsMetrics = {
   revenue: number;
   abDeals: number;
 };
-
-const staticPsMetricsByManager: Record<string, ManagerPsMetrics> = {
-  "Руднев Денис": { vipDeals: 1, distantDeals: 0, paidDeals: 1, orderCount: 2, revenue: 118490, abDeals: 0 },
-  "Драбо Максим": { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 0, revenue: 0, abDeals: 0 },
-  "Борисова Алена": { vipDeals: 4, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 642980, abDeals: 2 },
-  "Шевелев Иван": { vipDeals: 2, distantDeals: 0, paidDeals: 3, orderCount: 4, revenue: 224500, abDeals: 0 },
-  "Садовников Алексей": { vipDeals: 2, distantDeals: 0, paidDeals: 2, orderCount: 11, revenue: 491490, abDeals: 4 },
-  "Сергеева Софья": { vipDeals: 0, distantDeals: 0, paidDeals: 0, orderCount: 3, revenue: 184000, abDeals: 0 },
-  "Смирнов Никита": { vipDeals: 1, distantDeals: 0, paidDeals: 0, orderCount: 2, revenue: 122500, abDeals: 0 },
-  "Антиповский Евгений": { vipDeals: 3, distantDeals: 0, paidDeals: 5, orderCount: 10, revenue: 455990, abDeals: 0 },
+type SalesMonthContext = {
+  monthKey: string;
+  monthLabel: string;
+  monthYear: number;
+  monthIndex: number;
 };
 
-const monthKey = "2026-09";
-const monthLabel = "Сентябрь 2026";
-const monthYear = 2026;
-const monthIndex = 8;
+const defaultSalesDepartmentMonthKey = "2026-09";
+const monthNames = [
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+] as const;
 
 const dynamicsRowLabels = [
   "Менеджеры",
@@ -209,17 +215,30 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
   { range: "Z2:Z38", names: ["Шевелев Иван"] },
 ];
 
-export async function loadSalesDepartmentSnapshot(): Promise<SalesDepartmentSnapshot> {
-  const serviceSnapshot = await loadSalesDepartmentServiceSnapshot();
-  if (serviceSnapshot) return applySalesDepartmentPsSnapshot(serviceSnapshot);
+export async function loadSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): Promise<SalesDepartmentSnapshot> {
+  const context = getSalesMonthContext(requestedMonthKey);
 
-  return applySalesDepartmentPsSnapshot(await loadSalesDepartmentGvizSnapshot());
+  try {
+    return await loadSalesDepartmentGvizSnapshot(context);
+  } catch (error) {
+    const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
+    if (serviceSnapshot) {
+      return {
+        ...serviceSnapshot,
+        warnings: [
+          ...serviceSnapshot.warnings,
+          "Свежая Google-таблица отдела продаж не загрузилась, показан Apps Script-снимок.",
+        ],
+      };
+    }
+    throw error;
+  }
 }
 
-async function loadSalesDepartmentServiceSnapshot(): Promise<SalesDepartmentSnapshot | null> {
+async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
   try {
     return await withTimeout(
-      callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey }),
+      callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey }),
       16000,
       "Sales department Apps Script timeout",
     );
@@ -228,7 +247,7 @@ async function loadSalesDepartmentServiceSnapshot(): Promise<SalesDepartmentSnap
   }
 }
 
-async function loadSalesDepartmentGvizSnapshot(): Promise<SalesDepartmentSnapshot> {
+async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot> {
   const warnings: string[] = [];
   const planResult = await settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:J20", 22000));
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
@@ -256,19 +275,19 @@ async function loadSalesDepartmentGvizSnapshot(): Promise<SalesDepartmentSnapsho
   });
 
   const [dailyResult, psResult] = await Promise.all([
-    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:Q12", 24000)),
-    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,S,W,Z,AA,AD,AK,AL,AM,AN,AP limit 1500", 28000)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", 45000)),
+    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,S,W,Z,AA,AD,AK,AL,AM,AN,AP limit 5000", 45000)),
   ]);
 
-  const daily = dailyResult.ok ? parseDailySheet(dailyResult.value) : [];
+  const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
   if (!dailyResult.ok) warnings.push("Дневная динамика не загрузилась, линейный прогноз посчитан по текущему факту.");
 
-  const psByManager = psResult.ok ? parsePsSheet(psResult.value) : new Map<string, ManagerPsMetrics>();
+  const psByManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey) : new Map<string, ManagerPsMetrics>();
   if (!psResult.ok) warnings.push("Выгрузка PS не успела загрузиться: VIP, дистант и средний чек показаны только там, где есть данные динамики.");
 
-  const workingDaysInMonth = countWorkingDaysInMonth(monthYear, monthIndex);
+  const workingDaysInMonth = countWorkingDaysInMonth(context.monthYear, context.monthIndex);
   const latestActualDate = getLatestActualDate(daily);
-  const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(monthYear, monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
+  const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
 
   const managers = dakoroManagers.map((name) => {
@@ -329,8 +348,8 @@ async function loadSalesDepartmentGvizSnapshot(): Promise<SalesDepartmentSnapsho
 
   return {
     rop: "Дакоро",
-    monthKey,
-    monthLabel,
+    monthKey: context.monthKey,
+    monthLabel: context.monthLabel,
     planLabel,
     latestActualDate,
     workingDaysPassed,
@@ -344,6 +363,20 @@ async function loadSalesDepartmentGvizSnapshot(): Promise<SalesDepartmentSnapsho
       dynamics: `https://docs.google.com/spreadsheets/d/${salesDepartmentSpreadsheetId}/edit#gid=2045376562`,
       plans: `https://docs.google.com/spreadsheets/d/${dakoroPlanSpreadsheetId}/edit#gid=0`,
     },
+  };
+}
+
+function getSalesMonthContext(requestedMonthKey: string): SalesMonthContext {
+  const match = String(requestedMonthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return getSalesMonthContext(defaultSalesDepartmentMonthKey);
+  const monthYear = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  if (!Number.isFinite(monthYear) || monthIndex < 0 || monthIndex > 11) return getSalesMonthContext(defaultSalesDepartmentMonthKey);
+  return {
+    monthKey: `${monthYear}-${String(monthIndex + 1).padStart(2, "0")}`,
+    monthLabel: `${monthNames[monthIndex]} ${monthYear}`,
+    monthYear,
+    monthIndex,
   };
 }
 
@@ -425,40 +458,6 @@ function loadGviz(
   });
 }
 
-function applySalesDepartmentPsSnapshot(snapshot: SalesDepartmentSnapshot): SalesDepartmentSnapshot {
-  if (snapshot.monthKey !== monthKey) return snapshot;
-
-  const managers = snapshot.managers.map((manager) => {
-    const fallback = staticPsMetricsByManager[manager.name];
-    if (!fallback) return manager;
-
-    const orderCount = manager.orderCount ?? fallback.orderCount;
-    const revenue = manager.revenue ?? fallback.revenue;
-
-    return {
-      ...manager,
-      vipDeals: manager.vipDeals ?? fallback.vipDeals,
-      distantDeals: manager.distantDeals ?? fallback.distantDeals,
-      paidDeals: manager.paidDeals ?? fallback.paidDeals,
-      orderCount,
-      revenue,
-      abDeals: Math.max(manager.abDeals, fallback.abDeals),
-      avgCheck: revenue !== null && orderCount && orderCount > 0 ? revenue / orderCount : manager.avgCheck,
-    };
-  });
-
-  const warnings = snapshot.warnings
-    .filter((warning) => !warning.includes("Выгрузка PS") && !warning.includes("VIP, дистант"))
-    .concat("VIP, дистант, выручка и средний чек добавлены из PS-снимка от 08.09.2026.");
-
-  return {
-    ...snapshot,
-    managers,
-    totals: buildTotals(managers),
-    warnings,
-  };
-}
-
 function parsePlanSheet(table: GvizTable): Map<string, ManagerPlan> {
   const rows = rowsToMatrix(table);
   const managerRow = rows.find((row) => normalizeLabel(row[0]) === normalizeLabel("Менеджеры")) ?? [];
@@ -494,7 +493,7 @@ function mergeDynamicsRange(target: Map<string, Map<string, string>>, table: Gvi
   });
 }
 
-function parseDailySheet(table: GvizTable): SalesDayPoint[] {
+function parseDailySheet(table: GvizTable, context: SalesMonthContext): SalesDayPoint[] {
   const rows = rowsToMatrix(table);
   const dateRow = findMatrixRow(rows, "Дата");
   const weekdayRow = findMatrixRow(rows, "День недели");
@@ -509,9 +508,9 @@ function parseDailySheet(table: GvizTable): SalesDayPoint[] {
 
   return dateRow.slice(1).map((label, offset) => {
     const column = offset + 1;
-    const normalizedDate = parseDayLabel(label);
+    const normalizedDate = parseDayLabel(label, context);
     return {
-      key: normalizedDate || `${monthKey}-${String(column).padStart(2, "0")}`,
+      key: normalizedDate || `${context.monthKey}-${String(column).padStart(2, "0")}`,
       label: label || String(column).padStart(2, "0"),
       weekday: weekdayRow[column] || "",
       totalTraffic: toNumber(trafficTotalRow[column]) || toNumber(trafficMskRow[column]) + toNumber(trafficSpbRow[column]),
@@ -524,7 +523,7 @@ function parseDailySheet(table: GvizTable): SalesDayPoint[] {
   }).filter((day) => day.label);
 }
 
-function parsePsSheet(table: GvizTable): Map<string, ManagerPsMetrics> {
+function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, ManagerPsMetrics> {
   const result = new Map<string, ManagerPsMetrics>();
 
   table.rows.forEach((row) => {
@@ -539,7 +538,7 @@ function parsePsSheet(table: GvizTable): Map<string, ManagerPsMetrics> {
     const contract = readCell(row, 10);
     const managerName = dakoroManagers.find((name) => managerMatches(manager, name));
 
-    if (!managerName || !isDateInMonth(createdAt, monthKey) || !hasContract(contract)) return;
+    if (!managerName || !isDateInMonth(createdAt, expectedMonthKey) || !hasContract(contract)) return;
 
     const item = result.get(managerName) ?? {
       vipDeals: 0,
@@ -672,10 +671,10 @@ function emptyPlan(): ManagerPlan {
   };
 }
 
-function parseDayLabel(label: string): string | null {
+function parseDayLabel(label: string, context: SalesMonthContext): string | null {
   const match = label.match(/^(\d{1,2})\.(\d{1,2})/);
   if (!match) return null;
-  return `${monthYear}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+  return `${context.monthYear}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
 }
 
 function getLatestActualDate(days: SalesDayPoint[]): string | null {
