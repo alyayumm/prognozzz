@@ -1,4 +1,5 @@
 import { callReportApi } from "./reportApi";
+import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedSnapshot";
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
@@ -219,7 +220,9 @@ export async function loadSalesDepartmentSnapshot(requestedMonthKey = defaultSal
   const context = getSalesMonthContext(requestedMonthKey);
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot)) return serviceSnapshot;
+  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
+
+  if (context.monthKey === "2026-09") return buildEmbeddedSalesDepartmentSnapshot();
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
   if (isUsableSalesDepartmentSnapshot(gvizSnapshot) || !serviceSnapshot) return gvizSnapshot;
@@ -384,6 +387,12 @@ function isUsableSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boo
     || snapshot.totals.factDeals > 0
     || snapshot.daily.some((day) => day.totalTraffic > 0 || day.totalDeals > 0)
     || snapshot.managers.some((manager) => manager.totalTraffic > 0 || manager.factQualified > 0 || manager.factDeals > 0);
+}
+
+function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, context: SalesMonthContext): boolean {
+  return snapshot.monthKey !== context.monthKey
+    || snapshot.monthLabel !== context.monthLabel
+    || snapshot.warnings.some((warning) => warning.includes("08.09.2026") || warning.includes("быстрого снимка"));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
