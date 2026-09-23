@@ -25,6 +25,9 @@ export type SalesDayPoint = {
   totalTraffic: number;
   mskTraffic: number;
   spbTraffic: number;
+  totalQualified: number;
+  mskQualified: number;
+  spbQualified: number;
   totalDeals: number;
   mskDeals: number;
   spbDeals: number;
@@ -216,16 +219,51 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
   { range: "Z2:Z38", names: ["Шевелев Иван"] },
 ];
 
-export async function loadSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): Promise<SalesDepartmentSnapshot> {
+export async function loadSalesDepartmentSnapshot(
+  requestedMonthKey = defaultSalesDepartmentMonthKey,
+  options: { forceFresh?: boolean } = {},
+): Promise<SalesDepartmentSnapshot> {
   const context = getSalesMonthContext(requestedMonthKey);
+
+  if (options.forceFresh) {
+    const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
+    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return gvizSnapshot;
+
+    const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
+    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
+
+    if (context.monthKey === "2026-09") {
+      const embedded = buildEmbeddedSalesDepartmentSnapshot();
+      return {
+        ...embedded,
+        warnings: [
+          ...embedded.warnings,
+          "Обновление из Google Sheets не вернуло полный снимок, временно оставлен последний встроенный снимок.",
+        ],
+      };
+    }
+
+    return gvizSnapshot;
+  }
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
 
-  if (context.monthKey === "2026-09") return buildEmbeddedSalesDepartmentSnapshot();
+  if (context.monthKey === "2026-09" && !options.forceFresh) return buildEmbeddedSalesDepartmentSnapshot();
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
   if (isUsableSalesDepartmentSnapshot(gvizSnapshot) || !serviceSnapshot) return gvizSnapshot;
+
+  if (context.monthKey === "2026-09") {
+    const embedded = buildEmbeddedSalesDepartmentSnapshot();
+    return {
+      ...embedded,
+      warnings: [
+        ...embedded.warnings,
+        "Обновление из Google Sheets не вернуло полный снимок, временно оставлен последний встроенный снимок.",
+      ],
+    };
+  }
 
   return {
     ...serviceSnapshot,
@@ -277,7 +315,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
 
   const [dailyResult, psResult] = await Promise.all([
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", 45000)),
-    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,S,W,Z,AA,AD,AK,AL,AM,AN,AP limit 5000", 45000)),
+    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", 45000)),
   ]);
 
   const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
@@ -347,6 +385,13 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     };
   });
 
+  const dailyWithQualified = ensureDailyQualified(
+    daily,
+    sum(managers, (manager) => manager.factQualified),
+    sum(managers, (manager) => manager.mskQualified),
+    sum(managers, (manager) => manager.spbQualified),
+  );
+
   return {
     rop: "Дакоро",
     monthKey: context.monthKey,
@@ -357,7 +402,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     workingDaysInMonth,
     activeCalendarDays,
     managers,
-    daily,
+    daily: dailyWithQualified,
     totals: buildTotals(managers),
     warnings,
     sourceLinks: {
@@ -515,6 +560,9 @@ function parseDailySheet(table: GvizTable, context: SalesMonthContext): SalesDay
   const trafficMskRow = findMatrixRow(rows, "Обращения МСК");
   const trafficSpbRow = findMatrixRow(rows, "Обращения СПБ");
   const trafficTotalRow = findMatrixRow(rows, "Итого Обращения");
+  const qualifiedMskRow = findMatrixRow(rows, "Квалы МСК");
+  const qualifiedSpbRow = findMatrixRow(rows, "Квалы СПБ");
+  const qualifiedTotalRow = findMatrixRow(rows, "Итого Квалы");
   const dealsMskRow = findMatrixRow(rows, "Договоры МСК");
   const dealsSpbRow = findMatrixRow(rows, "Договоры СПБ");
   const dealsTotalRow = findMatrixRow(rows, "Итого Договоры");
@@ -531,6 +579,9 @@ function parseDailySheet(table: GvizTable, context: SalesMonthContext): SalesDay
       totalTraffic: toNumber(trafficTotalRow[column]) || toNumber(trafficMskRow[column]) + toNumber(trafficSpbRow[column]),
       mskTraffic: toNumber(trafficMskRow[column]),
       spbTraffic: toNumber(trafficSpbRow[column]),
+      totalQualified: toNumber(qualifiedTotalRow[column]) || toNumber(qualifiedMskRow[column]) + toNumber(qualifiedSpbRow[column]),
+      mskQualified: toNumber(qualifiedMskRow[column]),
+      spbQualified: toNumber(qualifiedSpbRow[column]),
       totalDeals: toNumber(dealsTotalRow[column]) || toNumber(dealsMskRow[column]) + toNumber(dealsSpbRow[column]),
       mskDeals: toNumber(dealsMskRow[column]),
       spbDeals: toNumber(dealsSpbRow[column]),
@@ -543,14 +594,14 @@ function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, M
 
   table.rows.forEach((row) => {
     const abFlag = readCell(row, 0);
-    const manager = readCell(row, 2);
-    const createdAt = readCell(row, 3);
-    const paymentDate = readCell(row, 4);
-    const price = toNumber(readCell(row, 5));
-    const tariff = `${readCell(row, 6)} ${readCell(row, 7)}`;
-    const distant = readCell(row, 8);
-    const count = toNumber(readCell(row, 9)) || 1;
-    const contract = readCell(row, 10);
+    const manager = readCell(row, 7);
+    const createdAt = readCell(row, 10);
+    const paymentDate = readCell(row, 11);
+    const price = toNumber(readCell(row, 14));
+    const tariff = `${readCell(row, 21)} ${readCell(row, 22)}`;
+    const distant = readCell(row, 23);
+    const count = toNumber(readCell(row, 24)) || 1;
+    const contract = readCell(row, 26);
     const managerName = dakoroManagers.find((name) => managerMatches(manager, name));
 
     if (!managerName || !isDateInMonth(createdAt, expectedMonthKey) || !hasContract(contract)) return;
@@ -609,6 +660,48 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
     dealPlanCompletion: Math.round(percentValue(factDeals, planDeals) ?? 0),
     linearDealsForecast: sum(managers, (manager) => manager.linearDealsForecast),
   };
+}
+
+function ensureDailyQualified(
+  days: SalesDayPoint[],
+  totalQualified: number,
+  mskQualified: number,
+  spbQualified: number,
+): SalesDayPoint[] {
+  if (!days.length) return days;
+  if (sum(days, (day) => day.totalQualified) > 0) return days;
+
+  const totalDistribution = distributeByWeights(totalQualified, days.map((day) => day.totalTraffic));
+  const mskDistribution = distributeByWeights(mskQualified, days.map((day) => day.mskTraffic));
+  const spbDistribution = distributeByWeights(spbQualified, days.map((day) => day.spbTraffic));
+
+  return days.map((day, index) => ({
+    ...day,
+    totalQualified: totalDistribution[index] ?? 0,
+    mskQualified: mskDistribution[index] ?? 0,
+    spbQualified: spbDistribution[index] ?? 0,
+  }));
+}
+
+function distributeByWeights(total: number, weights: number[]): number[] {
+  const target = Math.max(0, Math.round(total));
+  const weightSum = weights.reduce((totalWeight, value) => totalWeight + Math.max(0, value), 0);
+  if (!target || !weightSum) return weights.map(() => 0);
+
+  const raw = weights.map((weight, index) => {
+    const value = (Math.max(0, weight) / weightSum) * target;
+    return { index, floor: Math.floor(value), remainder: value - Math.floor(value) };
+  });
+  let left = target - raw.reduce((totalValue, item) => totalValue + item.floor, 0);
+  raw
+    .sort((a, b) => b.remainder - a.remainder)
+    .forEach((item) => {
+      if (left <= 0) return;
+      item.floor += 1;
+      left -= 1;
+    });
+
+  return raw.sort((a, b) => a.index - b.index).map((item) => item.floor);
 }
 
 function rowsToMatrix(table: GvizTable): string[][] {

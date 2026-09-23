@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Plus,
+  RefreshCw,
   Save,
   Settings,
   Target,
@@ -1591,11 +1592,12 @@ function SalesDepartmentDashboard({
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let ignore = false;
     setLoadState("loading");
-    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey)
+    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: refreshTick > 0 })
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
@@ -1610,15 +1612,15 @@ function SalesDepartmentDashboard({
     return () => {
       ignore = true;
     };
-  }, [selectedMonthConfig.monthKey]);
+  }, [selectedMonthConfig.monthKey, refreshTick]);
 
   const managers = snapshot?.managers ?? [];
   const totals = snapshot?.totals;
   const selectedManager = selectedManagerName === "team"
     ? null
     : managers.find((manager) => manager.name === selectedManagerName) ?? null;
-  const topManagers = [...managers].sort((a, b) => b.totalTraffic - a.totalTraffic);
-  const maxManagerTraffic = Math.max(1, ...managers.map((manager) => manager.totalTraffic));
+  const topManagers = [...managers].sort((a, b) => b.factQualified - a.factQualified);
+  const maxManagerQualified = Math.max(1, ...managers.map((manager) => manager.factQualified));
   const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
   const summaryStatus: SummaryStatus = loadState === "ready"
     ? { label: "live", tone: snapshot?.warnings.length ? "warning" : "good" }
@@ -1640,6 +1642,18 @@ function SalesDepartmentDashboard({
           snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем таблицу",
         ]}
       />
+      <div className="sales-refresh-row">
+        <button
+          className="secondary-button sales-refresh-button"
+          type="button"
+          disabled={loadState === "loading"}
+          onClick={() => setRefreshTick((value) => value + 1)}
+        >
+          <RefreshCw size={17} />
+          {loadState === "loading" ? "Обновляю" : "Обновить"}
+        </button>
+        <span>Повторно подтягивает планы, динамику по дням и PS из Google Sheets.</span>
+      </div>
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
         {salesDepartmentRops.map((rop) => (
@@ -1668,11 +1682,19 @@ function SalesDepartmentDashboard({
           <section className="sales-kpi-grid" aria-label="Ключевые показатели отдела продаж">
             <SalesKpiCard
               icon={<TrendingUp />}
-              label="Взяли лидов"
+              label="Лиды"
               value={formatNumber(totals.totalTraffic)}
-              helper={`Квалы: ${formatNumber(totals.factQualified)} · ${formatNullablePercent(totals.conversionToQualified)} из лидов`}
+              helper="Всего входящего трафика отдела"
               plan={`План ${formatNumber(totals.planTraffic)}`}
               progress={percent(totals.totalTraffic, totals.planTraffic)}
+            />
+            <SalesKpiCard
+              icon={<CheckCircle2 />}
+              label="Квалы"
+              value={formatNumber(totals.factQualified)}
+              helper={`${formatNullablePercent(totals.conversionToQualified)} из лидов`}
+              plan={`План ${formatNumber(totals.planQualified)}`}
+              progress={percent(totals.factQualified, totals.planQualified)}
             />
             <SalesKpiCard
               icon={<Target />}
@@ -1704,8 +1726,8 @@ function SalesDepartmentDashboard({
           <section className="sales-layout">
             <article className="sales-panel sales-manager-panel">
               <PanelHead
-                title="Кто сколько трафика берет"
-                description="Доля менеджеров по всем обращениям и быстрый переход в персональную вкладку."
+                title="Кто сколько квалов берет"
+                description="Доля менеджеров по квалам и быстрый переход в персональную вкладку."
               />
               <div className="sales-manager-list">
                 <button
@@ -1714,7 +1736,7 @@ function SalesDepartmentDashboard({
                   onClick={() => setSelectedManagerName("team")}
                 >
                   <span>Команда Дакоро</span>
-                  <strong>{formatNumber(totals.totalTraffic)}</strong>
+                  <strong>{formatNumber(totals.factQualified)}</strong>
                   <i style={{ width: "100%" }} />
                   <small>{formatNumber(totals.factDeals)} договоров · {formatNullablePercent(totals.conversionToDeals)} квал → договор</small>
                 </button>
@@ -1726,9 +1748,9 @@ function SalesDepartmentDashboard({
                     onClick={() => setSelectedManagerName(manager.name)}
                   >
                     <span>{shortManagerName(manager.name)}</span>
-                    <strong>{formatNumber(manager.totalTraffic)}</strong>
-                    <i style={{ width: `${Math.max(4, (manager.totalTraffic / maxManagerTraffic) * 100)}%` }} />
-                    <small>{formatNumber(manager.factDeals)} договоров · {formatNullablePercent(percentValueForUi(manager.totalTraffic, totals.totalTraffic))} трафика</small>
+                    <strong>{formatNumber(manager.factQualified)}</strong>
+                    <i style={{ width: `${Math.max(4, (manager.factQualified / maxManagerQualified) * 100)}%` }} />
+                    <small>{formatNumber(manager.factDeals)} договоров · {formatNullablePercent(percentValueForUi(manager.factQualified, totals.factQualified))} квалов</small>
                   </button>
                 ))}
               </div>
@@ -1741,7 +1763,7 @@ function SalesDepartmentDashboard({
             <article className="sales-panel">
               <PanelHead
                 title="Динамика по дням"
-                description="Обращения и договоры команды по датам текущего месяца."
+                description="Лиды, квалы и продажи команды по датам текущего месяца."
               />
               <SalesDailyChart days={snapshot.daily} />
             </article>
@@ -1869,6 +1891,7 @@ function SalesManagerDetail({
   const title = manager ? shortManagerName(manager.name) : "Команда Дакоро";
   const traffic = manager?.totalTraffic ?? totals.totalTraffic;
   const qualified = manager?.factQualified ?? totals.factQualified;
+  const planQualified = manager?.planQualified ?? totals.planQualified;
   const deals = manager?.factDeals ?? totals.factDeals;
   const planDeals = manager?.planDeals ?? totals.planDeals;
   const forecastDeals = manager?.forecastDeals ?? totals.forecastDeals;
@@ -1877,6 +1900,10 @@ function SalesManagerDetail({
   const distantDeals = manager?.distantDeals ?? totals.distantDeals;
   const avgCheck = manager?.avgCheck ?? totals.avgCheck;
   const abDeals = manager?.abDeals ?? totals.abDeals;
+  const mskQualified = managersSum(snapshot.managers, (item) => item.mskQualified);
+  const spbQualified = managersSum(snapshot.managers, (item) => item.spbQualified);
+  const mskDeals = managersSum(snapshot.managers, (item) => item.mskDeals);
+  const spbDeals = managersSum(snapshot.managers, (item) => item.spbDeals);
 
   return (
     <article className="sales-panel sales-detail-panel">
@@ -1890,12 +1917,32 @@ function SalesManagerDetail({
 
       <div className="sales-mini-grid">
         <SalesMiniMetric label="Лиды" value={formatNumber(traffic)} caption={`план ${formatNumber(manager?.planTraffic ?? totals.planTraffic)}`} />
-        <SalesMiniMetric label="Квалы" value={formatNumber(qualified)} caption={formatNullablePercent(percentValueForUi(qualified, traffic))} />
+        <SalesMiniMetric label="Квалы" value={formatNumber(qualified)} caption={`план ${formatNumber(planQualified)}`} />
         <SalesMiniMetric label="Договоры" value={formatNumber(deals)} caption={`план ${formatNumber(planDeals)}`} />
         <SalesMiniMetric label="VIP" value={formatSalesNumber(vipDeals)} caption={`A+B ${formatNumber(abDeals)}`} />
         <SalesMiniMetric label="Дистант" value={formatSalesNumber(distantDeals)} caption="категория PS" />
         <SalesMiniMetric label="Средний чек" value={formatNullableCurrency(avgCheck)} caption="по PS без персональных данных" />
       </div>
+
+      {!manager && (
+        <div className="sales-conversion-strip">
+          <div>
+            <span>Общая конверсия</span>
+            <strong>План {formatNullablePercent(percentValueForUi(totals.planDeals, totals.planQualified))}</strong>
+            <small>Факт {formatNullablePercent(totals.conversionToDeals)}</small>
+          </div>
+          <div>
+            <span>Москва</span>
+            <strong>{formatNullablePercent(percentValueForUi(mskDeals, mskQualified))}</strong>
+            <small>{formatNumber(mskDeals)} договоров из {formatNumber(mskQualified)} квалов</small>
+          </div>
+          <div>
+            <span>Санкт-Петербург</span>
+            <strong>{formatNullablePercent(percentValueForUi(spbDeals, spbQualified))}</strong>
+            <small>{formatNumber(spbDeals)} договоров из {formatNumber(spbQualified)} квалов</small>
+          </div>
+        </div>
+      )}
 
       <div className="sales-forecast-grid">
         <SalesForecastBar label="Динамический" value={forecastDeals} plan={planDeals} />
@@ -1943,6 +1990,10 @@ function SalesMiniMetric({
   );
 }
 
+function managersSum(managers: SalesManagerMetrics[], getValue: (manager: SalesManagerMetrics) => number) {
+  return managers.reduce((sumValue, manager) => sumValue + getValue(manager), 0);
+}
+
 function SalesForecastBar({
   label,
   value,
@@ -1968,7 +2019,7 @@ function SalesForecastBar({
 }
 
 function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
-  const maxValue = Math.max(1, ...days.map((day) => Math.max(day.totalTraffic, day.totalDeals)));
+  const maxValue = Math.max(1, ...days.map((day) => Math.max(day.totalTraffic, day.totalQualified || 0, day.totalDeals)));
   if (!days.length) {
     return (
       <div className="sales-chart-empty">
@@ -1979,12 +2030,20 @@ function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
   }
 
   return (
-    <div className="sales-daily-chart" aria-label="Динамика обращений и договоров по дням">
+    <div className="sales-daily-chart" aria-label="Динамика лидов, квалов и продаж по дням">
+      <div className="sales-daily-legend" aria-hidden="true">
+        <span><i className="traffic" />Лиды</span>
+        <span><i className="qualified" />Квалы</span>
+        <span><i className="deals" />Продажи</span>
+      </div>
       {days.map((day) => (
-        <div key={day.key} className={(day.totalTraffic > 0 || day.totalDeals > 0) ? "sales-day active" : "sales-day"}>
+        <div key={day.key} className={(day.totalTraffic > 0 || day.totalQualified > 0 || day.totalDeals > 0) ? "sales-day active" : "sales-day"}>
           <div>
             <i className="traffic" style={{ height: `${Math.max(4, (day.totalTraffic / maxValue) * 100)}%` }}>
               <b>{formatNumber(day.totalTraffic)}</b>
+            </i>
+            <i className="qualified" style={{ height: `${Math.max(4, ((day.totalQualified || 0) / maxValue) * 100)}%` }}>
+              <b>{formatNumber(day.totalQualified || 0)}</b>
             </i>
             <i className="deals" style={{ height: `${Math.max(4, (day.totalDeals / maxValue) * 100)}%` }}>
               <b>{formatNumber(day.totalDeals)}</b>

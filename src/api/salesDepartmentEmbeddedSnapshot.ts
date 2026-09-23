@@ -18,6 +18,17 @@ const planByManager: Record<string, Pick<SalesManagerMetrics, "planTraffic" | "p
   "Антиповский Евгений": { planTraffic: 121, planQualified: 56, planDeals: 18, planVip: 5, planDistant: 12 },
 };
 
+const psByManager: Record<string, Pick<SalesManagerMetrics, "vipDeals" | "distantDeals" | "paidDeals" | "orderCount" | "revenue" | "avgCheck">> = {
+  "Руднев Денис": ps(1, 0, 1, 2, 118490),
+  "Драбо Максим": ps(0, 0, 0, 0, 0),
+  "Борисова Алена": ps(4, 0, 2, 11, 642980),
+  "Шевелев Иван": ps(2, 0, 3, 4, 224500),
+  "Садовников Алексей": ps(2, 0, 2, 11, 491490),
+  "Сергеева Софья": ps(0, 0, 0, 3, 184000),
+  "Смирнов Никита": ps(1, 0, 0, 2, 122500),
+  "Антиповский Евгений": ps(3, 0, 5, 10, 455990),
+};
+
 const embeddedManagers: EmbeddedManager[] = [
   manager("Руднев Денис", "Руднев Денис Романович", 0, 8, 0, 0, 0, 0, 0, 2, 3, 60, 0, 3.2, 5, 38, null, null, null, 0, 0, 0, 0, 2, 0),
   manager("Драбо Максим", "Драбо Максим", 115, 56, 80, 30, 76, 9, 27, 17, 24, 31, 0, 35.49, 51, 38, 30.36, 14.78, 62.96, 71, 44, 37, 19, 11, 6),
@@ -43,6 +54,9 @@ export function buildEmbeddedSalesDepartmentSnapshot(): SalesDepartmentSnapshot 
     linearDealsForecast: linearForecast(item.factDeals, 15, 22),
     linearQualifiedForecast: linearForecast(item.factQualified, 15, 22),
   }));
+  const totalQualifiedByDay = distributeByWeights(sum(managers, (manager) => manager.factQualified), totalTrafficByDay);
+  const mskQualifiedByDay = distributeByWeights(sum(managers, (manager) => manager.mskQualified), mskTrafficByDay);
+  const spbQualifiedByDay = distributeByWeights(sum(managers, (manager) => manager.spbQualified), spbTrafficByDay);
   const daily = totalTrafficByDay.map<SalesDayPoint>((totalTraffic, index) => {
     const day = index + 1;
     return {
@@ -52,6 +66,9 @@ export function buildEmbeddedSalesDepartmentSnapshot(): SalesDepartmentSnapshot 
       totalTraffic,
       mskTraffic: mskTrafficByDay[index] ?? 0,
       spbTraffic: spbTrafficByDay[index] ?? 0,
+      totalQualified: totalQualifiedByDay[index] ?? 0,
+      mskQualified: mskQualifiedByDay[index] ?? 0,
+      spbQualified: spbQualifiedByDay[index] ?? 0,
       totalDeals: totalDealsByDay[index] ?? 0,
       mskDeals: mskDealsByDay[index] ?? 0,
       spbDeals: spbDealsByDay[index] ?? 0,
@@ -106,6 +123,7 @@ function manager(
   spbDeals: number,
 ): EmbeddedManager {
   const plan = planByManager[name];
+  const psMetrics = psByManager[name] ?? ps(null, null, null, null, null);
   return {
     name,
     displayName,
@@ -135,12 +153,7 @@ function manager(
     spbDeals,
     mskConversion: percentValue(mskDeals, mskQualified),
     spbConversion: percentValue(spbDeals, spbQualified),
-    vipDeals: null,
-    distantDeals: null,
-    paidDeals: null,
-    orderCount: null,
-    avgCheck: null,
-    revenue: null,
+    ...psMetrics,
   };
 }
 
@@ -149,6 +162,11 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
   const factQualified = sum(managers, (manager) => manager.factQualified);
   const factDeals = sum(managers, (manager) => manager.factDeals);
   const planDeals = sum(managers, (manager) => manager.planDeals);
+  const vipDeals = sumNullable(managers, (manager) => manager.vipDeals);
+  const distantDeals = sumNullable(managers, (manager) => manager.distantDeals);
+  const paidDeals = sumNullable(managers, (manager) => manager.paidDeals);
+  const orderCount = sumNullable(managers, (manager) => manager.orderCount);
+  const revenue = sumNullable(managers, (manager) => manager.revenue);
   return {
     planTraffic: sum(managers, (manager) => manager.planTraffic),
     planQualified: sum(managers, (manager) => manager.planQualified),
@@ -161,12 +179,12 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
     factDeals,
     forecastDeals: sum(managers, (manager) => manager.forecastDeals),
     abDeals: sum(managers, (manager) => manager.abDeals),
-    vipDeals: null,
-    distantDeals: null,
-    paidDeals: null,
-    orderCount: null,
-    revenue: null,
-    avgCheck: null,
+    vipDeals,
+    distantDeals,
+    paidDeals,
+    orderCount,
+    revenue,
+    avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
     conversionToQualified: percentValue(factQualified, totalTraffic),
     conversionToDeals: percentValue(factDeals, factQualified),
     dealPlanCompletion: Math.round(percentValue(factDeals, planDeals) ?? 0),
@@ -186,4 +204,53 @@ function percentValue(numerator: number, denominator: number): number | null {
 
 function sum<T>(items: T[], getValue: (item: T) => number): number {
   return items.reduce((total, item) => total + getValue(item), 0);
+}
+
+function sumNullable<T>(items: T[], getValue: (item: T) => number | null): number | null {
+  let hasValue = false;
+  const value = items.reduce((total, item) => {
+    const next = getValue(item);
+    if (next === null) return total;
+    hasValue = true;
+    return total + next;
+  }, 0);
+  return hasValue ? value : null;
+}
+
+function ps(
+  vipDeals: number | null,
+  distantDeals: number | null,
+  paidDeals: number | null,
+  orderCount: number | null,
+  revenue: number | null,
+) {
+  return {
+    vipDeals,
+    distantDeals,
+    paidDeals,
+    orderCount,
+    revenue,
+    avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
+  };
+}
+
+function distributeByWeights(total: number, weights: number[]): number[] {
+  const target = Math.max(0, Math.round(total));
+  const weightSum = weights.reduce((totalWeight, value) => totalWeight + Math.max(0, value), 0);
+  if (!target || !weightSum) return weights.map(() => 0);
+
+  const raw = weights.map((weight, index) => {
+    const value = (Math.max(0, weight) / weightSum) * target;
+    return { index, floor: Math.floor(value), remainder: value - Math.floor(value) };
+  });
+  let left = target - raw.reduce((totalValue, item) => totalValue + item.floor, 0);
+  raw
+    .sort((a, b) => b.remainder - a.remainder)
+    .forEach((item) => {
+      if (left <= 0) return;
+      item.floor += 1;
+      left -= 1;
+    });
+
+  return raw.sort((a, b) => a.index - b.index).map((item) => item.floor);
 }

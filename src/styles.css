@@ -1458,12 +1458,12 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 .sales-kpi-card {
   position: relative;
-  min-height: 176px;
+  min-height: 156px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -1471,7 +1471,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   display: grid;
   align-content: start;
   gap: 10px;
-  padding: 16px;
+  padding: 14px;
   box-shadow: var(--soft-shadow), var(--glass-highlight);
 }
 .sales-kpi-card > div {
@@ -1494,7 +1494,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .sales-kpi-card > strong {
   color: var(--navy);
   font-family: var(--font-display);
-  font-size: clamp(30px, 3vw, 42px);
+  font-size: clamp(27px, 2.4vw, 38px);
   line-height: 1;
   font-weight: 850;
 }
@@ -1525,6 +1525,26 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-kpi-card.red > i {
   background: linear-gradient(90deg, var(--negative), #ff9a7a);
+}
+.sales-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -6px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+.sales-refresh-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding-inline: 13px;
+}
+.sales-refresh-button:disabled {
+  opacity: 0.62;
+  cursor: wait;
 }
 .sales-layout {
   display: grid;
@@ -1638,7 +1658,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 8px;
 }
 .sales-mini-metric {
-  min-height: 92px;
+  min-height: 76px;
   border: 1px solid rgba(154, 180, 234, 0.38);
   border-radius: 16px;
   background: rgba(247, 249, 255, 0.7);
@@ -1655,7 +1675,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-mini-metric strong {
   color: var(--navy);
-  font-size: 20px;
+  font-size: 19px;
   line-height: 1;
   font-weight: 950;
 }
@@ -1665,13 +1685,43 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   line-height: 1.2;
   font-weight: 800;
 }
+.sales-conversion-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.sales-conversion-strip > div {
+  border: 1px solid rgba(154, 180, 234, 0.38);
+  border-radius: 16px;
+  background: rgba(247, 249, 255, 0.7);
+  padding: 11px;
+  display: grid;
+  gap: 4px;
+}
+.sales-conversion-strip span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+.sales-conversion-strip strong {
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 950;
+}
+.sales-conversion-strip small {
+  color: var(--muted-strong);
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 800;
+}
 .sales-forecast-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 .sales-forecast-bar {
-  min-height: 104px;
+  min-height: 92px;
   border: 1px solid rgba(154, 180, 234, 0.38);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.68);
@@ -1754,6 +1804,34 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 9px;
   align-items: end;
 }
+.sales-daily-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 900;
+}
+.sales-daily-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sales-daily-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+.sales-daily-legend .traffic {
+  background: var(--blue);
+}
+.sales-daily-legend .qualified {
+  background: #78d915;
+}
+.sales-daily-legend .deals {
+  background: var(--negative);
+}
 .sales-day {
   min-width: 0;
   display: grid;
@@ -1768,7 +1846,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   display: flex;
   justify-content: center;
   align-items: flex-end;
-  gap: 4px;
+  gap: 3px;
   padding: 8px 4px;
   border-radius: 14px;
   background: rgba(247, 249, 255, 0.72);
@@ -1776,13 +1854,16 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-day i {
   position: relative;
-  width: 15px;
+  width: 12px;
   min-height: 4px;
   border-radius: 999px 999px 4px 4px;
   display: block;
 }
 .sales-day i.traffic {
   background: linear-gradient(180deg, var(--blue), var(--soft-blue));
+}
+.sales-day i.qualified {
+  background: linear-gradient(180deg, #78d915, #c9ff5f);
 }
 .sales-day i.deals {
   background: linear-gradient(180deg, var(--negative), #ff9a7a);
@@ -1926,6 +2007,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   .sales-kpi-grid,
   .sales-mini-grid,
   .sales-forecast-grid,
+  .sales-conversion-strip,
   .sales-city-split,
   .sales-workdays {
     grid-template-columns: 1fr;
