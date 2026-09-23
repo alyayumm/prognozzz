@@ -246,13 +246,11 @@ export async function loadSalesDepartmentSnapshot(
     return gvizSnapshot;
   }
 
+  const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return gvizSnapshot;
+
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
-
-  if (context.monthKey === "2026-09" && !options.forceFresh) return buildEmbeddedSalesDepartmentSnapshot();
-
-  const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot) || !serviceSnapshot) return gvizSnapshot;
 
   if (context.monthKey === "2026-09") {
     const embedded = buildEmbeddedSalesDepartmentSnapshot();
@@ -265,13 +263,17 @@ export async function loadSalesDepartmentSnapshot(
     };
   }
 
-  return {
-    ...serviceSnapshot,
-    warnings: [
-      ...serviceSnapshot.warnings,
-      "Прямое чтение Google Sheets не вернуло данные, показан Apps Script-снимок.",
-    ],
-  };
+  if (serviceSnapshot) {
+    return {
+      ...serviceSnapshot,
+      warnings: [
+        ...serviceSnapshot.warnings,
+        "Прямое чтение Google Sheets не вернуло данные, показан Apps Script-снимок.",
+      ],
+    };
+  }
+
+  return gvizSnapshot;
 }
 
 async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
@@ -598,8 +600,9 @@ function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, M
     const createdAt = readCell(row, 10);
     const paymentDate = readCell(row, 11);
     const price = toNumber(readCell(row, 14));
-    const tariff = `${readCell(row, 21)} ${readCell(row, 22)}`;
-    const distant = readCell(row, 23);
+    const rowText = readRowText(row);
+    const tariff = `${readCell(row, 21)} ${readCell(row, 22)} ${rowText}`;
+    const distant = `${readCell(row, 23)} ${rowText}`;
     const count = toNumber(readCell(row, 24)) || 1;
     const contract = readCell(row, 26);
     const managerName = dakoroManagers.find((name) => managerMatches(manager, name));
@@ -618,7 +621,7 @@ function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, M
     item.revenue += price;
     if (isTruthy(abFlag)) item.abDeals += count;
     if (isVipTariff(tariff)) item.vipDeals += count;
-    if (isTruthy(distant)) item.distantDeals += count;
+    if (isDistantDeal(distant)) item.distantDeals += count;
     if (paymentDate && paymentDate !== "-" && paymentDate !== "—") item.paidDeals += count;
     result.set(managerName, item);
   });
@@ -718,6 +721,13 @@ function readCell(row: GvizRow | undefined, index: number): string {
   if (cell.f !== undefined && cell.f !== null) return String(cell.f).trim();
   if (cell.v === undefined || cell.v === null) return "";
   return String(cell.v).trim();
+}
+
+function readRowText(row: GvizRow | undefined): string {
+  return (row?.c ?? [])
+    .map((_, index) => readCell(row, index))
+    .filter(Boolean)
+    .join(" ");
 }
 
 function numberFromMap(map: Map<string, string>, label: string): number {
@@ -826,12 +836,17 @@ function hasContract(value: string): boolean {
 
 function isTruthy(value: string): boolean {
   const normalized = normalizeText(value);
-  return normalized === "true" || normalized === "истина" || normalized === "да" || normalized === "1";
+  return normalized === "true" || normalized === "истина" || normalized === "да" || normalized === "1" || normalized === "+";
 }
 
 function isVipTariff(value: string): boolean {
   const normalized = normalizeText(value);
   return normalized.includes("вип") || normalized.includes("vip") || normalized.includes("расшир");
+}
+
+function isDistantDeal(value: string): boolean {
+  const normalized = normalizeText(value);
+  return isTruthy(value) || normalized.includes("дист") || normalized.includes("онлайн") || normalized.includes("online");
 }
 
 function managerMatches(candidate: string, manager: string): boolean {

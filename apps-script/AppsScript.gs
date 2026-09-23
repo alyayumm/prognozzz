@@ -956,8 +956,9 @@ function salesParsePsSheet_(sheet, monthKey) {
     const createdAt = row[10];
     const paymentDate = row[11];
     const price = salesNumber_(row[14]);
-    const tariff = String(row[21] || '') + ' ' + String(row[22] || '');
-    const distant = row[23];
+    const rowText = row.filter(Boolean).join(' ');
+    const tariff = String(row[21] || '') + ' ' + String(row[22] || '') + ' ' + rowText;
+    const distant = String(row[23] || '') + ' ' + rowText;
     const count = salesNumber_(row[24]) || 1;
     const contract = row[26];
     const managerName = SALES_DEPARTMENT_CONFIG.managers.find((name) => salesManagerMatches_(manager, name));
@@ -976,7 +977,7 @@ function salesParsePsSheet_(sheet, monthKey) {
     item.revenue += price;
     if (salesIsTruthy_(abFlag)) item.abDeals += count;
     if (salesIsVipTariff_(tariff)) item.vipDeals += count;
-    if (salesIsTruthy_(distant)) item.distantDeals += count;
+    if (salesIsDistantDeal_(distant)) item.distantDeals += count;
     if (paymentDate && paymentDate !== '-' && paymentDate !== '—') item.paidDeals += count;
     result[managerName] = item;
   });
@@ -1137,12 +1138,17 @@ function salesHasContract_(value) {
 
 function salesIsTruthy_(value) {
   const normalized = salesNormalizeText_(value);
-  return normalized === 'true' || normalized === 'истина' || normalized === 'да' || normalized === '1';
+  return normalized === 'true' || normalized === 'истина' || normalized === 'да' || normalized === '1' || normalized === '+';
 }
 
 function salesIsVipTariff_(value) {
   const normalized = salesNormalizeText_(value);
   return normalized.indexOf('вип') >= 0 || normalized.indexOf('vip') >= 0 || normalized.indexOf('расшир') >= 0;
+}
+
+function salesIsDistantDeal_(value) {
+  const normalized = salesNormalizeText_(value);
+  return salesIsTruthy_(value) || normalized.indexOf('дист') >= 0 || normalized.indexOf('онлайн') >= 0 || normalized.indexOf('online') >= 0;
 }
 
 function salesManagerMatches_(candidate, manager) {
