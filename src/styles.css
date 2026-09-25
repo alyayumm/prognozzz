@@ -1654,7 +1654,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-mini-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 150px));
+  justify-content: start;
   gap: 8px;
 }
 .sales-mini-metric {
@@ -1717,7 +1718,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-forecast-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 260px));
+  justify-content: start;
   gap: 10px;
 }
 .sales-forecast-bar {
@@ -1761,7 +1763,8 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-city-split {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 240px));
+  justify-content: start;
   gap: 10px;
 }
 .sales-city-split div {

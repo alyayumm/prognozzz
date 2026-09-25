@@ -661,13 +661,9 @@ function getSalesDepartmentDashboard_(payload) {
   const planByManager = salesHasAnyObjectValues_(live.planByManager)
     ? live.planByManager
     : salesStaticPlanByManager_();
-  const dynamicsByManager = salesHasUsableDynamics_(live.dynamicsByManager)
-    ? live.dynamicsByManager
-    : salesReadStaticDynamicsByManager_();
+  const dynamicsByManager = live.dynamicsByManager || {};
   const daily = live.daily || [];
-  const psByManager = salesHasAnyObjectValues_(live.psByManager)
-    ? live.psByManager
-    : salesStaticPsByManager_();
+  const psByManager = live.psByManager || {};
   const specialByManager = salesHasAnyObjectValues_(live.specialByManager)
     ? live.specialByManager
     : {};
@@ -683,13 +679,13 @@ function getSalesDepartmentDashboard_(payload) {
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || workingDaysPassed;
 
   if (!salesHasUsableDynamics_(live.dynamicsByManager)) {
-    warnings.push('Динамика отдела продаж не прочиталась из живого листа, показан резервный снимок.');
+    warnings.push('Динамика отдела продаж не прочиталась из живого листа.');
   }
   if (!daily.length) {
     warnings.push('Дневная динамика не прочиталась из живого листа, дата факта посчитана календарно.');
   }
   if (!salesHasAnyObjectValues_(live.psByManager)) {
-    warnings.push('Выгрузка PS не прочиталась из живого листа, VIP/выручка показаны из резервного снимка.');
+    warnings.push('Выгрузка PS не прочиталась из живого листа.');
   }
 
   const managers = managerNames.map((name) => {

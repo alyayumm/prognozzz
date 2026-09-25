@@ -1,9 +1,8 @@
 import { callReportApi } from "./reportApi";
-import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedSnapshot";
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v7:";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v8:";
 const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
@@ -271,17 +270,6 @@ export async function loadSalesDepartmentSnapshot(
       );
     }
 
-    if (allowStaleFallback && context.monthKey === "2026-09") {
-      const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
-      return {
-        ...embedded,
-        warnings: [
-          ...embedded.warnings,
-          "Обновление из Google Sheets не вернуло полный снимок, временно оставлен последний встроенный снимок.",
-        ],
-      };
-    }
-
     throw new Error("Свежие данные отдела продаж не загрузились из Google Sheets.");
   }
 
@@ -306,17 +294,6 @@ export async function loadSalesDepartmentSnapshot(
       withSalesDepartmentFactDate(cachedSnapshot, context),
       "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
     );
-  }
-
-  if (allowStaleFallback && context.monthKey === "2026-09") {
-    const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
-    return {
-      ...embedded,
-      warnings: [
-        ...embedded.warnings,
-        "Обновление из Google Sheets не вернуло полный снимок, временно оставлен последний встроенный снимок.",
-      ],
-    };
   }
 
   if (serviceSnapshot) {
