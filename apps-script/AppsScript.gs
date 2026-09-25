@@ -945,11 +945,52 @@ function salesExtractPlanManagerNames_(rows) {
 function salesParseSpecialManagerTables_(sheet) {
   const result = {};
   if (!sheet) return result;
-  const rows = sheet.getRange('A59:AZ90').getDisplayValues();
-  const managerNames = salesResolveManagerNames_({}, salesReadDynamicsByManager_(sheet, []), {}, {}, SALES_DEPARTMENT_CONFIG.managers);
-  salesApplySpecialTableMetric_(rows, managerNames, 'ВИП тарифы МОП', 'Итого', 'vipDeals', result);
-  salesApplySpecialTableMetric_(rows, managerNames, 'Дистанционные оплаты', 'Итого', 'distantDeals', result);
+  const headerRow = sheet.getRange('N3:W3').getDisplayValues()[0] || [];
+  const managerNames = salesUniqueManagers_(
+    SALES_DEPARTMENT_CONFIG.managers.concat(
+      headerRow.filter((value) => value && salesNormalizeLabel_(value).indexOf(salesNormalizeLabel_('Итого')) < 0),
+    ),
+  );
+  salesApplySpecialRangeMetric_(
+    headerRow,
+    sheet.getRange('N60:W68').getDisplayValues(),
+    sheet.getRange('A63:A68').getDisplayValues(),
+    managerNames,
+    60,
+    63,
+    'Итого',
+    'vipDeals',
+    result,
+  );
+  salesApplySpecialRangeMetric_(
+    headerRow,
+    sheet.getRange('N71:W79').getDisplayValues(),
+    sheet.getRange('A74:A79').getDisplayValues(),
+    managerNames,
+    71,
+    74,
+    'Итого',
+    'distantDeals',
+    result,
+  );
   return result;
+}
+
+function salesApplySpecialRangeMetric_(headerRow, valueRows, labelRows, managerNames, valueStartRow, labelStartRow, valueLabel, field, result) {
+  const labelIndex = labelRows.findIndex((row) => salesNormalizeLabel_(row[0]) === salesNormalizeLabel_(valueLabel));
+  if (labelIndex < 0) return;
+
+  const valueIndex = labelStartRow - valueStartRow + labelIndex;
+  const valueRow = valueRows[valueIndex];
+  if (!valueRow) return;
+
+  managerNames.forEach((managerName) => {
+    const columnIndex = headerRow.findIndex((value) => salesManagerMatches_(value, managerName));
+    if (columnIndex < 0) return;
+    const current = result[managerName] || {};
+    current[field] = salesNumber_(valueRow[columnIndex]);
+    result[managerName] = current;
+  });
 }
 
 function salesApplySpecialTableMetric_(rows, managerNames, title, valueLabel, field, result) {

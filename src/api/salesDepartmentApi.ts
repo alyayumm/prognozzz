@@ -162,6 +162,13 @@ type ManagerSpecialMetrics = {
   vipDeals?: number;
   distantDeals?: number;
 };
+type SpecialRangeTables = {
+  managerHeader: GvizTable;
+  vipValues: GvizTable;
+  vipLabels: GvizTable;
+  distantValues: GvizTable;
+  distantLabels: GvizTable;
+};
 type SalesMonthContext = {
   monthKey: string;
   monthLabel: string;
@@ -338,7 +345,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", gvizTimeouts.dynamics)),
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", gvizTimeouts.daily)),
     settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", gvizTimeouts.ps)),
-    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A59:AZ90", gvizTimeouts.special)),
+    settle(loadSalesSpecialGvizRanges()),
   ]);
 
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
@@ -703,35 +710,69 @@ function parseRopDynamicsSheet(table: GvizTable, ropName: string): { managers: s
   return { managers: uniqueManagers(managers), metrics };
 }
 
-function parseSpecialManagerTables(table: GvizTable, managerNames: readonly string[]): Map<string, ManagerSpecialMetrics> {
-  const rows = rowsToMatrix(table);
-  const result = new Map<string, ManagerSpecialMetrics>();
+async function loadSalesSpecialGvizRanges(): Promise<SpecialRangeTables> {
+  const [managerHeader, vipValues, vipLabels, distantValues, distantLabels] = await Promise.all([
+    loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "N3:W3", gvizTimeouts.special),
+    loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "N60:W68", gvizTimeouts.special),
+    loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A63:A68", gvizTimeouts.special),
+    loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "N71:W79", gvizTimeouts.special),
+    loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A74:A79", gvizTimeouts.special),
+  ]);
 
-  applySpecialTableMetric(rows, managerNames, "ВИП тарифы МОП", "Итого", "vipDeals", result);
-  applySpecialTableMetric(rows, managerNames, "Дистанционные оплаты", "Итого", "distantDeals", result);
+  return { managerHeader, vipValues, vipLabels, distantValues, distantLabels };
+}
+
+function parseSpecialManagerTables(tables: SpecialRangeTables, managerNames: readonly string[]): Map<string, ManagerSpecialMetrics> {
+  const result = new Map<string, ManagerSpecialMetrics>();
+  const headerRow = rowsToMatrix(tables.managerHeader)[0] ?? [];
+  const resolvedManagers = uniqueManagers([
+    ...managerNames,
+    ...headerRow.filter((value) => value && !normalizeLabel(value).includes(normalizeLabel("Итого"))),
+  ]);
+
+  applySpecialRangeMetric(
+    headerRow,
+    rowsToMatrix(tables.vipValues),
+    rowsToMatrix(tables.vipLabels),
+    resolvedManagers,
+    60,
+    63,
+    "Итого",
+    "vipDeals",
+    result,
+  );
+  applySpecialRangeMetric(
+    headerRow,
+    rowsToMatrix(tables.distantValues),
+    rowsToMatrix(tables.distantLabels),
+    resolvedManagers,
+    71,
+    74,
+    "Итого",
+    "distantDeals",
+    result,
+  );
 
   return result;
 }
 
-function applySpecialTableMetric(
-  rows: string[][],
+function applySpecialRangeMetric(
+  headerRow: string[],
+  valueRows: string[][],
+  labelRows: string[][],
   managerNames: readonly string[],
-  title: string,
+  valueStartRow: number,
+  labelStartRow: number,
   valueLabel: string,
   field: keyof ManagerSpecialMetrics,
   result: Map<string, ManagerSpecialMetrics>,
 ) {
-  const titleIndex = rows.findIndex((row) => row.some((cell) => normalizeLabel(cell) === normalizeLabel(title)));
-  if (titleIndex < 0) return;
+  const labelIndex = labelRows.findIndex((row) => normalizeLabel(row[0]) === normalizeLabel(valueLabel));
+  if (labelIndex < 0) return;
+  const valueIndex = labelStartRow - valueStartRow + labelIndex;
+  const valueRow = valueRows[valueIndex];
+  if (!valueRow) return;
 
-  const headerIndex = rows.findIndex((row, index) => index > titleIndex && index <= titleIndex + 4 && normalizeLabel(row[0]) === normalizeLabel("Менеджеры"));
-  if (headerIndex < 0) return;
-
-  const valueIndex = rows.findIndex((row, index) => index > headerIndex && index <= headerIndex + 8 && normalizeLabel(row[0]) === normalizeLabel(valueLabel));
-  if (valueIndex < 0) return;
-
-  const headerRow = rows[headerIndex];
-  const valueRow = rows[valueIndex];
   managerNames.forEach((managerName) => {
     const columnIndex = headerRow.findIndex((value) => managerMatches(value, managerName));
     if (columnIndex < 0) return;
