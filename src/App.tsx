@@ -1592,6 +1592,7 @@ function SalesDepartmentDashboard({
 }) {
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "refreshing" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState("");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
   const [refreshTick, setRefreshTick] = useState(0);
@@ -1601,15 +1602,18 @@ function SalesDepartmentDashboard({
     const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey ? snapshot : null;
     if (!existingSnapshot) setSnapshot(null);
     setLoadState(existingSnapshot ? "refreshing" : "loading");
+    setLoadError("");
 
     loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: true, allowStaleFallback: false })
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
+        setLoadError("");
         setLoadState("ready");
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (ignore) return;
+        setLoadError(error instanceof Error ? error.message : "Свежие данные отдела продаж не загрузились.");
         setLoadState(existingSnapshot ? "ready" : "error");
       });
 
@@ -1680,7 +1684,7 @@ function SalesDepartmentDashboard({
       {!snapshot && (
         <section className={`sales-empty-state ${loadState}`}>
           <strong>{loadState === "error" ? "Не удалось загрузить отдел продаж" : "Собираю отдел продаж из таблиц"}</strong>
-          <span>{loadState === "error" ? "Проверь доступ к Google Sheets или попробуй обновить страницу." : "Планы, динамика и PS подтягиваются отдельными узкими запросами."}</span>
+          <span>{loadState === "error" ? loadError || "Проверь доступ к Google Sheets или попробуй обновить страницу." : "Планы, динамика и PS подтягиваются отдельными узкими запросами."}</span>
         </section>
       )}
 

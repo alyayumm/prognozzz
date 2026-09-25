@@ -157,6 +157,13 @@ type ManagerPsMetrics = {
   revenue: number;
   abDeals: number;
 };
+
+export class SalesDepartmentLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SalesDepartmentLoadError";
+  }
+}
 type ManagerSpecialMetrics = {
   vipDeals?: number;
   distantDeals?: number;
@@ -263,6 +270,10 @@ export async function loadSalesDepartmentSnapshot(
         : liveSnapshot;
     }
 
+    if (serviceSnapshot && isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+      throw new SalesDepartmentLoadError("Apps Script возвращает старый снимок отдела продаж. Нужно развернуть свежую версию Weekly Report API.");
+    }
+
     if (allowStaleFallback && cachedSnapshot) {
       return withSalesDepartmentWarning(
         withSalesDepartmentFactDate(cachedSnapshot, context),
@@ -270,7 +281,7 @@ export async function loadSalesDepartmentSnapshot(
       );
     }
 
-    throw new Error("Свежие данные отдела продаж не загрузились из Google Sheets.");
+    throw new SalesDepartmentLoadError("Свежие данные отдела продаж не загрузились из Google Sheets.");
   }
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
@@ -454,7 +465,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     totals: buildTotals(managers),
     warnings,
     sourceLinks: {
-      dynamics: `https://docs.google.com/spreadsheets/d/${salesDepartmentSpreadsheetId}/edit#gid=2045376562`,
+      dynamics: `https://docs.google.com/spreadsheets/d/${salesDepartmentSpreadsheetId}/edit#gid=1317166314`,
       plans: `https://docs.google.com/spreadsheets/d/${dakoroPlanSpreadsheetId}/edit#gid=0`,
     },
   };

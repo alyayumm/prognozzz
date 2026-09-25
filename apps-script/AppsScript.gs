@@ -759,7 +759,7 @@ function getSalesDepartmentDashboard_(payload) {
     totals: salesBuildTotals_(managers),
     warnings: warnings,
     sourceLinks: {
-      dynamics: 'https://docs.google.com/spreadsheets/d/' + config.dynamicsSpreadsheetId + '/edit#gid=2045376562',
+      dynamics: 'https://docs.google.com/spreadsheets/d/' + config.dynamicsSpreadsheetId + '/edit#gid=1317166314',
       plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit#gid=0',
     },
   };
