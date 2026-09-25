@@ -40,6 +40,7 @@ import {
 } from "./api/brandAnalyticsApi";
 import {
   dakoroManagers,
+  getCachedSalesDepartmentSnapshot,
   loadSalesDepartmentSnapshot,
   salesDepartmentRops,
   type SalesDayPoint,
@@ -1589,14 +1590,26 @@ function SalesDepartmentDashboard({
   selectedMonthConfig: MonthConfig;
 }) {
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadState, setLoadState] = useState<"loading" | "refreshing" | "ready" | "error">("loading");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let ignore = false;
-    setLoadState("loading");
+    const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey ? snapshot : null;
+    const cachedSnapshot = refreshTick === 0
+      ? getCachedSalesDepartmentSnapshot(selectedMonthConfig.monthKey)
+      : null;
+
+    if (cachedSnapshot) {
+      setSnapshot(cachedSnapshot);
+      setLoadState("refreshing");
+    } else {
+      if (!existingSnapshot) setSnapshot(null);
+      setLoadState(existingSnapshot ? "refreshing" : "loading");
+    }
+
     loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: refreshTick > 0 })
       .then((nextSnapshot) => {
         if (ignore) return;
@@ -1605,8 +1618,7 @@ function SalesDepartmentDashboard({
       })
       .catch(() => {
         if (ignore) return;
-        setSnapshot(null);
-        setLoadState("error");
+        setLoadState(existingSnapshot || cachedSnapshot ? "ready" : "error");
       });
 
     return () => {
@@ -1624,9 +1636,12 @@ function SalesDepartmentDashboard({
   const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
   const summaryStatus: SummaryStatus = loadState === "ready"
     ? { label: "live", tone: snapshot?.warnings.length ? "warning" : "good" }
+    : loadState === "refreshing"
+      ? { label: "обновляю", tone: "neutral" }
     : loadState === "error"
       ? { label: "нет доступа", tone: "danger" }
       : { label: "загрузка", tone: "neutral" };
+  const isSalesRefreshing = loadState === "loading" || loadState === "refreshing";
 
   return (
     <div className="page-stack sales-department-dashboard">
@@ -1646,13 +1661,13 @@ function SalesDepartmentDashboard({
         <button
           className="secondary-button sales-refresh-button"
           type="button"
-          disabled={loadState === "loading"}
+          disabled={isSalesRefreshing}
           onClick={() => setRefreshTick((value) => value + 1)}
         >
           <RefreshCw size={17} />
-          {loadState === "loading" ? "Обновляю" : "Обновить"}
+          {isSalesRefreshing ? "Обновляю" : "Обновить"}
         </button>
-        <span>Повторно подтягивает планы, динамику по дням и PS из Google Sheets.</span>
+        <span>Сразу показывает сохраненный снимок, а свежие планы, динамику и PS подтягивает в фоне.</span>
       </div>
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">

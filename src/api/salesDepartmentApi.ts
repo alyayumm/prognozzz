@@ -3,6 +3,16 @@ import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedS
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v3:";
+const salesDepartmentCacheTtlMs = 1000 * 60 * 60 * 12;
+const gvizTimeouts = {
+  plan: 9000,
+  dynamics: 12000,
+  daily: 12000,
+  ps: 14000,
+  special: 9000,
+  service: 10000,
+};
 
 export const salesDepartmentRops = ["Дакоро", "Гурьянов", "Саркисов"] as const;
 export type SalesDepartmentRop = (typeof salesDepartmentRops)[number];
@@ -158,6 +168,10 @@ type SalesMonthContext = {
   monthYear: number;
   monthIndex: number;
 };
+type CachedSalesDepartmentSnapshot = {
+  savedAt: number;
+  snapshot: SalesDepartmentSnapshot;
+};
 
 const defaultSalesDepartmentMonthKey = "2026-09";
 const monthNames = [
@@ -230,13 +244,23 @@ export async function loadSalesDepartmentSnapshot(
   options: { forceFresh?: boolean } = {},
 ): Promise<SalesDepartmentSnapshot> {
   const context = getSalesMonthContext(requestedMonthKey);
+  const cachedSnapshot = readCachedSalesDepartmentSnapshot(context);
 
   if (options.forceFresh) {
     const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return gvizSnapshot;
+    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(gvizSnapshot);
 
     const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
+    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+      return cacheSalesDepartmentSnapshot(serviceSnapshot);
+    }
+
+    if (cachedSnapshot) {
+      return withSalesDepartmentWarning(
+        cachedSnapshot,
+        "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
+      );
+    }
 
     if (context.monthKey === "2026-09") {
       const embedded = buildEmbeddedSalesDepartmentSnapshot();
@@ -253,10 +277,19 @@ export async function loadSalesDepartmentSnapshot(
   }
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return gvizSnapshot;
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(gvizSnapshot);
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) return serviceSnapshot;
+  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+    return cacheSalesDepartmentSnapshot(serviceSnapshot);
+  }
+
+  if (cachedSnapshot) {
+    return withSalesDepartmentWarning(
+      cachedSnapshot,
+      "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
+    );
+  }
 
   if (context.monthKey === "2026-09") {
     const embedded = buildEmbeddedSalesDepartmentSnapshot();
@@ -282,11 +315,15 @@ export async function loadSalesDepartmentSnapshot(
   return gvizSnapshot;
 }
 
+export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {
+  return readCachedSalesDepartmentSnapshot(getSalesMonthContext(requestedMonthKey));
+}
+
 async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
   try {
     return await withTimeout(
       callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey }),
-      16000,
+      gvizTimeouts.service,
       "Sales department Apps Script timeout",
     );
   } catch {
@@ -296,7 +333,14 @@ async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): P
 
 async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot> {
   const warnings: string[] = [];
-  const planResult = await settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:Z20", 22000));
+  const [planResult, dynamicsResult, dailyResult, psResult, specialResult] = await Promise.all([
+    settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:Z20", gvizTimeouts.plan)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", gvizTimeouts.dynamics)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", gvizTimeouts.daily)),
+    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", gvizTimeouts.ps)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A59:AZ90", gvizTimeouts.special)),
+  ]);
+
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
   const planManagerNames = planResult.ok ? extractPlanManagerNames(planResult.value) : [];
   let planLabel = "Планы менеджеров";
@@ -307,7 +351,6 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     planLabel = readCell(planResult.value.rows[0], 0) || planLabel;
   }
 
-  const dynamicsResult = await settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", 45000));
   const dynamicsParsed = dynamicsResult.ok
     ? parseRopDynamicsSheet(dynamicsResult.value, "Дакоро")
     : { managers: [] as string[], metrics: new Map<string, Map<string, string>>() };
@@ -315,12 +358,6 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   if (!dynamicsResult.ok) warnings.push("Динамика отдела продаж не загрузилась из живого листа.");
 
   const baseManagerNames = uniqueManagers([...planManagerNames, ...dynamicsParsed.managers, ...dakoroManagers]);
-
-  const [dailyResult, psResult, specialResult] = await Promise.all([
-    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", 45000)),
-    settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", 45000)),
-    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A59:AZ90", 45000)),
-  ]);
 
   const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
   if (!dailyResult.ok) warnings.push("Дневная динамика не загрузилась, линейный прогноз посчитан по текущему факту.");
@@ -453,6 +490,48 @@ function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, conte
   return snapshot.monthKey !== context.monthKey
     || snapshot.monthLabel !== context.monthLabel
     || snapshot.warnings.some((warning) => warning.includes("08.09.2026") || warning.includes("быстрого снимка"));
+}
+
+function readCachedSalesDepartmentSnapshot(context: SalesMonthContext): SalesDepartmentSnapshot | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(getSalesDepartmentCacheKey(context.monthKey));
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw) as CachedSalesDepartmentSnapshot;
+    if (!cached?.snapshot || cached.snapshot.monthKey !== context.monthKey) return null;
+    if (Date.now() - cached.savedAt > salesDepartmentCacheTtlMs) return null;
+    if (!isUsableSalesDepartmentSnapshot(cached.snapshot)) return null;
+
+    return cached.snapshot;
+  } catch {
+    return null;
+  }
+}
+
+function cacheSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): SalesDepartmentSnapshot {
+  if (typeof window === "undefined" || !isUsableSalesDepartmentSnapshot(snapshot)) return snapshot;
+  try {
+    const cached: CachedSalesDepartmentSnapshot = {
+      savedAt: Date.now(),
+      snapshot,
+    };
+    window.localStorage.setItem(getSalesDepartmentCacheKey(snapshot.monthKey), JSON.stringify(cached));
+  } catch {
+    // Cache is a speed boost only; storage failures must not break the report.
+  }
+  return snapshot;
+}
+
+function getSalesDepartmentCacheKey(monthKey: string): string {
+  return `${salesDepartmentCachePrefix}${monthKey}`;
+}
+
+function withSalesDepartmentWarning(snapshot: SalesDepartmentSnapshot, warning: string): SalesDepartmentSnapshot {
+  return {
+    ...snapshot,
+    warnings: snapshot.warnings.includes(warning) ? snapshot.warnings : [...snapshot.warnings, warning],
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
