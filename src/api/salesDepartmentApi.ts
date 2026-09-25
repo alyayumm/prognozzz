@@ -249,13 +249,19 @@ export async function loadSalesDepartmentSnapshot(
 
   if (options.forceFresh) {
     const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-    if (isUsableSalesDepartmentSnapshot(gvizSnapshot) && isCompleteSalesDepartmentSnapshot(gvizSnapshot)) {
-      return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) {
+      const liveSnapshot = withSalesDepartmentFactDate(gvizSnapshot, context);
+      return isCompleteSalesDepartmentSnapshot(liveSnapshot)
+        ? cacheSalesDepartmentSnapshot(liveSnapshot)
+        : liveSnapshot;
     }
 
     const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && isCompleteSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-      return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
+    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+      const liveSnapshot = withSalesDepartmentFactDate(serviceSnapshot, context);
+      return isCompleteSalesDepartmentSnapshot(liveSnapshot)
+        ? cacheSalesDepartmentSnapshot(liveSnapshot)
+        : liveSnapshot;
     }
 
     if (allowStaleFallback && cachedSnapshot) {
@@ -280,13 +286,19 @@ export async function loadSalesDepartmentSnapshot(
   }
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot) && isCompleteSalesDepartmentSnapshot(gvizSnapshot)) {
-    return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) {
+    const liveSnapshot = withSalesDepartmentFactDate(gvizSnapshot, context);
+    return isCompleteSalesDepartmentSnapshot(liveSnapshot)
+      ? cacheSalesDepartmentSnapshot(liveSnapshot)
+      : liveSnapshot;
   }
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && isCompleteSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-    return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
+  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+    const liveSnapshot = withSalesDepartmentFactDate(serviceSnapshot, context);
+    return isCompleteSalesDepartmentSnapshot(liveSnapshot)
+      ? cacheSalesDepartmentSnapshot(liveSnapshot)
+      : liveSnapshot;
   }
 
   if (allowStaleFallback && cachedSnapshot) {
