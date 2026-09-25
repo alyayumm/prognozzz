@@ -48,6 +48,8 @@ const SALES_DEPARTMENT_CONFIG = {
     'Сергеева Софья',
     'Смирнов Никита',
     'Антиповский Евгений',
+    'Алавердян Армен',
+    'Ищечкин Артем',
   ],
   dynamicsRowLabels: [
     'Менеджеры',
@@ -666,6 +668,10 @@ function getSalesDepartmentDashboard_(payload) {
   const psByManager = salesHasAnyObjectValues_(live.psByManager)
     ? live.psByManager
     : salesStaticPsByManager_();
+  const specialByManager = salesHasAnyObjectValues_(live.specialByManager)
+    ? live.specialByManager
+    : {};
+  const managerNames = salesResolveManagerNames_(planByManager, dynamicsByManager, specialByManager, psByManager, config.managers);
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesLatestActualDate_(daily) || salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
@@ -686,10 +692,11 @@ function getSalesDepartmentDashboard_(payload) {
     warnings.push('Выгрузка PS не прочиталась из живого листа, VIP/выручка показаны из резервного снимка.');
   }
 
-  const managers = config.managers.map((name) => {
-    const plan = planByManager[name] || salesEmptyPlan_();
-    const dynamic = dynamicsByManager[name] || {};
-    const ps = psByManager[name] || null;
+  const managers = managerNames.map((name) => {
+    const plan = salesGetManagerValue_(planByManager, name) || salesEmptyPlan_();
+    const dynamic = salesGetManagerValue_(dynamicsByManager, name) || {};
+    const ps = salesGetManagerValue_(psByManager, name) || null;
+    const special = salesGetManagerValue_(specialByManager, name) || null;
     const factDeals = salesNumber_(dynamic['Факт Договоры']);
     const factQualified = salesNumber_(dynamic['Факт обращения']) || salesNumber_(dynamic['Обращения целевые']);
     const totalTraffic = salesNumber_(dynamic['Обращения всего']);
@@ -731,8 +738,8 @@ function getSalesDepartmentDashboard_(payload) {
       spbDeals: salesNumber_(dynamic['Факт  договоры СПБ']),
       mskConversion: salesPercent_(salesNumber_(dynamic['Факт договоры МСК']), salesNumber_(dynamic['Факт обращения целевые МСК'])),
       spbConversion: salesPercent_(salesNumber_(dynamic['Факт  договоры СПБ']), salesNumber_(dynamic['Факт обращения целевые СПБ'])),
-      vipDeals: ps ? ps.vipDeals : null,
-      distantDeals: ps ? ps.distantDeals : null,
+      vipDeals: special && special.vipDeals !== undefined ? special.vipDeals : (ps ? ps.vipDeals : null),
+      distantDeals: special && special.distantDeals !== undefined ? special.distantDeals : (ps ? ps.distantDeals : null),
       paidDeals: ps ? ps.paidDeals : null,
       orderCount: orderCount,
       avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
@@ -768,13 +775,14 @@ function salesReadLiveDepartmentData_(config, warnings) {
     dynamicsByManager: {},
     daily: [],
     psByManager: {},
+    specialByManager: {},
   };
 
   try {
     const planSpreadsheet = SpreadsheetApp.openById(config.planSpreadsheetId);
     const planSheet = planSpreadsheet.getSheetByName(config.planSheet);
     if (planSheet) {
-      result.planByManager = salesParsePlanSheet_(salesReadDisplayRange_(planSheet, 'A1:J20'));
+      result.planByManager = salesParsePlanSheet_(salesReadDisplayRange_(planSheet, 'A1:Z20'));
     }
   } catch (error) {
     warnings.push('Не удалось прочитать живой план менеджеров: ' + salesErrorMessage_(error));
@@ -787,10 +795,12 @@ function salesReadLiveDepartmentData_(config, warnings) {
     const psSheet = dynamicsSpreadsheet.getSheetByName(config.psSheet);
 
     result.dynamicsByManager = salesReadDynamicsByManager_(dynamicsSheet, warnings);
+    result.specialByManager = salesParseSpecialManagerTables_(dynamicsSheet);
     if (dailySheet) {
       result.daily = salesParseDailySheet_(salesReadDisplayRange_(dailySheet, 'A1:AF20'));
     }
-    result.psByManager = salesParsePsSheet_(psSheet, config.monthKey);
+    const managerNames = salesResolveManagerNames_(result.planByManager, result.dynamicsByManager, result.specialByManager, {}, config.managers);
+    result.psByManager = salesParsePsSheet_(psSheet, config.monthKey, managerNames);
   } catch (error) {
     warnings.push('Не удалось прочитать живую таблицу отдела продаж: ' + salesErrorMessage_(error));
   }
@@ -873,21 +883,31 @@ function salesParseStaticMatrix_(text) {
 function salesReadDynamicsByManager_(sheet, warnings) {
   const result = {};
   if (!sheet) return result;
-  SALES_DEPARTMENT_CONFIG.dynamicsRanges.forEach((config) => {
-    try {
-      const values = sheet.getRange(config.range).getDisplayValues();
-      config.names.forEach((managerName, columnIndex) => {
-        const metrics = result[managerName] || {};
-        SALES_DEPARTMENT_CONFIG.dynamicsRowLabels.forEach((label, rowIndex) => {
-          if (!label) return;
-          metrics[label] = values[rowIndex] && values[rowIndex][columnIndex] ? values[rowIndex][columnIndex] : '';
-        });
-        result[managerName] = metrics;
+  try {
+    const values = sheet.getRange('A1:AZ38').getDisplayValues();
+    const ropRow = salesFindRow_(values, 'РОП');
+    const managerRow = salesFindRow_(values, 'Менеджеры');
+    const startColumn = ropRow.findIndex((value) => salesNormalizeText_(value).indexOf(salesNormalizeText_('Дакоро')) >= 0);
+    if (startColumn < 0 || !managerRow.length) return result;
+
+    let endColumn = ropRow.findIndex((value, index) => index > startColumn && Boolean(salesNormalizeText_(value)));
+    if (endColumn < 0) endColumn = managerRow.length;
+
+    for (let columnIndex = startColumn; columnIndex < endColumn; columnIndex += 1) {
+      const managerName = String(managerRow[columnIndex] || '').trim();
+      if (!managerName || salesNormalizeLabel_(managerName).indexOf(salesNormalizeLabel_('Итого')) >= 0) continue;
+      const metrics = {};
+      SALES_DEPARTMENT_CONFIG.dynamicsRowLabels.forEach((label) => {
+        if (!label) return;
+        const row = salesFindRow_(values, label);
+        metrics[label] = row[columnIndex] || '';
       });
-    } catch (error) {
-      warnings.push('Не прочитан фрагмент динамики ' + config.range + '.');
+      metrics['Менеджеры'] = managerName;
+      result[managerName] = metrics;
     }
-  });
+  } catch (error) {
+    warnings.push('Не прочитана динамика отдела продаж из живого листа.');
+  }
   return result;
 }
 
@@ -898,7 +918,8 @@ function salesParsePlanSheet_(rows) {
   rows.forEach((row) => {
     rowMap[salesNormalizeLabel_(row[0])] = row;
   });
-  SALES_DEPARTMENT_CONFIG.managers.forEach((name) => {
+  const managerNames = salesExtractPlanManagerNames_(rows);
+  managerNames.forEach((name) => {
     const columnIndex = managerRow.findIndex((value) => salesManagerMatches_(value, name));
     const readPlan = (label) => salesNumber_((rowMap[salesNormalizeLabel_(label)] || [])[columnIndex]);
     result[name] = {
@@ -910,6 +931,82 @@ function salesParsePlanSheet_(rows) {
     };
   });
   return result;
+}
+
+function salesExtractPlanManagerNames_(rows) {
+  const managerRow = rows.find((row) => salesNormalizeLabel_(row[0]) === salesNormalizeLabel_('Менеджеры')) || [];
+  const names = managerRow
+    .slice(1)
+    .map((value) => String(value || '').trim())
+    .filter((value) => value && salesNormalizeLabel_(value).indexOf(salesNormalizeLabel_('Итого')) < 0);
+  return salesUniqueManagers_(names.length ? names : SALES_DEPARTMENT_CONFIG.managers);
+}
+
+function salesParseSpecialManagerTables_(sheet) {
+  const result = {};
+  if (!sheet) return result;
+  const rows = sheet.getRange('A59:AZ90').getDisplayValues();
+  const managerNames = salesResolveManagerNames_({}, salesReadDynamicsByManager_(sheet, []), {}, {}, SALES_DEPARTMENT_CONFIG.managers);
+  salesApplySpecialTableMetric_(rows, managerNames, 'ВИП тарифы МОП', 'Итого', 'vipDeals', result);
+  salesApplySpecialTableMetric_(rows, managerNames, 'Дистанционные оплаты', 'Итого', 'distantDeals', result);
+  return result;
+}
+
+function salesApplySpecialTableMetric_(rows, managerNames, title, valueLabel, field, result) {
+  const titleIndex = rows.findIndex((row) => row.some((cell) => salesNormalizeLabel_(cell) === salesNormalizeLabel_(title)));
+  if (titleIndex < 0) return;
+
+  const headerIndex = rows.findIndex((row, index) => (
+    index > titleIndex
+    && index <= titleIndex + 4
+    && salesNormalizeLabel_(row[0]) === salesNormalizeLabel_('Менеджеры')
+  ));
+  if (headerIndex < 0) return;
+
+  const valueIndex = rows.findIndex((row, index) => (
+    index > headerIndex
+    && index <= headerIndex + 8
+    && salesNormalizeLabel_(row[0]) === salesNormalizeLabel_(valueLabel)
+  ));
+  if (valueIndex < 0) return;
+
+  const headerRow = rows[headerIndex];
+  const valueRow = rows[valueIndex];
+  managerNames.forEach((managerName) => {
+    const columnIndex = headerRow.findIndex((value) => salesManagerMatches_(value, managerName));
+    if (columnIndex < 0) return;
+    const current = result[managerName] || {};
+    current[field] = salesNumber_(valueRow[columnIndex]);
+    result[managerName] = current;
+  });
+}
+
+function salesResolveManagerNames_(planByManager, dynamicsByManager, specialByManager, psByManager, fallbackNames) {
+  const names = []
+    .concat(Object.keys(planByManager || {}))
+    .concat(Object.keys(dynamicsByManager || {}))
+    .concat(Object.keys(specialByManager || {}))
+    .concat(Object.keys(psByManager || {}))
+    .concat(fallbackNames || []);
+  return salesUniqueManagers_(names);
+}
+
+function salesUniqueManagers_(names) {
+  const result = [];
+  names.forEach((name) => {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return;
+    if (result.some((existing) => salesManagerMatches_(existing, trimmed))) return;
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function salesGetManagerValue_(object, managerName) {
+  if (!object) return null;
+  if (object[managerName]) return object[managerName];
+  const key = Object.keys(object).find((name) => salesManagerMatches_(name, managerName));
+  return key ? object[key] : null;
 }
 
 function salesParseDailySheet_(rows) {
@@ -944,7 +1041,7 @@ function salesParseDailySheet_(rows) {
   }).filter((day) => day.label);
 }
 
-function salesParsePsSheet_(sheet, monthKey) {
+function salesParsePsSheet_(sheet, monthKey, managerNames) {
   const result = {};
   if (!sheet) return result;
   const lastRow = Math.min(Math.max(sheet.getLastRow(), 1), 1500);
@@ -961,7 +1058,7 @@ function salesParsePsSheet_(sheet, monthKey) {
     const distant = String(row[23] || '') + ' ' + rowText;
     const count = salesNumber_(row[24]) || 1;
     const contract = row[26];
-    const managerName = SALES_DEPARTMENT_CONFIG.managers.find((name) => salesManagerMatches_(manager, name));
+    const managerName = (managerNames || SALES_DEPARTMENT_CONFIG.managers).find((name) => salesManagerMatches_(manager, name));
 
     if (!managerName || !salesIsDateInMonth_(createdAt, monthKey) || !salesHasContract_(contract)) return;
 

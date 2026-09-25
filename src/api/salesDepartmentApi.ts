@@ -16,6 +16,8 @@ export const dakoroManagers = [
   "Сергеева Софья",
   "Смирнов Никита",
   "Антиповский Евгений",
+  "Алавердян Армен",
+  "Ищечкин Артем",
 ] as const;
 
 export type SalesDayPoint = {
@@ -145,6 +147,10 @@ type ManagerPsMetrics = {
   orderCount: number;
   revenue: number;
   abDeals: number;
+};
+type ManagerSpecialMetrics = {
+  vipDeals?: number;
+  distantDeals?: number;
 };
 type SalesMonthContext = {
   monthKey: string;
@@ -290,8 +296,9 @@ async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): P
 
 async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot> {
   const warnings: string[] = [];
-  const planResult = await settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:J20", 22000));
+  const planResult = await settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:Z20", 22000));
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
+  const planManagerNames = planResult.ok ? extractPlanManagerNames(planResult.value) : [];
   let planLabel = "Планы менеджеров";
 
   if (!planResult.ok) {
@@ -300,41 +307,47 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     planLabel = readCell(planResult.value.rows[0], 0) || planLabel;
   }
 
-  const dynamicsResults = await Promise.all(
-    dynamicsRanges.map((config) =>
-      settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", config.range, 30000)),
-    ),
-  );
-  const dynamicsByManager = new Map<string, Map<string, string>>();
+  const dynamicsResult = await settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", 45000));
+  const dynamicsParsed = dynamicsResult.ok
+    ? parseRopDynamicsSheet(dynamicsResult.value, "Дакоро")
+    : { managers: [] as string[], metrics: new Map<string, Map<string, string>>() };
+  const dynamicsByManager = dynamicsParsed.metrics;
+  if (!dynamicsResult.ok) warnings.push("Динамика отдела продаж не загрузилась из живого листа.");
 
-  dynamicsResults.forEach((result, index) => {
-    if (!result.ok) {
-      warnings.push(`Не загрузился фрагмент динамики ${dynamicsRanges[index].range}.`);
-      return;
-    }
-    mergeDynamicsRange(dynamicsByManager, result.value, dynamicsRanges[index]);
-  });
+  const baseManagerNames = uniqueManagers([...planManagerNames, ...dynamicsParsed.managers, ...dakoroManagers]);
 
-  const [dailyResult, psResult] = await Promise.all([
+  const [dailyResult, psResult, specialResult] = await Promise.all([
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", 45000)),
     settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", 45000)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A59:AZ90", 45000)),
   ]);
 
   const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
   if (!dailyResult.ok) warnings.push("Дневная динамика не загрузилась, линейный прогноз посчитан по текущему факту.");
 
-  const psByManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey) : new Map<string, ManagerPsMetrics>();
+  const psByManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey, baseManagerNames) : new Map<string, ManagerPsMetrics>();
   if (!psResult.ok) warnings.push("Выгрузка PS не успела загрузиться: VIP, дистант и средний чек показаны только там, где есть данные динамики.");
+  const specialByManager = specialResult.ok ? parseSpecialManagerTables(specialResult.value, baseManagerNames) : new Map<string, ManagerSpecialMetrics>();
+  if (!specialResult.ok) warnings.push("VIP и дистанты не прочитались из мини-таблиц листа Динамика.");
+
+  const managerNames = uniqueManagers([
+    ...planManagerNames,
+    ...dynamicsParsed.managers,
+    ...Array.from(psByManager.keys()),
+    ...Array.from(specialByManager.keys()),
+    ...dakoroManagers,
+  ]);
 
   const workingDaysInMonth = countWorkingDaysInMonth(context.monthYear, context.monthIndex);
   const latestActualDate = getLatestActualDate(daily);
   const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
 
-  const managers = dakoroManagers.map((name) => {
-    const plan = planByManager.get(name) ?? emptyPlan();
-    const dynamic = dynamicsByManager.get(name) ?? new Map<string, string>();
-    const ps = psByManager.get(name);
+  const managers = managerNames.map((name) => {
+    const plan = getManagerValue(planByManager, name) ?? emptyPlan();
+    const dynamic = getManagerValue(dynamicsByManager, name) ?? new Map<string, string>();
+    const ps = getManagerValue(psByManager, name);
+    const special = getManagerValue(specialByManager, name);
     const factDeals = numberFromMap(dynamic, "Факт Договоры");
     const factQualified = numberFromMap(dynamic, "Факт обращения") || numberFromMap(dynamic, "Обращения целевые");
     const totalTraffic = numberFromMap(dynamic, "Обращения всего");
@@ -376,8 +389,8 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
       spbDeals: numberFromMap(dynamic, "Факт  договоры СПБ"),
       mskConversion: percentValue(numberFromMap(dynamic, "Факт договоры МСК"), numberFromMap(dynamic, "Факт обращения целевые МСК")),
       spbConversion: percentValue(numberFromMap(dynamic, "Факт  договоры СПБ"), numberFromMap(dynamic, "Факт обращения целевые СПБ")),
-      vipDeals: ps ? ps.vipDeals : null,
-      distantDeals: ps ? ps.distantDeals : null,
+      vipDeals: special?.vipDeals ?? (ps ? ps.vipDeals : null),
+      distantDeals: special?.distantDeals ?? (ps ? ps.distantDeals : null),
       paidDeals: ps ? ps.paidDeals : null,
       orderCount,
       avgCheck: revenue !== null && orderCount && orderCount > 0 ? revenue / orderCount : null,
@@ -524,9 +537,10 @@ function parsePlanSheet(table: GvizTable): Map<string, ManagerPlan> {
   const rows = rowsToMatrix(table);
   const managerRow = rows.find((row) => normalizeLabel(row[0]) === normalizeLabel("Менеджеры")) ?? [];
   const rowMap = new Map(rows.map((row) => [normalizeLabel(row[0]), row]));
+  const managerNames = extractPlanManagerNames(table);
 
   return new Map(
-    dakoroManagers.map((name) => {
+    managerNames.map((name) => {
       const columnIndex = managerRow.findIndex((value) => managerMatches(value, name));
       const readPlan = (label: string) => toNumber(rowMap.get(normalizeLabel(label))?.[columnIndex]);
       return [
@@ -543,16 +557,98 @@ function parsePlanSheet(table: GvizTable): Map<string, ManagerPlan> {
   );
 }
 
-function mergeDynamicsRange(target: Map<string, Map<string, string>>, table: GvizTable, config: DynamicsRangeConfig) {
-  const rows = table.rows;
-  config.names.forEach((managerName, columnIndex) => {
-    const metrics = target.get(managerName) ?? new Map<string, string>();
-    dynamicsRowLabels.forEach((label, rowIndex) => {
+function extractPlanManagerNames(table: GvizTable): string[] {
+  const rows = rowsToMatrix(table);
+  const managerRow = rows.find((row) => normalizeLabel(row[0]) === normalizeLabel("Менеджеры")) ?? [];
+  const names = managerRow
+    .slice(1)
+    .map((value) => value.trim())
+    .filter((value) => value && !normalizeLabel(value).includes(normalizeLabel("Итого")));
+  return uniqueManagers(names.length ? names : [...dakoroManagers]);
+}
+
+function parseRopDynamicsSheet(table: GvizTable, ropName: string): { managers: string[]; metrics: Map<string, Map<string, string>> } {
+  const rows = rowsToMatrix(table);
+  const ropRow = findMatrixRow(rows, "РОП");
+  const managerRow = findMatrixRow(rows, "Менеджеры");
+  const metrics = new Map<string, Map<string, string>>();
+  const startColumn = ropRow.findIndex((value) => normalizeText(value).includes(normalizeText(ropName)));
+  if (startColumn < 0 || !managerRow.length) return { managers: [], metrics };
+
+  let endColumn = ropRow.findIndex((value, index) => index > startColumn && Boolean(normalizeText(value)));
+  if (endColumn < 0) endColumn = managerRow.length;
+
+  const managers: string[] = [];
+  for (let columnIndex = startColumn; columnIndex < endColumn; columnIndex += 1) {
+    const managerName = managerRow[columnIndex]?.trim();
+    if (!managerName || normalizeLabel(managerName).includes(normalizeLabel("Итого"))) continue;
+
+    const managerMetrics = new Map<string, string>();
+    dynamicsRowLabels.forEach((label) => {
       if (!label) return;
-      metrics.set(label, readCell(rows[rowIndex], columnIndex));
+      const row = findMatrixRow(rows, label);
+      managerMetrics.set(label, row[columnIndex] ?? "");
     });
-    target.set(managerName, metrics);
+    managerMetrics.set("Менеджеры", managerName);
+    metrics.set(managerName, managerMetrics);
+    managers.push(managerName);
+  }
+
+  return { managers: uniqueManagers(managers), metrics };
+}
+
+function parseSpecialManagerTables(table: GvizTable, managerNames: readonly string[]): Map<string, ManagerSpecialMetrics> {
+  const rows = rowsToMatrix(table);
+  const result = new Map<string, ManagerSpecialMetrics>();
+
+  applySpecialTableMetric(rows, managerNames, "ВИП тарифы МОП", "Итого", "vipDeals", result);
+  applySpecialTableMetric(rows, managerNames, "Дистанционные оплаты", "Итого", "distantDeals", result);
+
+  return result;
+}
+
+function applySpecialTableMetric(
+  rows: string[][],
+  managerNames: readonly string[],
+  title: string,
+  valueLabel: string,
+  field: keyof ManagerSpecialMetrics,
+  result: Map<string, ManagerSpecialMetrics>,
+) {
+  const titleIndex = rows.findIndex((row) => row.some((cell) => normalizeLabel(cell) === normalizeLabel(title)));
+  if (titleIndex < 0) return;
+
+  const headerIndex = rows.findIndex((row, index) => index > titleIndex && index <= titleIndex + 4 && normalizeLabel(row[0]) === normalizeLabel("Менеджеры"));
+  if (headerIndex < 0) return;
+
+  const valueIndex = rows.findIndex((row, index) => index > headerIndex && index <= headerIndex + 8 && normalizeLabel(row[0]) === normalizeLabel(valueLabel));
+  if (valueIndex < 0) return;
+
+  const headerRow = rows[headerIndex];
+  const valueRow = rows[valueIndex];
+  managerNames.forEach((managerName) => {
+    const columnIndex = headerRow.findIndex((value) => managerMatches(value, managerName));
+    if (columnIndex < 0) return;
+    const current = result.get(managerName) ?? {};
+    current[field] = toNumber(valueRow[columnIndex]);
+    result.set(managerName, current);
   });
+}
+
+function uniqueManagers(names: readonly string[]): string[] {
+  const result: string[] = [];
+  names.forEach((name) => {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return;
+    if (result.some((existing) => managerMatches(existing, trimmed))) return;
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function getManagerValue<T>(map: Map<string, T>, managerName: string): T | undefined {
+  if (map.has(managerName)) return map.get(managerName);
+  return Array.from(map.entries()).find(([name]) => managerMatches(name, managerName))?.[1];
 }
 
 function parseDailySheet(table: GvizTable, context: SalesMonthContext): SalesDayPoint[] {
@@ -591,7 +687,7 @@ function parseDailySheet(table: GvizTable, context: SalesMonthContext): SalesDay
   }).filter((day) => day.label);
 }
 
-function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, ManagerPsMetrics> {
+function parsePsSheet(table: GvizTable, expectedMonthKey: string, managerNames: readonly string[]): Map<string, ManagerPsMetrics> {
   const result = new Map<string, ManagerPsMetrics>();
 
   table.rows.forEach((row) => {
@@ -605,7 +701,7 @@ function parsePsSheet(table: GvizTable, expectedMonthKey: string): Map<string, M
     const distant = `${readCell(row, 23)} ${rowText}`;
     const count = toNumber(readCell(row, 24)) || 1;
     const contract = readCell(row, 26);
-    const managerName = dakoroManagers.find((name) => managerMatches(manager, name));
+    const managerName = managerNames.find((name) => managerMatches(manager, name));
 
     if (!managerName || !isDateInMonth(createdAt, expectedMonthKey) || !hasContract(contract)) return;
 
