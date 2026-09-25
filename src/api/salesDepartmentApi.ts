@@ -3,7 +3,7 @@ import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedS
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v4:";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v5:";
 const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
@@ -376,7 +376,8 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   ]);
 
   const workingDaysInMonth = countWorkingDaysInMonth(context.monthYear, context.monthIndex);
-  const latestActualDate = getLatestActualDate(daily);
+  const dynamicsHasFact = hasUsableDynamicsMetrics(dynamicsByManager);
+  const latestActualDate = dynamicsHasFact ? getCurrentMonthDateKey(context) : getLatestActualDate(daily);
   const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
 
@@ -490,6 +491,30 @@ function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, conte
   return snapshot.monthKey !== context.monthKey
     || snapshot.monthLabel !== context.monthLabel
     || snapshot.warnings.some((warning) => warning.includes("08.09.2026") || warning.includes("быстрого снимка"));
+}
+
+function hasUsableDynamicsMetrics(metrics: Map<string, Map<string, string>>): boolean {
+  return Array.from(metrics.values()).some((managerMetrics) => (
+    numberFromMap(managerMetrics, "Обращения всего") > 0
+    || numberFromMap(managerMetrics, "Факт обращения") > 0
+    || numberFromMap(managerMetrics, "Факт Договоры") > 0
+  ));
+}
+
+function getCurrentMonthDateKey(context: SalesMonthContext): string | null {
+  const today = new Date();
+  const todayMonthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+
+  if (todayMonthKey === context.monthKey) {
+    return `${context.monthKey}-${String(today.getDate()).padStart(2, "0")}`;
+  }
+
+  if (todayMonthKey > context.monthKey) {
+    const lastDay = new Date(context.monthYear, context.monthIndex + 1, 0).getDate();
+    return `${context.monthKey}-${String(lastDay).padStart(2, "0")}`;
+  }
+
+  return null;
 }
 
 function readCachedSalesDepartmentSnapshot(context: SalesMonthContext): SalesDepartmentSnapshot | null {
