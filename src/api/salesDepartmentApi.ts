@@ -3,7 +3,7 @@ import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedS
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v5:";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v6:";
 const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
@@ -248,22 +248,22 @@ export async function loadSalesDepartmentSnapshot(
 
   if (options.forceFresh) {
     const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(gvizSnapshot);
+    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
 
     const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
     if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-      return cacheSalesDepartmentSnapshot(serviceSnapshot);
+      return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
     }
 
     if (cachedSnapshot) {
       return withSalesDepartmentWarning(
-        cachedSnapshot,
+        withSalesDepartmentFactDate(cachedSnapshot, context),
         "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
       );
     }
 
     if (context.monthKey === "2026-09") {
-      const embedded = buildEmbeddedSalesDepartmentSnapshot();
+      const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
       return {
         ...embedded,
         warnings: [
@@ -277,22 +277,22 @@ export async function loadSalesDepartmentSnapshot(
   }
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(gvizSnapshot);
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-    return cacheSalesDepartmentSnapshot(serviceSnapshot);
+    return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
   }
 
   if (cachedSnapshot) {
     return withSalesDepartmentWarning(
-      cachedSnapshot,
+      withSalesDepartmentFactDate(cachedSnapshot, context),
       "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
     );
   }
 
   if (context.monthKey === "2026-09") {
-    const embedded = buildEmbeddedSalesDepartmentSnapshot();
+    const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
     return {
       ...embedded,
       warnings: [
@@ -304,7 +304,7 @@ export async function loadSalesDepartmentSnapshot(
 
   if (serviceSnapshot) {
     return {
-      ...serviceSnapshot,
+      ...withSalesDepartmentFactDate(serviceSnapshot, context),
       warnings: [
         ...serviceSnapshot.warnings,
         "Прямое чтение Google Sheets не вернуло данные, показан Apps Script-снимок.",
@@ -376,8 +376,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   ]);
 
   const workingDaysInMonth = countWorkingDaysInMonth(context.monthYear, context.monthIndex);
-  const dynamicsHasFact = hasUsableDynamicsMetrics(dynamicsByManager);
-  const latestActualDate = dynamicsHasFact ? getCurrentMonthDateKey(context) : getLatestActualDate(daily);
+  const latestActualDate = getCurrentMonthDateKey(context) ?? getLatestActualDate(daily);
   const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
 
@@ -493,14 +492,6 @@ function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, conte
     || snapshot.warnings.some((warning) => warning.includes("08.09.2026") || warning.includes("быстрого снимка"));
 }
 
-function hasUsableDynamicsMetrics(metrics: Map<string, Map<string, string>>): boolean {
-  return Array.from(metrics.values()).some((managerMetrics) => (
-    numberFromMap(managerMetrics, "Обращения всего") > 0
-    || numberFromMap(managerMetrics, "Факт обращения") > 0
-    || numberFromMap(managerMetrics, "Факт Договоры") > 0
-  ));
-}
-
 function getCurrentMonthDateKey(context: SalesMonthContext): string | null {
   const today = new Date();
   const todayMonthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
@@ -515,6 +506,17 @@ function getCurrentMonthDateKey(context: SalesMonthContext): string | null {
   }
 
   return null;
+}
+
+function withSalesDepartmentFactDate(snapshot: SalesDepartmentSnapshot, context: SalesMonthContext): SalesDepartmentSnapshot {
+  const latestActualDate = getCurrentMonthDateKey(context) ?? snapshot.latestActualDate;
+  if (!latestActualDate) return snapshot;
+
+  return {
+    ...snapshot,
+    latestActualDate,
+    workingDaysPassed: Math.max(1, countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate)),
+  };
 }
 
 function readCachedSalesDepartmentSnapshot(context: SalesMonthContext): SalesDepartmentSnapshot | null {

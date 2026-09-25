@@ -673,9 +673,7 @@ function getSalesDepartmentDashboard_(payload) {
     : {};
   const managerNames = salesResolveManagerNames_(planByManager, dynamicsByManager, specialByManager, psByManager, config.managers);
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
-  const latestActualDate = salesHasUsableDynamics_(dynamicsByManager)
-    ? salesCurrentMonthDateKey_(config)
-    : salesLatestActualDate_(daily) || salesCurrentMonthDateKey_(config);
+  const latestActualDate = salesCurrentMonthDateKey_(config) || salesLatestActualDate_(daily);
   const workingDaysPassed = Math.max(
     1,
     latestActualDate
