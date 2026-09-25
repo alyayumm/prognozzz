@@ -241,28 +241,31 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
 
 export async function loadSalesDepartmentSnapshot(
   requestedMonthKey = defaultSalesDepartmentMonthKey,
-  options: { forceFresh?: boolean } = {},
+  options: { forceFresh?: boolean; allowStaleFallback?: boolean } = {},
 ): Promise<SalesDepartmentSnapshot> {
   const context = getSalesMonthContext(requestedMonthKey);
-  const cachedSnapshot = readCachedSalesDepartmentSnapshot(context);
+  const allowStaleFallback = options.allowStaleFallback ?? false;
+  const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context) : null;
 
   if (options.forceFresh) {
     const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+    if (isUsableSalesDepartmentSnapshot(gvizSnapshot) && isCompleteSalesDepartmentSnapshot(gvizSnapshot)) {
+      return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+    }
 
     const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && isCompleteSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
       return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
     }
 
-    if (cachedSnapshot) {
+    if (allowStaleFallback && cachedSnapshot) {
       return withSalesDepartmentWarning(
         withSalesDepartmentFactDate(cachedSnapshot, context),
         "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
       );
     }
 
-    if (context.monthKey === "2026-09") {
+    if (allowStaleFallback && context.monthKey === "2026-09") {
       const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
       return {
         ...embedded,
@@ -273,25 +276,27 @@ export async function loadSalesDepartmentSnapshot(
       };
     }
 
-    return gvizSnapshot;
+    throw new Error("Свежие данные отдела продаж не загрузились из Google Sheets.");
   }
 
   const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+  if (isUsableSalesDepartmentSnapshot(gvizSnapshot) && isCompleteSalesDepartmentSnapshot(gvizSnapshot)) {
+    return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(gvizSnapshot, context));
+  }
 
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && isCompleteSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
     return cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
   }
 
-  if (cachedSnapshot) {
+  if (allowStaleFallback && cachedSnapshot) {
     return withSalesDepartmentWarning(
       withSalesDepartmentFactDate(cachedSnapshot, context),
       "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
     );
   }
 
-  if (context.monthKey === "2026-09") {
+  if (allowStaleFallback && context.monthKey === "2026-09") {
     const embedded = withSalesDepartmentFactDate(buildEmbeddedSalesDepartmentSnapshot(), context);
     return {
       ...embedded,
@@ -312,7 +317,9 @@ export async function loadSalesDepartmentSnapshot(
     };
   }
 
-  return gvizSnapshot;
+  if (allowStaleFallback) return gvizSnapshot;
+
+  throw new Error("Свежие данные отдела продаж не загрузились из Google Sheets.");
 }
 
 export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {
@@ -484,6 +491,19 @@ function isUsableSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boo
     || snapshot.totals.factDeals > 0
     || snapshot.daily.some((day) => day.totalTraffic > 0 || day.totalDeals > 0)
     || snapshot.managers.some((manager) => manager.totalTraffic > 0 || manager.factQualified > 0 || manager.factDeals > 0);
+}
+
+function isCompleteSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boolean {
+  const blockingWarningParts = [
+    "План менеджеров не загрузился",
+    "Динамика отдела продаж не загрузилась",
+    "Выгрузка PS не успела",
+    "VIP и дистанты не прочитались",
+    "резервный снимок",
+    "сохраненный снимок",
+    "встроенный снимок",
+  ];
+  return !snapshot.warnings.some((warning) => blockingWarningParts.some((part) => warning.includes(part)));
 }
 
 function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, context: SalesMonthContext): boolean {

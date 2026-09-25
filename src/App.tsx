@@ -40,7 +40,6 @@ import {
 } from "./api/brandAnalyticsApi";
 import {
   dakoroManagers,
-  getCachedSalesDepartmentSnapshot,
   loadSalesDepartmentSnapshot,
   salesDepartmentRops,
   type SalesDayPoint,
@@ -890,7 +889,9 @@ export default function App() {
 
         <section className="notice">
           <CheckCircle2 size={18} />
-          {savedMessage}
+          {mode === "leadDaily"
+            ? "Отдел продаж обновляется отдельно: данные берутся из листов «Динамика», планов и PS."
+            : savedMessage}
         </section>
 
         <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
@@ -1598,19 +1599,10 @@ function SalesDepartmentDashboard({
   useEffect(() => {
     let ignore = false;
     const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey ? snapshot : null;
-    const cachedSnapshot = refreshTick === 0
-      ? getCachedSalesDepartmentSnapshot(selectedMonthConfig.monthKey)
-      : null;
+    if (!existingSnapshot) setSnapshot(null);
+    setLoadState(existingSnapshot ? "refreshing" : "loading");
 
-    if (cachedSnapshot) {
-      setSnapshot(cachedSnapshot);
-      setLoadState("refreshing");
-    } else {
-      if (!existingSnapshot) setSnapshot(null);
-      setLoadState(existingSnapshot ? "refreshing" : "loading");
-    }
-
-    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: refreshTick > 0 })
+    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: true, allowStaleFallback: false })
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
@@ -1618,7 +1610,7 @@ function SalesDepartmentDashboard({
       })
       .catch(() => {
         if (ignore) return;
-        setLoadState(existingSnapshot || cachedSnapshot ? "ready" : "error");
+        setLoadState(existingSnapshot ? "ready" : "error");
       });
 
     return () => {
@@ -1667,7 +1659,7 @@ function SalesDepartmentDashboard({
           <RefreshCw size={17} />
           {isSalesRefreshing ? "Обновляю" : "Обновить"}
         </button>
-        <span>Сразу показывает сохраненный снимок, а свежие планы, динамику и PS подтягивает в фоне.</span>
+        <span>{isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны данные последней успешной живой загрузки."}</span>
       </div>
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
