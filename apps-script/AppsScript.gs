@@ -945,35 +945,39 @@ function salesExtractPlanManagerNames_(rows) {
 function salesParseSpecialManagerTables_(sheet) {
   const result = {};
   if (!sheet) return result;
-  const headerRow = sheet.getRange('N3:W3').getDisplayValues()[0] || [];
+  const rows = sheet.getRange('A3:W79').getDisplayValues();
+  const headerRow = (rows[0] || []).slice(13, 23);
   const managerNames = salesUniqueManagers_(
     SALES_DEPARTMENT_CONFIG.managers.concat(
       headerRow.filter((value) => value && salesNormalizeLabel_(value).indexOf(salesNormalizeLabel_('Итого')) < 0),
     ),
   );
-  salesApplySpecialRangeMetric_(
-    headerRow,
-    sheet.getRange('N60:W68').getDisplayValues(),
-    sheet.getRange('A63:A68').getDisplayValues(),
-    managerNames,
-    60,
-    63,
-    'Итого',
-    'vipDeals',
-    result,
-  );
-  salesApplySpecialRangeMetric_(
-    headerRow,
-    sheet.getRange('N71:W79').getDisplayValues(),
-    sheet.getRange('A74:A79').getDisplayValues(),
-    managerNames,
-    71,
-    74,
-    'Итого',
-    'distantDeals',
-    result,
-  );
+  salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, 63, 68, 'Итого', 'vipDeals', result);
+  salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, 74, 79, 'Итого', 'distantDeals', result);
   return result;
+}
+
+function salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, labelStartRow, labelEndRow, valueLabel, field, result) {
+  let rowIndex = -1;
+  for (let sheetRow = labelStartRow; sheetRow <= labelEndRow; sheetRow += 1) {
+    const candidateIndex = sheetRow - 3;
+    if (salesNormalizeLabel_(rows[candidateIndex] && rows[candidateIndex][0]) === salesNormalizeLabel_(valueLabel)) {
+      rowIndex = candidateIndex;
+      break;
+    }
+  }
+  if (rowIndex < 0 && salesNormalizeLabel_(valueLabel) === salesNormalizeLabel_('Итого')) rowIndex = labelStartRow - 3;
+
+  const valueRow = rows[rowIndex] ? rows[rowIndex].slice(13, 23) : null;
+  if (!valueRow) return;
+
+  managerNames.forEach((managerName) => {
+    const columnIndex = headerRow.findIndex((value) => salesManagerMatches_(value, managerName));
+    if (columnIndex < 0) return;
+    const current = result[managerName] || {};
+    current[field] = salesNumber_(valueRow[columnIndex]);
+    result[managerName] = current;
+  });
 }
 
 function salesApplySpecialRangeMetric_(headerRow, valueRows, labelRows, managerNames, valueStartRow, labelStartRow, valueLabel, field, result) {
