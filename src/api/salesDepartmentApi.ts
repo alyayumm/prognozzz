@@ -3,8 +3,8 @@ import { buildEmbeddedSalesDepartmentSnapshot } from "./salesDepartmentEmbeddedS
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v3:";
-const salesDepartmentCacheTtlMs = 1000 * 60 * 60 * 12;
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v4:";
+const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
   dynamics: 12000,
