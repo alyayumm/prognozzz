@@ -1586,13 +1586,21 @@ function SalesDepartmentDashboard({
   selectedMonthConfig: MonthConfig;
 }) {
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
-  const [loadState, setLoadState] = useState<"loading" | "refreshing" | "ready" | "error">("loading");
+  const [loadState, setLoadState] = useState<"disabled" | "loading" | "refreshing" | "ready" | "error">("disabled");
   const [loadError, setLoadError] = useState("");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
   const [refreshTick, setRefreshTick] = useState(0);
+  const integrationsEnabled = false;
 
   useEffect(() => {
+    if (!integrationsEnabled) {
+      setSnapshot(null);
+      setLoadState("disabled");
+      setLoadError("");
+      return;
+    }
+
     let ignore = false;
     const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey ? snapshot : null;
     if (!existingSnapshot) setSnapshot(null);
@@ -1629,6 +1637,8 @@ function SalesDepartmentDashboard({
     ? { label: "live", tone: snapshot?.warnings.length ? "warning" : "good" }
     : loadState === "refreshing"
       ? { label: "обновляю", tone: "neutral" }
+    : loadState === "disabled"
+      ? { label: "отключено", tone: "neutral" }
     : loadState === "error"
       ? { label: "не загрузилось", tone: "danger" }
       : { label: "загрузка", tone: "neutral" };
@@ -1644,21 +1654,29 @@ function SalesDepartmentDashboard({
         facts={[
           `РОП: ${activeRop}`,
           `Менеджеров: ${managers.length || dakoroManagers.length}`,
-          snapshot ? `Рабочих дней: ${snapshot.workingDaysPassed} из ${snapshot.workingDaysInMonth}` : "Рабочие дни: расчет после загрузки",
-          snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем таблицу",
+          integrationsEnabled
+            ? snapshot ? `Рабочих дней: ${snapshot.workingDaysPassed} из ${snapshot.workingDaysInMonth}` : "Рабочие дни: расчет после загрузки"
+            : "Интеграции отключены",
+          integrationsEnabled
+            ? snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем таблицу"
+            : "Google Sheets / Apps Script не читаются",
         ]}
       />
       <div className="sales-refresh-row">
         <button
           className="secondary-button sales-refresh-button"
           type="button"
-          disabled={isSalesRefreshing}
+          disabled={!integrationsEnabled || isSalesRefreshing}
           onClick={() => setRefreshTick((value) => value + 1)}
         >
           <RefreshCw size={17} />
-          {isSalesRefreshing ? "Обновляю" : "Обновить"}
+          {!integrationsEnabled ? "Отключено" : isSalesRefreshing ? "Обновляю" : "Обновить"}
         </button>
-        <span>{isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны свежие данные из Google Sheets."}</span>
+        <span>
+          {integrationsEnabled
+            ? isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны свежие данные из Google Sheets."
+            : "Внешние интеграции отдела продаж временно отключены, чтобы не замедлять сайт."}
+        </span>
       </div>
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
@@ -1678,8 +1696,16 @@ function SalesDepartmentDashboard({
 
       {!snapshot && (
         <section className={`sales-empty-state ${loadState}`}>
-          <strong>{loadState === "error" ? "Не удалось загрузить отдел продаж" : "Собираю отдел продаж из таблиц"}</strong>
-          <span>{loadState === "error" ? loadError || "Проверь доступ к Google Sheets или попробуй обновить страницу." : "Планы, динамика и PS подтягиваются отдельными узкими запросами."}</span>
+          <strong>
+            {loadState === "disabled"
+              ? "Отдел продаж отключен от интеграций"
+              : loadState === "error" ? "Не удалось загрузить отдел продаж" : "Собираю отдел продаж из таблиц"}
+          </strong>
+          <span>
+            {loadState === "disabled"
+              ? "Google Sheets, Apps Script, PS и другие внешние чтения на этой вкладке не запускаются."
+              : loadState === "error" ? loadError || "Проверь доступ к Google Sheets или попробуй обновить страницу." : "Планы, динамика и PS подтягиваются отдельными узкими запросами."}
+          </span>
         </section>
       )}
 
