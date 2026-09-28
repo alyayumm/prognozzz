@@ -3,6 +3,7 @@ const CONFIG = {
   roistatApiKeyProperty: 'ROISTAT_API_KEY',
   roistatProjectProperty: 'ROISTAT_PROJECT_ID',
   roistatDefaultProjectId: '301351',
+  mainSpreadsheetId: '1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s',
   roistatDirectSpreadsheetId: '1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc',
   roistatDirectMonthlySheet: 'помесячно',
   receivablesSpreadsheetId: '1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI',
@@ -26,6 +27,10 @@ const CONFIG = {
     metrikaDaily: 'Yandex_Metrika_Daily',
   },
 };
+
+function getWeeklyReportSpreadsheet_() {
+  return SpreadsheetApp.openById(CONFIG.mainSpreadsheetId);
+}
 
 const SALES_DEPARTMENT_CONFIG = {
   dynamicsSpreadsheetId: '1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI',
@@ -417,7 +422,7 @@ function verifyPassword_(password) {
 }
 
 function ensureServiceSheets_() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = getWeeklyReportSpreadsheet_();
   Object.keys(CONFIG.sheets).forEach((key) => {
     const title = CONFIG.sheets[key];
     let sheet = ss.getSheetByName(title);
@@ -436,7 +441,7 @@ function ensureServiceSheets_() {
 }
 
 function formatServiceSheetKeys_() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = getWeeklyReportSpreadsheet_();
   [
     { sheet: CONFIG.sheets.months, column: 1 },
     { sheet: CONFIG.sheets.plans, column: 1 },
@@ -1618,7 +1623,7 @@ function aggregateYandexMetrikaRows_(rawRows, warnings) {
 }
 
 function replaceMetrikaRowsForRange_(records, range) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.metrikaDaily);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.metrikaDaily);
   const existing = readObjects_(CONFIG.sheets.metrikaDaily).filter((row) => {
     const date = normalizeRoistatDate_(row.date);
     return date && (date < range.fromDate || date > range.toDate);
@@ -1774,7 +1779,7 @@ function refreshRoistatFields_() {
       updatedAt: now,
     }));
   const rows = metrics.concat(dimensions).filter((item) => item.name);
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.roistatFields);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.roistatFields);
   sheet.clearContents();
   sheet.getRange(1, 1, 1, HEADERS.Roistat_Fields.length).setValues([HEADERS.Roistat_Fields]);
   sheet.setFrozenRows(1);
@@ -2754,7 +2759,7 @@ function sanitizeRoistatText_(text) {
 }
 
 function logRoistatSync_(result) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.roistatSyncLog);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.roistatSyncLog);
   if (!sheet) return;
   sheet.appendRow([
     Utilities.getUuid(),
@@ -2782,7 +2787,7 @@ function createMonth_(payload) {
   const plansByCity = hasDailyAverage
     ? buildMonthlyPlansFromDailyAverage_(year, monthIndex, daysInMonth, dailyAverageByCity, coefficients)
     : normalizePlansByCity_(payload.plansByCity);
-  const monthsSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.months);
+  const monthsSheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.months);
   const existing = readObjects_(CONFIG.sheets.months).some((row) => row.monthKey === monthKey);
 
   if (!existing) {
@@ -2815,7 +2820,7 @@ function createMonth_(payload) {
 
 function upsertDailyValues_(payload) {
   const rows = Array.isArray(payload.records) ? payload.records : [];
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.daily);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.daily);
   const existing = readObjects_(CONFIG.sheets.daily);
   const rowById = {};
   existing.forEach((row, index) => {
@@ -2840,7 +2845,7 @@ function upsertDailyValues_(payload) {
 function upsertEvent_(payload) {
   const event = payload.event || payload;
   validateEvent_(event);
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.events);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.events);
   const existing = readObjects_(CONFIG.sheets.events);
   const rowIndex = existing.findIndex((row) => row.id === event.id);
   const values = eventRow_(event);
@@ -2858,7 +2863,7 @@ function deleteEvent_(payload) {
     throw new Error('Не передан id события');
   }
 
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.events);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.events);
   const existing = readObjects_(CONFIG.sheets.events);
   const rowIndex = existing.findIndex((row) => String(row.id) === id);
   if (rowIndex >= 0) {
@@ -2882,7 +2887,7 @@ function getWeeklySummary_(payload) {
 }
 
 function rebuildWeeklySummary_(monthKey) {
-  const ss = SpreadsheetApp.getActive();
+  const ss = getWeeklyReportSpreadsheet_();
   const sheet = ss.getSheetByName(CONFIG.sheets.weekly);
   const all = readObjects_(CONFIG.sheets.weekly).filter((row) => row.monthKey !== monthKey);
   const records = readObjects_(CONFIG.sheets.daily).filter((row) => row.month === monthKey);
@@ -2939,7 +2944,7 @@ function rebuildWeeklySummary_(monthKey) {
 }
 
 function readObjects_(sheetName) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(sheetName);
   if (!sheet || sheet.getLastRow() < 2) return [];
   const values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
   const headers = values.shift();
@@ -2973,7 +2978,7 @@ function readObjects_(sheetName) {
 }
 
 function upsertRowsById_(sheetName, headers, records, mapRow) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(sheetName);
   const existing = readObjects_(sheetName);
   const rowsById = {};
   existing.forEach((row, index) => {
@@ -3123,7 +3128,7 @@ function decorateMonthConfig_(month, plans) {
 }
 
 function upsertMonthPlans_(monthKey, plansByCity) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.plans);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.plans);
   const existing = readObjects_(CONFIG.sheets.plans);
   const rowByKey = {};
   existing.forEach((row, index) => {
@@ -3144,7 +3149,7 @@ function upsertMonthPlans_(monthKey, plansByCity) {
 }
 
 function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plansByCity, dailyAverageByCity, coefficients) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.daily);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.daily);
   const existing = readObjects_(CONFIG.sheets.daily);
   const rowById = {};
   const currentById = {};
@@ -3340,7 +3345,7 @@ function normalizeForecastCoefficients_(value) {
 }
 
 function writeForecastCoefficients_(coefficients) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.sheets.coefficients);
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.coefficients);
   const headers = HEADERS.Forecast_Coefficients;
   const rows = [];
   FORECAST_CITIES.forEach((city) => {
