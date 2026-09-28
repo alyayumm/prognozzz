@@ -270,10 +270,6 @@ export async function loadSalesDepartmentSnapshot(
         : liveSnapshot;
     }
 
-    if (serviceSnapshot && isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-      throw new SalesDepartmentLoadError("Apps Script возвращает старый снимок отдела продаж. Нужно развернуть свежую версию Weekly Report API.");
-    }
-
     if (allowStaleFallback && cachedSnapshot) {
       return withSalesDepartmentWarning(
         withSalesDepartmentFactDate(cachedSnapshot, context),
@@ -510,8 +506,7 @@ function isCompleteSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): b
 
 function isStaleSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, context: SalesMonthContext): boolean {
   return snapshot.monthKey !== context.monthKey
-    || snapshot.monthLabel !== context.monthLabel
-    || snapshot.warnings.some((warning) => warning.includes("08.09.2026") || warning.includes("быстрого снимка"));
+    || snapshot.monthLabel !== context.monthLabel;
 }
 
 function getCurrentMonthDateKey(context: SalesMonthContext): string | null {
