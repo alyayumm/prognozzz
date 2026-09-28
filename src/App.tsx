@@ -651,16 +651,11 @@ export default function App() {
     setSavedMessage("Сохраняю день в Google Sheets...");
     try {
       const monthKey = sanitized[0]?.date.slice(0, 7);
-      if (monthKey) {
-        await ensureRemoteMonth(monthKey, writePassword);
-      }
       await callReportApi("upsertDailyValues", { monthKey, records: sanitized }, writePassword);
-      mergeDailyValues(sanitized);
-      if (monthKey) {
-        await verifySharedDailySave(sanitized);
-      }
+      const nextRecords = mergeDailyValues(sanitized);
+      const aggregateIssue = validateAggregates(nextRecords);
 
-      setSavedMessage("Сохранено в общую Google-таблицу. Данные будут видны с любого компьютера.");
+      setSavedMessage(aggregateIssue ?? "Сохранено в общую Google-таблицу. Данные будут видны с любого компьютера.");
     } catch (error) {
       setSavedMessage(`Не удалось сохранить данные. Проверьте подключение или формат значений. ${getErrorMessage(error)}`);
     } finally {
@@ -8706,38 +8701,6 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
       comment: encodeOmQualifiedInComment(value.comment ?? current?.comment ?? "", omQualified),
     };
   });
-}
-
-async function verifySharedDailySave(values: DailyValueUpdate[]) {
-  const importantValues = values.filter((value) =>
-    value.fact !== undefined || value.recommendations !== undefined || value.omQualified !== undefined,
-  );
-  if (!importantValues.length) return;
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt > 0) {
-      await waitForGoogleSheetRefresh(1200 * attempt);
-    }
-
-    const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
-    const recordMap = new Map(snapshot.records.map((record) => [dailyRecordLookupKey(record), record]));
-    const allSaved = importantValues.every((value) => {
-      const record = recordMap.get(dailyValueLookupKey(value));
-      if (!record) return false;
-      if (value.fact !== undefined && record.fact !== Math.max(0, Number(value.fact) || 0)) return false;
-      if (value.recommendations !== undefined && record.recommendations !== Math.max(0, Number(value.recommendations) || 0)) return false;
-      if (value.metric === "Квалы" && value.omQualified !== undefined && record.omQualified !== Math.max(0, Number(value.omQualified) || 0)) return false;
-      return true;
-    });
-
-    if (allSaved) return;
-  }
-
-  throw new Error("Google Sheets пока не вернул сохраненные значения. Нажмите сохранить еще раз или проверьте доступ Apps Script.");
-}
-
-function waitForGoogleSheetRefresh(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {

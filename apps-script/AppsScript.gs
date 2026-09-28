@@ -2838,8 +2838,10 @@ function upsertDailyValues_(payload) {
     }
   });
 
-  rebuildWeeklySummary_(payload.monthKey);
-  return { updated: rows.length };
+  if (payload.rebuildSummary === true) {
+    rebuildWeeklySummary_(payload.monthKey);
+  }
+  return { updated: rows.length, summaryRebuilt: payload.rebuildSummary === true };
 }
 
 function upsertEvent_(payload) {
