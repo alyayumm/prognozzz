@@ -2,14 +2,14 @@ import { callReportApi } from "./reportApi";
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v8:";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v9:";
 const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
   dynamics: 12000,
   daily: 12000,
   ps: 14000,
-  special: 14000,
+  special: 35000,
   service: 10000,
 };
 
@@ -345,7 +345,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", gvizTimeouts.dynamics)),
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", gvizTimeouts.daily)),
     settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", gvizTimeouts.ps)),
-    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A3:W79", gvizTimeouts.special)),
+    settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A60:W79", gvizTimeouts.special)),
   ]);
 
   const planByManager = planResult.ok ? parsePlanSheet(planResult.value) : new Map<string, ManagerPlan>();
@@ -371,7 +371,9 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
 
   const psByManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey, baseManagerNames) : new Map<string, ManagerPsMetrics>();
   if (!psResult.ok) warnings.push("Выгрузка PS не успела загрузиться: VIP, дистант и средний чек показаны только там, где есть данные динамики.");
-  const specialByManager = specialResult.ok ? parseSpecialManagerTables(specialResult.value, baseManagerNames) : new Map<string, ManagerSpecialMetrics>();
+  const specialByManager = dynamicsResult.ok && specialResult.ok
+    ? parseSpecialManagerTables(dynamicsResult.value, specialResult.value, baseManagerNames)
+    : new Map<string, ManagerSpecialMetrics>();
   if (!specialResult.ok) warnings.push("VIP и дистанты не прочитались из мини-таблиц листа Динамика.");
 
   const managerNames = uniqueManagers([
@@ -723,46 +725,38 @@ function parseRopDynamicsSheet(table: GvizTable, ropName: string): { managers: s
   return { managers: uniqueManagers(managers), metrics };
 }
 
-function parseSpecialManagerTables(table: GvizTable, managerNames: readonly string[]): Map<string, ManagerSpecialMetrics> {
-  const rows = rowsToMatrix(table);
+function parseSpecialManagerTables(headerTable: GvizTable, specialTable: GvizTable, managerNames: readonly string[]): Map<string, ManagerSpecialMetrics> {
+  const headerRows = rowsToMatrix(headerTable);
+  const rows = rowsToMatrix(specialTable);
   const result = new Map<string, ManagerSpecialMetrics>();
-  const headerRow = (rows[0] ?? []).slice(13, 23);
-  const resolvedManagers = uniqueManagers([
-    ...managerNames,
-    ...headerRow.filter((value) => value && !normalizeLabel(value).includes(normalizeLabel("Итого"))),
-  ]);
+  const managerRow = findMatrixRow(headerRows, "Менеджеры");
+  const resolvedManagers = uniqueManagers(managerNames);
 
-  applySpecialSheetRowMetric(rows, headerRow, resolvedManagers, 63, 68, "Итого", "vipDeals", result);
-  applySpecialSheetRowMetric(rows, headerRow, resolvedManagers, 74, 79, "Итого", "distantDeals", result);
+  applySpecialSheetRowMetric(rows, managerRow, resolvedManagers, 0, "vipDeals", result);
+  applySpecialSheetRowMetric(rows, managerRow, resolvedManagers, 1, "distantDeals", result);
 
   return result;
 }
 
 function applySpecialSheetRowMetric(
   rows: string[][],
-  headerRow: string[],
+  managerRow: string[],
   managerNames: readonly string[],
-  labelStartRow: number,
-  labelEndRow: number,
-  valueLabel: string,
+  labelOccurrence: number,
   field: keyof ManagerSpecialMetrics,
   result: Map<string, ManagerSpecialMetrics>,
 ) {
-  let rowIndex = -1;
-  for (let sheetRow = labelStartRow; sheetRow <= labelEndRow; sheetRow += 1) {
-    const candidateIndex = sheetRow - 3;
-    if (normalizeLabel(rows[candidateIndex]?.[0] ?? "") === normalizeLabel(valueLabel)) {
-      rowIndex = candidateIndex;
-      break;
-    }
-  }
-  if (rowIndex < 0 && normalizeLabel(valueLabel) === normalizeLabel("Итого")) rowIndex = labelStartRow - 3;
-
-  const valueRow = rows[rowIndex]?.slice(13, 23);
+  let seen = 0;
+  const valueRow = rows.find((row) => {
+    if (normalizeLabel(row[0] ?? "") !== normalizeLabel("Итого")) return false;
+    const isTarget = seen === labelOccurrence;
+    seen += 1;
+    return isTarget;
+  });
   if (!valueRow) return;
 
   managerNames.forEach((managerName) => {
-    const columnIndex = headerRow.findIndex((value) => managerMatches(value, managerName));
+    const columnIndex = managerRow.findIndex((value) => managerMatches(value, managerName));
     if (columnIndex < 0) return;
     const current = result.get(managerName) ?? {};
     current[field] = toNumber(valueRow[columnIndex]);

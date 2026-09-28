@@ -1658,7 +1658,7 @@ function SalesDepartmentDashboard({
           <RefreshCw size={17} />
           {isSalesRefreshing ? "Обновляю" : "Обновить"}
         </button>
-        <span>{isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны данные последней успешной живой загрузки."}</span>
+        <span>{isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны свежие данные из Google Sheets."}</span>
       </div>
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
