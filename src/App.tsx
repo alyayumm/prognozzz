@@ -1599,7 +1599,7 @@ function SalesDepartmentDashboard({
     setLoadState(existingSnapshot ? "refreshing" : "loading");
     setLoadError("");
 
-    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: true, allowStaleFallback: false })
+    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: true, allowStaleFallback: true })
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
@@ -1630,7 +1630,7 @@ function SalesDepartmentDashboard({
     : loadState === "refreshing"
       ? { label: "обновляю", tone: "neutral" }
     : loadState === "error"
-      ? { label: "нет доступа", tone: "danger" }
+      ? { label: "не загрузилось", tone: "danger" }
       : { label: "загрузка", tone: "neutral" };
   const isSalesRefreshing = loadState === "loading" || loadState === "refreshing";
 

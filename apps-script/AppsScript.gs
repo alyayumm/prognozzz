@@ -946,34 +946,28 @@ function salesExtractPlanManagerNames_(rows) {
 function salesParseSpecialManagerTables_(sheet) {
   const result = {};
   if (!sheet) return result;
-  const rows = sheet.getRange('A3:W79').getDisplayValues();
-  const headerRow = (rows[0] || []).slice(13, 23);
-  const managerNames = salesUniqueManagers_(
-    SALES_DEPARTMENT_CONFIG.managers.concat(
-      headerRow.filter((value) => value && salesNormalizeLabel_(value).indexOf(salesNormalizeLabel_('Итого')) < 0),
-    ),
-  );
-  salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, 63, 68, 'Итого', 'vipDeals', result);
-  salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, 74, 79, 'Итого', 'distantDeals', result);
+  const headerRows = sheet.getRange('A1:AZ38').getDisplayValues();
+  const rows = sheet.getRange('A60:W79').getDisplayValues();
+  const managerRow = salesFindRow_(headerRows, 'Менеджеры');
+  const managerNames = salesUniqueManagers_(SALES_DEPARTMENT_CONFIG.managers);
+
+  salesApplySpecialSheetRowMetric_(rows, managerRow, managerNames, 0, 'vipDeals', result);
+  salesApplySpecialSheetRowMetric_(rows, managerRow, managerNames, 1, 'distantDeals', result);
   return result;
 }
 
-function salesApplySpecialSheetRowMetric_(rows, headerRow, managerNames, labelStartRow, labelEndRow, valueLabel, field, result) {
-  let rowIndex = -1;
-  for (let sheetRow = labelStartRow; sheetRow <= labelEndRow; sheetRow += 1) {
-    const candidateIndex = sheetRow - 3;
-    if (salesNormalizeLabel_(rows[candidateIndex] && rows[candidateIndex][0]) === salesNormalizeLabel_(valueLabel)) {
-      rowIndex = candidateIndex;
-      break;
-    }
-  }
-  if (rowIndex < 0 && salesNormalizeLabel_(valueLabel) === salesNormalizeLabel_('Итого')) rowIndex = labelStartRow - 3;
-
-  const valueRow = rows[rowIndex] ? rows[rowIndex].slice(13, 23) : null;
+function salesApplySpecialSheetRowMetric_(rows, managerRow, managerNames, labelOccurrence, field, result) {
+  let seen = 0;
+  const valueRow = rows.find((row) => {
+    if (salesNormalizeLabel_(row[0]) !== salesNormalizeLabel_('Итого')) return false;
+    const isTarget = seen === labelOccurrence;
+    seen += 1;
+    return isTarget;
+  });
   if (!valueRow) return;
 
   managerNames.forEach((managerName) => {
-    const columnIndex = headerRow.findIndex((value) => salesManagerMatches_(value, managerName));
+    const columnIndex = managerRow.findIndex((value) => salesManagerMatches_(value, managerName));
     if (columnIndex < 0) return;
     const current = result[managerName] || {};
     current[field] = salesNumber_(valueRow[columnIndex]);

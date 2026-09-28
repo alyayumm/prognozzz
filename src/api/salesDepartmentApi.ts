@@ -254,9 +254,9 @@ export async function loadSalesDepartmentSnapshot(
   const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context) : null;
 
   if (options.forceFresh) {
-    const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-    if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) {
-      const liveSnapshot = withSalesDepartmentFactDate(gvizSnapshot, context);
+    const gvizResult = await settle(loadSalesDepartmentGvizSnapshot(context));
+    if (gvizResult.ok && isUsableSalesDepartmentSnapshot(gvizResult.value)) {
+      const liveSnapshot = withSalesDepartmentFactDate(gvizResult.value, context);
       return isCompleteSalesDepartmentSnapshot(liveSnapshot)
         ? cacheSalesDepartmentSnapshot(liveSnapshot)
         : liveSnapshot;
@@ -281,12 +281,12 @@ export async function loadSalesDepartmentSnapshot(
       );
     }
 
-    throw new SalesDepartmentLoadError("Свежие данные отдела продаж не загрузились из Google Sheets.");
+    throw new SalesDepartmentLoadError("Отдел продаж не загрузился: Google Sheets не дал доступ, Apps Script не вернул резерв.");
   }
 
-  const gvizSnapshot = await loadSalesDepartmentGvizSnapshot(context);
-  if (isUsableSalesDepartmentSnapshot(gvizSnapshot)) {
-    const liveSnapshot = withSalesDepartmentFactDate(gvizSnapshot, context);
+  const gvizResult = await settle(loadSalesDepartmentGvizSnapshot(context));
+  if (gvizResult.ok && isUsableSalesDepartmentSnapshot(gvizResult.value)) {
+    const liveSnapshot = withSalesDepartmentFactDate(gvizResult.value, context);
     return isCompleteSalesDepartmentSnapshot(liveSnapshot)
       ? cacheSalesDepartmentSnapshot(liveSnapshot)
       : liveSnapshot;
@@ -317,9 +317,9 @@ export async function loadSalesDepartmentSnapshot(
     };
   }
 
-  if (allowStaleFallback) return gvizSnapshot;
+  if (allowStaleFallback && gvizResult.ok) return gvizResult.value;
 
-  throw new Error("Свежие данные отдела продаж не загрузились из Google Sheets.");
+  throw new Error("Отдел продаж не загрузился: Google Sheets не дал доступ, Apps Script не вернул резерв.");
 }
 
 export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {
