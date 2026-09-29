@@ -10,7 +10,7 @@ const gvizTimeouts = {
   daily: 12000,
   ps: 14000,
   special: 35000,
-  service: 10000,
+  service: 90000,
 };
 
 export const salesDepartmentRops = ["Дакоро", "Гурьянов", "Саркисов"] as const;
@@ -272,12 +272,19 @@ export async function loadSalesDepartmentSnapshot(
   const allowStaleFallback = options.allowStaleFallback ?? false;
   const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context) : null;
 
-  const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
+  let serviceSnapshot: SalesDepartmentSnapshot | null = null;
+  let serviceError = "";
+  try {
+    serviceSnapshot = normalizeSalesDepartmentSnapshot(await loadSalesDepartmentServiceSnapshot(context));
+  } catch (error) {
+    serviceError = getSalesDepartmentErrorMessage(error);
+  }
+
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-    const liveSnapshot = withSalesDepartmentFactDate(serviceSnapshot, context);
+    const liveSnapshot = cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
     return isCompleteSalesDepartmentSnapshot(liveSnapshot)
-      ? cacheSalesDepartmentSnapshot(liveSnapshot)
-      : liveSnapshot;
+      ? liveSnapshot
+      : withSalesDepartmentWarning(liveSnapshot, "Apps Script вернул снимок отдела продаж с предупреждениями.");
   }
 
   if (allowStaleFallback && cachedSnapshot) {
@@ -288,16 +295,20 @@ export async function loadSalesDepartmentSnapshot(
   }
 
   if (serviceSnapshot) {
+    const staleWarning = isStaleSalesDepartmentSnapshot(serviceSnapshot, context)
+      ? `Apps Script вернул ${serviceSnapshot.monthKey || "другой месяц"} вместо ${context.monthKey}.`
+      : "";
     return {
       ...withSalesDepartmentFactDate(serviceSnapshot, context),
       warnings: [
         ...serviceSnapshot.warnings,
+        ...(staleWarning ? [staleWarning] : []),
         "amoCRM вернула неполный снимок отдела продаж.",
       ],
     };
   }
 
-  throw new Error("Отдел продаж не загрузился: Apps Script не вернул amoCRM-снимок.");
+  throw new Error(serviceError ? `Отдел продаж не загрузился: ${serviceError}` : "Отдел продаж не загрузился: Apps Script не вернул amoCRM-снимок.");
 }
 
 export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {
@@ -305,15 +316,11 @@ export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSale
 }
 
 async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
-  try {
-    return await withTimeout(
-      callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey }),
-      gvizTimeouts.service,
-      "Sales department Apps Script timeout",
-    );
-  } catch {
-    return null;
-  }
+  return await withTimeout(
+    callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey }),
+    gvizTimeouts.service,
+    "Apps Script не успел ответить за 90 секунд",
+  );
 }
 
 async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot> {
@@ -471,6 +478,38 @@ function isUsableSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boo
     || snapshot.totals.factDeals > 0
     || snapshot.daily.some((day) => day.totalTraffic > 0 || day.totalDeals > 0)
     || snapshot.managers.some((manager) => manager.totalTraffic > 0 || manager.factQualified > 0 || manager.factDeals > 0);
+}
+
+function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | null): SalesDepartmentSnapshot | null {
+  if (!snapshot) return null;
+  const totals = snapshot.totals ?? ({} as SalesDepartmentTotals);
+  const managers = Array.isArray(snapshot.managers) ? snapshot.managers : [];
+  const daily = Array.isArray(snapshot.daily) ? snapshot.daily : [];
+  return {
+    ...snapshot,
+    managers: managers.map((manager) => ({
+      ...manager,
+      refusalLeads: Number(manager.refusalLeads ?? 0),
+      notQualifiedLeads: Number(manager.notQualifiedLeads ?? 0),
+      notQualifiedDetails: Array.isArray(manager.notQualifiedDetails) ? manager.notQualifiedDetails : [],
+    })),
+    daily,
+    totals: {
+      ...totals,
+      totalTraffic: Number(totals.totalTraffic ?? 0),
+      factQualified: Number(totals.factQualified ?? 0),
+      factDeals: Number(totals.factDeals ?? 0),
+      refusalLeads: Number(totals.refusalLeads ?? 0),
+      notQualifiedLeads: Number(totals.notQualifiedLeads ?? 0),
+      notQualifiedDetails: Array.isArray(totals.notQualifiedDetails) ? totals.notQualifiedDetails : [],
+    },
+    warnings: Array.isArray(snapshot.warnings) ? snapshot.warnings : [],
+    sourceLinks: snapshot.sourceLinks ?? { dynamics: "", plans: "" },
+  };
+}
+
+function getSalesDepartmentErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || "");
 }
 
 function isCompleteSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): boolean {
