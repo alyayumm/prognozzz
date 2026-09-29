@@ -44,6 +44,19 @@ export type SalesDayPoint = {
   spbDeals: number;
 };
 
+export type SalesNotQualifiedDetail = {
+  id: string;
+  leadId: string;
+  name: string;
+  date: string;
+  manager: string;
+  city: string;
+  stage: string;
+  pipeline: string;
+  type: string;
+  url?: string;
+};
+
 export type SalesManagerMetrics = {
   name: string;
   displayName: string;
@@ -85,6 +98,9 @@ export type SalesManagerMetrics = {
   revenue: number | null;
   linearDealsForecast: number;
   linearQualifiedForecast: number;
+  refusalLeads?: number;
+  notQualifiedLeads?: number;
+  notQualifiedDetails?: SalesNotQualifiedDetail[];
 };
 
 export type SalesDepartmentTotals = {
@@ -109,6 +125,9 @@ export type SalesDepartmentTotals = {
   conversionToDeals: number | null;
   dealPlanCompletion: number;
   linearDealsForecast: number;
+  refusalLeads?: number;
+  notQualifiedLeads?: number;
+  notQualifiedDetails?: SalesNotQualifiedDetail[];
 };
 
 export type SalesDepartmentSnapshot = {
@@ -253,41 +272,6 @@ export async function loadSalesDepartmentSnapshot(
   const allowStaleFallback = options.allowStaleFallback ?? false;
   const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context) : null;
 
-  if (options.forceFresh) {
-    const gvizResult = await settle(loadSalesDepartmentGvizSnapshot(context));
-    if (gvizResult.ok && isUsableSalesDepartmentSnapshot(gvizResult.value)) {
-      const liveSnapshot = withSalesDepartmentFactDate(gvizResult.value, context);
-      return isCompleteSalesDepartmentSnapshot(liveSnapshot)
-        ? cacheSalesDepartmentSnapshot(liveSnapshot)
-        : liveSnapshot;
-    }
-
-    const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
-    if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-      const liveSnapshot = withSalesDepartmentFactDate(serviceSnapshot, context);
-      return isCompleteSalesDepartmentSnapshot(liveSnapshot)
-        ? cacheSalesDepartmentSnapshot(liveSnapshot)
-        : liveSnapshot;
-    }
-
-    if (allowStaleFallback && cachedSnapshot) {
-      return withSalesDepartmentWarning(
-        withSalesDepartmentFactDate(cachedSnapshot, context),
-        "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
-      );
-    }
-
-    throw new SalesDepartmentLoadError("Отдел продаж не загрузился: Google Sheets не дал доступ, Apps Script не вернул резерв.");
-  }
-
-  const gvizResult = await settle(loadSalesDepartmentGvizSnapshot(context));
-  if (gvizResult.ok && isUsableSalesDepartmentSnapshot(gvizResult.value)) {
-    const liveSnapshot = withSalesDepartmentFactDate(gvizResult.value, context);
-    return isCompleteSalesDepartmentSnapshot(liveSnapshot)
-      ? cacheSalesDepartmentSnapshot(liveSnapshot)
-      : liveSnapshot;
-  }
-
   const serviceSnapshot = await loadSalesDepartmentServiceSnapshot(context);
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
     const liveSnapshot = withSalesDepartmentFactDate(serviceSnapshot, context);
@@ -299,7 +283,7 @@ export async function loadSalesDepartmentSnapshot(
   if (allowStaleFallback && cachedSnapshot) {
     return withSalesDepartmentWarning(
       withSalesDepartmentFactDate(cachedSnapshot, context),
-      "Живые таблицы не успели ответить, показан последний сохраненный снимок.",
+      "amoCRM не успела ответить, показан последний сохраненный снимок.",
     );
   }
 
@@ -308,14 +292,12 @@ export async function loadSalesDepartmentSnapshot(
       ...withSalesDepartmentFactDate(serviceSnapshot, context),
       warnings: [
         ...serviceSnapshot.warnings,
-        "Прямое чтение Google Sheets не вернуло данные, показан Apps Script-снимок.",
+        "amoCRM вернула неполный снимок отдела продаж.",
       ],
     };
   }
 
-  if (allowStaleFallback && gvizResult.ok) return gvizResult.value;
-
-  throw new Error("Отдел продаж не загрузился: Google Sheets не дал доступ, Apps Script не вернул резерв.");
+  throw new Error("Отдел продаж не загрузился: Apps Script не вернул amoCRM-снимок.");
 }
 
 export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {

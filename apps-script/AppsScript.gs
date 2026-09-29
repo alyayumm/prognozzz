@@ -722,56 +722,36 @@ function getBrandAliases_() {
 }
 
 function getSalesDepartmentDashboard_(payload) {
-  const config = SALES_DEPARTMENT_CONFIG;
+  const config = salesDepartmentConfigForRequest_(payload);
   const warnings = [];
 
-  const live = salesReadLiveDepartmentData_(config, warnings);
-  const planByManager = salesHasAnyObjectValues_(live.planByManager)
-    ? live.planByManager
-    : salesStaticPlanByManager_();
-  const dynamicsByManager = live.dynamicsByManager || {};
-  const daily = live.daily || [];
-  const psByManager = live.psByManager || {};
-  const specialByManager = salesHasAnyObjectValues_(live.specialByManager)
-    ? live.specialByManager
-    : {};
-  const managerNames = salesResolveManagerNames_(planByManager, dynamicsByManager, specialByManager, psByManager, config.managers);
+  const planByManager = salesStaticPlanByManager_();
+  const amo = salesReadAmoDepartmentData_(config, warnings);
+  const managerNames = salesResolveManagerNames_(planByManager, amo.byManager, {}, {}, config.managers);
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
-  const latestActualDate = salesCurrentMonthDateKey_(config) || salesLatestActualDate_(daily);
+  const latestActualDate = salesLatestActualDate_(amo.daily) || salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
     1,
     latestActualDate
       ? salesCountWorkingDaysUntil_(config.monthYear, config.monthIndex, latestActualDate)
       : 1,
   );
-  const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || workingDaysPassed;
-
-  if (!salesHasUsableDynamics_(live.dynamicsByManager)) {
-    warnings.push('Динамика отдела продаж не прочиталась из живого листа.');
-  }
-  if (!daily.length) {
-    warnings.push('Дневная динамика не прочиталась из живого листа, дата факта посчитана календарно.');
-  }
-  if (!salesHasAnyObjectValues_(live.psByManager)) {
-    warnings.push('Выгрузка PS не прочиталась из живого листа.');
-  }
+  const activeCalendarDays = amo.daily.filter((day) => day.totalTraffic > 0 || day.totalQualified > 0 || day.totalDeals > 0).length || workingDaysPassed;
 
   const managers = managerNames.map((name) => {
     const plan = salesGetManagerValue_(planByManager, name) || salesEmptyPlan_();
-    const dynamic = salesGetManagerValue_(dynamicsByManager, name) || {};
-    const ps = salesGetManagerValue_(psByManager, name) || null;
-    const special = salesGetManagerValue_(specialByManager, name) || null;
-    const factDeals = salesNumber_(dynamic['Факт Договоры']);
-    const factQualified = salesNumber_(dynamic['Факт обращения']) || salesNumber_(dynamic['Обращения целевые']);
-    const totalTraffic = salesNumber_(dynamic['Обращения всего']);
-    const forecastDeals = salesNumber_(dynamic['Прогноз Шт']);
-    const forecastQualified = salesNumber_(dynamic['Прогноз обращения']);
-    const revenue = ps ? ps.revenue : null;
-    const orderCount = ps ? ps.orderCount : null;
+    const fact = salesGetManagerValue_(amo.byManager, name) || salesEmptyAmoManagerStats_(name);
+    const factDeals = fact.factDeals;
+    const factQualified = fact.factQualified;
+    const totalTraffic = fact.totalTraffic;
+    const forecastDeals = salesLinearForecast_(factDeals, workingDaysPassed, workingDaysInMonth);
+    const forecastQualified = salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth);
+    const revenue = fact.revenue;
+    const orderCount = fact.orderCount;
 
     return {
       name: name,
-      displayName: dynamic['Менеджеры'] || name,
+      displayName: name,
       planTraffic: plan.planTraffic,
       planQualified: plan.planQualified,
       planDeals: plan.planDeals,
@@ -780,38 +760,46 @@ function getSalesDepartmentDashboard_(payload) {
       totalTraffic: totalTraffic,
       factQualified: factQualified,
       forecastQualified: forecastQualified,
-      siteRequests: salesNumber_(dynamic['Заявки с сайта']),
-      calls: salesNumber_(dynamic['Звонки']),
-      quizRequests: salesNumber_(dynamic['Симакин и квизы']),
-      applications: salesNumber_(dynamic['Заявки']),
+      siteRequests: fact.applications,
+      calls: fact.calls,
+      quizRequests: 0,
+      applications: fact.applications,
       factDeals: factDeals,
       forecastDeals: forecastDeals,
-      lagDeals: salesNumber_(dynamic['Отставание']),
-      abDeals: Math.max(salesNumber_(dynamic['A+B']), ps ? ps.abDeals : 0),
-      sheetFactCompletion: salesNullablePercent_(dynamic['Факт, %']),
-      sheetForecastCompletion: salesNullablePercent_(dynamic['Прогноз, %']),
-      planConversion: salesNullablePercent_(dynamic['План конверсия']) || salesPercent_(plan.planDeals, plan.planQualified),
-      factConversion: salesNullablePercent_(dynamic['Факт коверсия']) || salesPercent_(factDeals, factQualified),
-      totalConversion: salesNullablePercent_(dynamic['Факт конверсия из всего']) || salesPercent_(factDeals, totalTraffic),
-      applicationsToDeals: salesNullablePercent_(dynamic['Доля договоров от заявок']),
-      mskTraffic: salesNumber_(dynamic['Факт обращения всего МСК']),
-      spbTraffic: salesNumber_(dynamic['Факт обращения всего СПБ']),
-      mskQualified: salesNumber_(dynamic['Факт обращения целевые МСК']),
-      spbQualified: salesNumber_(dynamic['Факт обращения целевые СПБ']),
-      mskDeals: salesNumber_(dynamic['Факт договоры МСК']),
-      spbDeals: salesNumber_(dynamic['Факт  договоры СПБ']),
-      mskConversion: salesPercent_(salesNumber_(dynamic['Факт договоры МСК']), salesNumber_(dynamic['Факт обращения целевые МСК'])),
-      spbConversion: salesPercent_(salesNumber_(dynamic['Факт  договоры СПБ']), salesNumber_(dynamic['Факт обращения целевые СПБ'])),
-      vipDeals: special && special.vipDeals !== undefined ? special.vipDeals : (ps ? ps.vipDeals : null),
-      distantDeals: special && special.distantDeals !== undefined ? special.distantDeals : (ps ? ps.distantDeals : null),
-      paidDeals: ps ? ps.paidDeals : null,
+      lagDeals: Math.max(0, plan.planDeals - factDeals),
+      abDeals: fact.abDeals,
+      sheetFactCompletion: salesPercent_(factDeals, plan.planDeals),
+      sheetForecastCompletion: salesPercent_(forecastDeals, plan.planDeals),
+      planConversion: salesPercent_(plan.planDeals, plan.planQualified),
+      factConversion: salesPercent_(factDeals, factQualified),
+      totalConversion: salesPercent_(factDeals, totalTraffic),
+      applicationsToDeals: salesPercent_(factDeals, fact.applications),
+      mskTraffic: fact.mskTraffic,
+      spbTraffic: fact.spbTraffic,
+      mskQualified: fact.mskQualified,
+      spbQualified: fact.spbQualified,
+      mskDeals: fact.mskDeals,
+      spbDeals: fact.spbDeals,
+      mskConversion: salesPercent_(fact.mskDeals, fact.mskQualified),
+      spbConversion: salesPercent_(fact.spbDeals, fact.spbQualified),
+      vipDeals: fact.vipDeals,
+      distantDeals: fact.distantDeals,
+      paidDeals: fact.paidDeals,
       orderCount: orderCount,
       avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
       revenue: revenue,
       linearDealsForecast: salesLinearForecast_(factDeals, workingDaysPassed, workingDaysInMonth),
       linearQualifiedForecast: salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth),
+      refusalLeads: fact.refusalLeads,
+      notQualifiedLeads: fact.notQualifiedLeads,
+      notQualifiedDetails: fact.notQualifiedDetails,
     };
   });
+
+  const totals = salesBuildTotals_(managers);
+  totals.refusalLeads = salesSum_(managers, (manager) => manager.refusalLeads || 0);
+  totals.notQualifiedLeads = salesSum_(managers, (manager) => manager.notQualifiedLeads || 0);
+  totals.notQualifiedDetails = managers.reduce((items, manager) => items.concat(manager.notQualifiedDetails || []), []);
 
   return {
     rop: config.rop,
@@ -823,14 +811,437 @@ function getSalesDepartmentDashboard_(payload) {
     workingDaysInMonth: workingDaysInMonth,
     activeCalendarDays: activeCalendarDays,
     managers: managers,
-    daily: daily,
-    totals: salesBuildTotals_(managers),
+    daily: amo.daily,
+    totals: totals,
     warnings: warnings,
     sourceLinks: {
-      dynamics: 'https://docs.google.com/spreadsheets/d/' + config.dynamicsSpreadsheetId + '/edit#gid=1317166314',
+      dynamics: getAmoCrmStatus_().apiDomain,
       plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit#gid=0',
     },
   };
+}
+
+function salesDepartmentConfigForRequest_(payload) {
+  const base = {};
+  Object.keys(SALES_DEPARTMENT_CONFIG).forEach((key) => {
+    base[key] = SALES_DEPARTMENT_CONFIG[key];
+  });
+  const monthKey = String(payload && payload.monthKey ? payload.monthKey : SALES_DEPARTMENT_CONFIG.monthKey).trim();
+  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return base;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  base.monthKey = monthKey;
+  base.monthYear = year;
+  base.monthIndex = monthIndex;
+  base.monthLabel = names[monthIndex] + ' ' + year;
+  return base;
+}
+
+function salesReadAmoDepartmentData_(config, warnings) {
+  const byManager = {};
+  const daily = salesCreateAmoDaily_(config);
+  let dictionaries = { users: {}, pipelines: {}, statuses: {} };
+  let leads = [];
+
+  try {
+    dictionaries = salesFetchAmoDictionaries_();
+  } catch (error) {
+    warnings.push('amoCRM: не удалось прочитать справочники воронок/пользователей: ' + salesErrorMessage_(error));
+  }
+
+  try {
+    leads = salesFetchAmoLeadsForMonth_(config, warnings);
+  } catch (error) {
+    warnings.push('amoCRM: не удалось загрузить сделки: ' + salesErrorMessage_(error));
+  }
+
+  leads.forEach((lead) => {
+    const normalized = salesNormalizeAmoLead_(lead, dictionaries, config);
+    if (!normalized || normalized.exclude) return;
+    const manager = normalized.manager || 'Без ответственного';
+    const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
+
+    if (normalized.createdInMonth) {
+      item.totalTraffic += 1;
+      if (normalized.city === 'МСК') item.mskTraffic += 1;
+      if (normalized.city === 'СПБ') item.spbTraffic += 1;
+      if (normalized.leadType === 'call') item.calls += 1;
+      else item.applications += 1;
+
+      const createdDay = daily[normalized.createdDate];
+      if (createdDay) {
+        createdDay.totalTraffic += 1;
+        if (normalized.city === 'МСК') createdDay.mskTraffic += 1;
+        if (normalized.city === 'СПБ') createdDay.spbTraffic += 1;
+      }
+
+      if (normalized.isQualified) {
+        item.factQualified += 1;
+        if (normalized.city === 'МСК') item.mskQualified += 1;
+        if (normalized.city === 'СПБ') item.spbQualified += 1;
+        if (createdDay) {
+          createdDay.totalQualified += 1;
+          if (normalized.city === 'МСК') createdDay.mskQualified += 1;
+          if (normalized.city === 'СПБ') createdDay.spbQualified += 1;
+        }
+      } else if (normalized.isNotQualifiedYet) {
+        const detail = {
+          id: normalized.id,
+          leadId: normalized.leadId,
+          name: normalized.name,
+          date: normalized.createdDate,
+          manager: manager,
+          city: normalized.city,
+          stage: normalized.stage,
+          pipeline: normalized.pipeline,
+          type: normalized.typeLabel,
+          url: normalized.url,
+        };
+        item.notQualifiedLeads += 1;
+        item.notQualifiedDetails.push(detail);
+      } else {
+        item.refusalLeads += 1;
+      }
+    }
+
+    if (normalized.closedInMonth && normalized.isWon) {
+      item.factDeals += 1;
+      item.orderCount += 1;
+      item.paidDeals += 1;
+      item.revenue += normalized.budget;
+      if (normalized.city === 'МСК') item.mskDeals += 1;
+      if (normalized.city === 'СПБ') item.spbDeals += 1;
+      if (normalized.isVip) item.vipDeals += 1;
+      if (normalized.isDistant) item.distantDeals += 1;
+      if (normalized.isAB) item.abDeals += 1;
+
+      const closedDay = daily[normalized.closedDate];
+      if (closedDay) {
+        closedDay.totalDeals += 1;
+        if (normalized.city === 'МСК') closedDay.mskDeals += 1;
+        if (normalized.city === 'СПБ') closedDay.spbDeals += 1;
+      }
+    }
+
+    byManager[manager] = item;
+  });
+
+  Object.keys(byManager).forEach((manager) => {
+    byManager[manager].notQualifiedDetails = byManager[manager].notQualifiedDetails
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+      .slice(0, 300);
+  });
+
+  return {
+    byManager: byManager,
+    daily: Object.keys(daily).sort().map((key) => daily[key]),
+  };
+}
+
+function salesEmptyAmoManagerStats_(name) {
+  return {
+    name: name,
+    totalTraffic: 0,
+    factQualified: 0,
+    factDeals: 0,
+    mskTraffic: 0,
+    spbTraffic: 0,
+    mskQualified: 0,
+    spbQualified: 0,
+    mskDeals: 0,
+    spbDeals: 0,
+    calls: 0,
+    applications: 0,
+    vipDeals: 0,
+    distantDeals: 0,
+    paidDeals: 0,
+    orderCount: 0,
+    revenue: 0,
+    abDeals: 0,
+    refusalLeads: 0,
+    notQualifiedLeads: 0,
+    notQualifiedDetails: [],
+  };
+}
+
+function salesCreateAmoDaily_(config) {
+  const result = {};
+  const daysInMonth = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
+  const weekdays = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(config.monthYear, config.monthIndex, day);
+    const key = config.monthKey + '-' + String(day).padStart(2, '0');
+    result[key] = {
+      key: key,
+      label: String(day).padStart(2, '0'),
+      weekday: weekdays[date.getDay()],
+      totalTraffic: 0,
+      mskTraffic: 0,
+      spbTraffic: 0,
+      totalQualified: 0,
+      mskQualified: 0,
+      spbQualified: 0,
+      totalDeals: 0,
+      mskDeals: 0,
+      spbDeals: 0,
+    };
+  }
+  return result;
+}
+
+function salesFetchAmoDictionaries_() {
+  const users = {};
+  const pipelines = {};
+  const statuses = {};
+
+  try {
+    const usersResponse = fetchAmoCrmEndpoint_('/api/v4/users', { limit: 250 });
+    const userRows = usersResponse && usersResponse._embedded && Array.isArray(usersResponse._embedded.users)
+      ? usersResponse._embedded.users
+      : [];
+    userRows.forEach((user) => {
+      if (user && user.id) users[String(user.id)] = user.name || user.id;
+    });
+  } catch (ignore) {}
+
+  const pipelinesResponse = fetchAmoCrmEndpoint_('/api/v4/leads/pipelines', { limit: 250 });
+  const pipelineRows = pipelinesResponse && pipelinesResponse._embedded && Array.isArray(pipelinesResponse._embedded.pipelines)
+    ? pipelinesResponse._embedded.pipelines
+    : [];
+  pipelineRows.forEach((pipeline) => {
+    if (!pipeline || !pipeline.id) return;
+    const pipelineId = String(pipeline.id);
+    pipelines[pipelineId] = pipeline.name || pipelineId;
+    const statusRows = pipeline._embedded && Array.isArray(pipeline._embedded.statuses)
+      ? pipeline._embedded.statuses
+      : [];
+    statusRows.forEach((status) => {
+      if (status && status.id) statuses[pipelineId + ':' + String(status.id)] = status.name || status.id;
+    });
+  });
+
+  return { users: users, pipelines: pipelines, statuses: statuses };
+}
+
+function salesFetchAmoLeadsForMonth_(config, warnings) {
+  const fromDate = config.monthKey + '-01';
+  const lastDay = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
+  const toDate = config.monthKey + '-' + String(lastDay).padStart(2, '0');
+  const byId = {};
+
+  function addRows(rows) {
+    (rows || []).forEach((lead) => {
+      if (lead && lead.id) byId[String(lead.id)] = lead;
+    });
+  }
+
+  addRows(fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'created_at'));
+  try {
+    addRows(fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'closed_at'));
+  } catch (error) {
+    warnings.push('amoCRM: фильтр по дате завершения не сработал, продажи считаются по сделкам из периода создания.');
+  }
+
+  return Object.keys(byId).map((key) => byId[key]);
+}
+
+function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName) {
+  const dateFrom = Math.floor(new Date(fromDate + 'T00:00:00Z').getTime() / 1000);
+  const dateTo = Math.floor(new Date(toDate + 'T23:59:59Z').getTime() / 1000);
+  const result = [];
+  let page = 1;
+
+  while (page <= 80) {
+    const params = {
+      limit: 250,
+      page: page,
+      with: 'contacts,loss_reason',
+    };
+    params['filter[' + fieldName + '][from]'] = dateFrom;
+    params['filter[' + fieldName + '][to]'] = dateTo;
+    const response = fetchAmoCrmEndpoint_('/api/v4/leads', params);
+    const leads = response && response._embedded && Array.isArray(response._embedded.leads)
+      ? response._embedded.leads
+      : [];
+    if (!leads.length) break;
+    result.push.apply(result, leads);
+    if (!response._links || !response._links.next || !response._links.next.href) break;
+    page += 1;
+  }
+
+  return result;
+}
+
+function salesNormalizeAmoLead_(lead, dictionaries, config) {
+  const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
+  const pipelineId = String(lead.pipeline_id || '');
+  const statusId = String(lead.status_id || '');
+  const pipeline = dictionaries.pipelines[pipelineId] || pipelineId;
+  const stage = dictionaries.statuses[pipelineId + ':' + statusId] || statusId;
+  const typeLabel = salesAmoField_(fields, ['тип лида', 'тип обращения']);
+  const city = salesAmoCity_(pipeline);
+  const excludedByPipeline = salesNormalizeText_(pipeline).indexOf('сообщ') >= 0;
+  const excludedByType = salesNormalizeText_(typeLabel).indexOf('сообщ') >= 0;
+  if (!city || excludedByPipeline || excludedByType) {
+    return { exclude: true };
+  }
+
+  const manager = salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
+    || dictionaries.users[String(lead.responsible_user_id || '')]
+    || String(lead.responsible_user_id || '').trim()
+    || 'Без ответственного';
+  const createdDate = salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at);
+  const closedDate = salesAmoDate_(salesAmoField_(fields, ['дата завершения', 'дата оплаты']), lead.closed_at);
+  const won = salesAmoIsWon_(stage);
+  const qualified = salesAmoIsQualified_(stage, lead);
+  const notQualifiedYet = !qualified && salesAmoIsNotQualifiedYet_(stage);
+  const category = salesAmoField_(fields, ['категория']);
+  const format = salesAmoField_(fields, ['формат']);
+  const vip = salesAmoField_(fields, ['вип пакет', 'vip пакет']);
+  const budget = Number(lead.price || salesAmoField_(fields, ['бюджет']) || 0) || 0;
+  const baseDomain = getAmoCrmStatus_().apiDomain.replace(/^https?:\/\//, '');
+
+  return {
+    id: 'amocrm-lead-' + String(lead.id || ''),
+    leadId: String(lead.id || ''),
+    name: String(lead.name || ''),
+    pipeline: pipeline,
+    stage: stage,
+    city: city,
+    manager: String(manager || '').trim(),
+    createdDate: createdDate,
+    closedDate: closedDate,
+    createdInMonth: Boolean(createdDate && createdDate.indexOf(config.monthKey) === 0),
+    closedInMonth: Boolean(closedDate && closedDate.indexOf(config.monthKey) === 0),
+    isQualified: qualified,
+    isNotQualifiedYet: notQualifiedYet,
+    isWon: won,
+    isVip: salesNormalizeText_(vip) === 'да',
+    isDistant: salesNormalizeText_(format) === 'онлайн',
+    isAB: salesAmoIsAB_(category),
+    budget: budget,
+    leadType: salesAmoLeadType_(typeLabel),
+    typeLabel: typeLabel,
+    url: baseDomain ? 'https://' + baseDomain + '/leads/detail/' + String(lead.id || '') : '',
+  };
+}
+
+function salesAmoFieldMap_(customFields) {
+  const result = {};
+  (customFields || []).forEach((field) => {
+    const name = salesNormalizeLabel_(field.field_name || field.name || field.field_code || field.code || '');
+    if (!name || !Array.isArray(field.values)) return;
+    result[name] = field.values.map((item) => {
+      if (item === null || item === undefined) return '';
+      if (typeof item === 'object') return item.value !== undefined ? item.value : JSON.stringify(item);
+      return item;
+    }).filter((value) => value !== '').join(', ');
+  });
+  return result;
+}
+
+function salesAmoField_(fields, names) {
+  for (let i = 0; i < names.length; i += 1) {
+    const key = salesNormalizeLabel_(names[i]);
+    if (fields[key] !== undefined && fields[key] !== null && String(fields[key]).trim()) return String(fields[key]).trim();
+  }
+  return '';
+}
+
+function salesAmoCity_(pipelineName) {
+  const normalized = salesNormalizeText_(pipelineName);
+  if (normalized.indexOf('мск аш') >= 0 || (normalized.indexOf('мск') >= 0 && normalized.indexOf('аш') >= 0)) return 'МСК';
+  if (normalized.indexOf('спб аш') >= 0 || (normalized.indexOf('спб') >= 0 && normalized.indexOf('аш') >= 0)) return 'СПБ';
+  return '';
+}
+
+function salesAmoLeadType_(value) {
+  const normalized = salesNormalizeText_(value);
+  return normalized.indexOf('звон') >= 0 ? 'call' : 'application';
+}
+
+function salesAmoDate_(customValue, unixValue) {
+  const text = String(customValue || '').trim();
+  const ru = text.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if (ru) return ru[3] + '-' + ru[2].padStart(2, '0') + '-' + ru[1].padStart(2, '0');
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return iso[1] + '-' + iso[2].padStart(2, '0') + '-' + iso[3].padStart(2, '0');
+  const customTimestamp = Number(text);
+  if (customTimestamp && Number.isFinite(customTimestamp)) {
+    const millis = customTimestamp > 100000000000 ? customTimestamp : customTimestamp * 1000;
+    return Utilities.formatDate(new Date(millis), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  const timestamp = Number(unixValue || 0);
+  if (!timestamp) return '';
+  return Utilities.formatDate(new Date(timestamp * 1000), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function salesAmoIsWon_(stageName) {
+  return salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('успешно реализовано')) >= 0;
+}
+
+function salesAmoIsQualified_(stageName, lead) {
+  const stage = salesNormalizeLabel_(stageName);
+  const directStages = [
+    'недозвоны целевые',
+    'брифинг',
+    'перекресный прозвон',
+    'перекрестный прозвон',
+    'дистант',
+    'назначить встречу',
+    'антонов максим спб',
+    'сельдинен александр спб',
+    'егоров александр спб',
+    'на доработку',
+    'успешно реализовано',
+    'бутово и ралли',
+    'томкин илья',
+    'синягин игорь',
+    'толкачев дмитрий',
+  ];
+  if (directStages.some((item) => stage.indexOf(salesNormalizeLabel_(item)) >= 0)) return true;
+
+  if (stage.indexOf(salesNormalizeLabel_('закрыто и нереализовано')) >= 0) {
+    const embeddedLoss = lead && lead._embedded && lead._embedded.loss_reason ? lead._embedded.loss_reason.name : '';
+    const lossText = [
+      stageName,
+      lead && lead.loss_reason ? lead.loss_reason.name : '',
+      embeddedLoss,
+      lead && lead.name ? lead.name : '',
+    ].join(' ');
+    return salesAmoQualifiedLossReasons_().some((reason) => salesNormalizeText_(lossText).indexOf(salesNormalizeText_(reason)) >= 0);
+  }
+  return false;
+}
+
+function salesAmoQualifiedLossReasons_() {
+  return [
+    'выбрали другую автошколу',
+    'только офлайн класс',
+    'практика',
+    'дорого',
+    'не выходит на связь целевой',
+    'передумал учиться',
+  ];
+}
+
+function salesAmoIsNotQualifiedYet_(stageName) {
+  const stage = salesNormalizeLabel_(stageName);
+  return [
+    'на проверку',
+    'звонки',
+    'неразобранное',
+    'отложенный спрос',
+    'в работе',
+    'недозвон',
+  ].some((item) => stage.indexOf(salesNormalizeLabel_(item)) >= 0);
+}
+
+function salesAmoIsAB_(category) {
+  const normalized = salesNormalizeLabel_(category);
+  return normalized === 'a' || normalized === 'b' || normalized === 'ab' || normalized === 'a+b';
 }
 
 function salesReadLiveDepartmentData_(config, warnings) {

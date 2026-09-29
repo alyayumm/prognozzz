@@ -1458,7 +1458,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
 }
 .sales-kpi-card {
@@ -1525,6 +1525,29 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-kpi-card.red > i {
   background: linear-gradient(90deg, var(--negative), #ff9a7a);
+}
+.sales-card-action {
+  width: max-content;
+  border: 1px solid rgba(28, 70, 245, 0.24);
+  border-radius: 999px;
+  background: rgba(234, 241, 255, 0.88);
+  color: var(--blue-dark);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 950;
+}
+.sales-card-action:hover {
+  background: rgba(28, 70, 245, 0.1);
+}
+.sales-not-qualified-panel {
+  display: grid;
+  gap: 12px;
+}
+.sales-table-note {
+  padding: 10px 12px 0;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 850;
 }
 .sales-refresh-row {
   display: flex;

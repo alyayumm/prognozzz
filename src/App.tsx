@@ -1638,8 +1638,9 @@ function SalesDepartmentDashboard({
   const [loadError, setLoadError] = useState("");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
+  const [showNotQualified, setShowNotQualified] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
-  const integrationsEnabled = false;
+  const integrationsEnabled = true;
 
   useEffect(() => {
     if (!integrationsEnabled) {
@@ -1685,8 +1686,8 @@ function SalesDepartmentDashboard({
     ? { label: "live", tone: snapshot?.warnings.length ? "warning" : "good" }
     : loadState === "refreshing"
       ? { label: "обновляю", tone: "neutral" }
-    : loadState === "disabled"
-      ? { label: "отключено", tone: "neutral" }
+            : loadState === "disabled"
+              ? { label: "отключено", tone: "neutral" }
     : loadState === "error"
       ? { label: "не загрузилось", tone: "danger" }
       : { label: "загрузка", tone: "neutral" };
@@ -1706,8 +1707,8 @@ function SalesDepartmentDashboard({
             ? snapshot ? `Рабочих дней: ${snapshot.workingDaysPassed} из ${snapshot.workingDaysInMonth}` : "Рабочие дни: расчет после загрузки"
             : "Интеграции отключены",
           integrationsEnabled
-            ? snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем таблицу"
-            : "Google Sheets / Apps Script не читаются",
+            ? snapshot?.latestActualDate ? `Факт до: ${formatSalesDate(snapshot.latestActualDate)}` : "Факт: ожидаем amoCRM"
+            : "amoCRM не читается",
         ]}
       />
       <div className="sales-refresh-row">
@@ -1722,7 +1723,7 @@ function SalesDepartmentDashboard({
         </button>
         <span>
           {integrationsEnabled
-            ? isSalesRefreshing ? "Читаю свежие данные из Google Sheets..." : "Показаны свежие данные из Google Sheets."
+            ? isSalesRefreshing ? "Читаю свежие данные из amoCRM..." : "Показаны свежие данные из amoCRM."
             : "Внешние интеграции отдела продаж временно отключены, чтобы не замедлять сайт."}
         </span>
       </div>
@@ -1777,6 +1778,25 @@ function SalesDepartmentDashboard({
               progress={percent(totals.factQualified, totals.planQualified)}
             />
             <SalesKpiCard
+              icon={<Info />}
+              label="Еще не квалифицирован"
+              value={formatNumber(totals.notQualifiedLeads ?? 0)}
+              helper="На проверке, звонки, неразобранное, отложенный спрос, в работе и недозвон"
+              plan={showNotQualified ? "Список раскрыт" : "Можно раскрыть"}
+              progress={totals.totalTraffic ? ((totals.notQualifiedLeads ?? 0) / totals.totalTraffic) * 100 : 0}
+              actionLabel={showNotQualified ? "Скрыть" : "Раскрыть"}
+              onAction={() => setShowNotQualified((current) => !current)}
+            />
+            <SalesKpiCard
+              icon={<TriangleAlert />}
+              label="Отказ / нецелевой"
+              value={formatNumber(totals.refusalLeads ?? 0)}
+              helper="Все остальные этапы, которые не входят в КВАЛ и ранние этапы"
+              plan="Не идет в КВАЛ"
+              progress={totals.totalTraffic ? ((totals.refusalLeads ?? 0) / totals.totalTraffic) * 100 : 0}
+              tone="red"
+            />
+            <SalesKpiCard
               icon={<Target />}
               label="Договоры"
               value={formatNumber(totals.factDeals)}
@@ -1802,6 +1822,10 @@ function SalesDepartmentDashboard({
               progress={totals.distantDeals === null ? 0 : percent(totals.distantDeals, totals.planDistant)}
             />
           </section>
+
+          {showNotQualified && (
+            <SalesNotQualifiedPanel details={totals.notQualifiedDetails ?? []} />
+          )}
 
           <section className="sales-layout">
             <article className="sales-panel sales-manager-panel">
@@ -1934,6 +1958,8 @@ function SalesKpiCard({
   plan,
   progress,
   tone = "blue",
+  actionLabel,
+  onAction,
 }: {
   icon: ReactNode;
   label: string;
@@ -1942,6 +1968,8 @@ function SalesKpiCard({
   plan: string;
   progress: number;
   tone?: "blue" | "red";
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
     <article className={`sales-kpi-card ${tone}`}>
@@ -1955,8 +1983,71 @@ function SalesKpiCard({
         <span>{plan}</span>
         <b>{Math.round(progress)}%</b>
       </footer>
+      {actionLabel && onAction && (
+        <button type="button" className="sales-card-action" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
       <i style={{ width: `${clampPercent(progress)}%` }} />
     </article>
+  );
+}
+
+function SalesNotQualifiedPanel({
+  details,
+}: {
+  details: NonNullable<SalesDepartmentSnapshot["totals"]["notQualifiedDetails"]>;
+}) {
+  const rows = details.slice(0, 120);
+  return (
+    <section className="sales-panel sales-not-qualified-panel">
+      <PanelHead
+        title="Еще не квалифицирован"
+        description="Лиды, которые менеджер взял, но сделка пока в ранних этапах. Сообщения и воронка сообщений сюда не попадают."
+      />
+      {rows.length === 0 ? (
+        <div className="sales-event-empty">
+          <Info size={17} />
+          <span>Таких лидов в выбранном месяце сейчас нет.</span>
+        </div>
+      ) : (
+        <div className="sales-table-wrap">
+          <table className="sales-table">
+            <thead>
+              <tr>
+                <th>Дата</th>
+                <th>Лид</th>
+                <th>Менеджер</th>
+                <th>Город</th>
+                <th>Этап</th>
+                <th>Тип</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item) => (
+                <tr key={item.id}>
+                  <td>{formatSalesDate(item.date)}</td>
+                  <td>
+                    {item.url ? (
+                      <a href={item.url} target="_blank" rel="noreferrer">{item.name || item.leadId}</a>
+                    ) : (
+                      item.name || item.leadId
+                    )}
+                  </td>
+                  <td>{shortManagerName(item.manager)}</td>
+                  <td>{item.city}</td>
+                  <td>{item.stage}</td>
+                  <td>{item.type || "заявка"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {details.length > rows.length && (
+            <div className="sales-table-note">Показаны первые {rows.length} из {details.length} лидов.</div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4755,10 +4846,6 @@ function SourceAdminPanel({
     await onSyncYandexMetrika(fromDate, toDate);
   }
 
-  async function syncAmoCrm(fromDate = syncFromDate, toDate = syncToDate) {
-    await onSyncAmoCrmLeads(fromDate, toDate);
-  }
-
   return (
     <section className="analytics-panel source-editor-panel">
       <PanelHead
@@ -4787,12 +4874,6 @@ function SourceAdminPanel({
           </button>
           <button className="select-button" type="button" onClick={() => syncMetrika()} disabled={isSavingDaily}>
             Метрика: визиты/цели
-          </button>
-          <button className="select-button" type="button" onClick={onTestAmoCrmConnection} disabled={isSavingDaily}>
-            amoCRM: проверить
-          </button>
-          <button className="select-button" type="button" onClick={() => syncAmoCrm()} disabled={isSavingDaily}>
-            amoCRM: сделки
           </button>
           <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
             Поля Roistat
