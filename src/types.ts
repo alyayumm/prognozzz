@@ -213,3 +213,28 @@ export interface YandexMetrikaSyncResult {
   skippedRows: number;
   updatedAt: string;
 }
+
+export interface AmoCrmStatusResult {
+  hasAccessToken: boolean;
+  apiDomain: string;
+  hasIntegrationId: boolean;
+  hasSecretKey: boolean;
+}
+
+export interface AmoCrmConnectionResult {
+  status: "success" | "error";
+  message: string;
+  accountId?: number | string;
+  accountName?: string;
+  apiDomain?: string;
+}
+
+export interface AmoCrmSyncResult {
+  kind: "leads";
+  fromDate: string;
+  toDate: string;
+  status: "success" | "warning" | "error";
+  message: string;
+  rows: number;
+  updatedAt: string;
+}

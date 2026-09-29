@@ -86,6 +86,8 @@ import type {
   Metric,
   MonthConfig,
   PlanByCity,
+  AmoCrmConnectionResult,
+  AmoCrmSyncResult,
   BrandAlias,
   BrandBranchPlatform,
   BrandBranchWeekly,
@@ -734,6 +736,50 @@ export default function App() {
     }
   }
 
+  async function testAmoCrmConnection() {
+    if (!apiConfigured) {
+      setSavedMessage("amoCRM нельзя проверить в локальном режиме: нужен Apps Script URL.");
+      return;
+    }
+    if (!writePassword) {
+      setSavedMessage("Для проверки amoCRM введите пароль админки.");
+      return;
+    }
+
+    setIsSavingDaily(true);
+    setSavedMessage("Проверяю подключение amoCRM...");
+    try {
+      const result = await callReportApi<AmoCrmConnectionResult>("testAmoCrmConnection", {}, writePassword);
+      setSavedMessage(result.message || "amoCRM подключена.");
+    } catch (error) {
+      setSavedMessage(`amoCRM не подключилась: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
+    }
+  }
+
+  async function syncAmoCrmLeads(fromDate: string, toDate: string) {
+    if (!apiConfigured) {
+      setSavedMessage("amoCRM нельзя загрузить в локальном режиме: нужен Apps Script URL.");
+      return;
+    }
+    if (!writePassword) {
+      setSavedMessage("Для импорта amoCRM введите пароль админки.");
+      return;
+    }
+
+    setIsSavingDaily(true);
+    setSavedMessage("Загружаю сделки amoCRM за выбранный период...");
+    try {
+      const result = await callReportApi<AmoCrmSyncResult>("syncAmoCrmLeads", { fromDate, toDate }, writePassword);
+      setSavedMessage(result.message);
+    } catch (error) {
+      setSavedMessage(`amoCRM не загрузилась: ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingDaily(false);
+    }
+  }
+
   async function refreshRoistatFields() {
     if (!apiConfigured) {
       setSavedMessage("Поля Roistat нельзя обновить в локальном режиме: нужен Apps Script URL.");
@@ -1013,6 +1059,8 @@ export default function App() {
                 onSaveForecastCoefficients={persistForecastCoefficients}
                 onSyncRoistat={syncRoistat}
                 onSyncYandexMetrika={syncYandexMetrika}
+                onTestAmoCrmConnection={testAmoCrmConnection}
+                onSyncAmoCrmLeads={syncAmoCrmLeads}
                 onRefreshRoistatFields={refreshRoistatFields}
                 tab={adminTab}
                 setTab={setAdminTab}
@@ -4629,6 +4677,8 @@ function SourceAdminPanel({
   onSaveDailyValues,
   onSyncRoistat,
   onSyncYandexMetrika,
+  onTestAmoCrmConnection,
+  onSyncAmoCrmLeads,
   onRefreshRoistatFields,
   isSavingDaily,
 }: {
@@ -4638,6 +4688,8 @@ function SourceAdminPanel({
   onSaveDailyValues: (values: DailyValueUpdate[], message?: string) => Promise<void>;
   onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
   onSyncYandexMetrika: (fromDate: string, toDate: string) => Promise<void>;
+  onTestAmoCrmConnection: () => Promise<void>;
+  onSyncAmoCrmLeads: (fromDate: string, toDate: string) => Promise<void>;
   onRefreshRoistatFields: () => Promise<void>;
   isSavingDaily: boolean;
 }) {
@@ -4703,6 +4755,10 @@ function SourceAdminPanel({
     await onSyncYandexMetrika(fromDate, toDate);
   }
 
+  async function syncAmoCrm(fromDate = syncFromDate, toDate = syncToDate) {
+    await onSyncAmoCrmLeads(fromDate, toDate);
+  }
+
   return (
     <section className="analytics-panel source-editor-panel">
       <PanelHead
@@ -4731,6 +4787,12 @@ function SourceAdminPanel({
           </button>
           <button className="select-button" type="button" onClick={() => syncMetrika()} disabled={isSavingDaily}>
             Метрика: визиты/цели
+          </button>
+          <button className="select-button" type="button" onClick={onTestAmoCrmConnection} disabled={isSavingDaily}>
+            amoCRM: проверить
+          </button>
+          <button className="select-button" type="button" onClick={() => syncAmoCrm()} disabled={isSavingDaily}>
+            amoCRM: сделки
           </button>
           <button className="ghost-button" type="button" onClick={onRefreshRoistatFields} disabled={isSavingDaily}>
             Поля Roistat
@@ -5717,6 +5779,8 @@ function AdminDashboard({
   onSaveForecastCoefficients,
   onSyncRoistat,
   onSyncYandexMetrika,
+  onTestAmoCrmConnection,
+  onSyncAmoCrmLeads,
   onRefreshRoistatFields,
   tab,
   setTab,
@@ -5740,6 +5804,8 @@ function AdminDashboard({
   onSaveForecastCoefficients: () => void;
   onSyncRoistat: (kind: RoistatSyncKind, fromDate: string, toDate: string) => Promise<void>;
   onSyncYandexMetrika: (fromDate: string, toDate: string) => Promise<void>;
+  onTestAmoCrmConnection: () => Promise<void>;
+  onSyncAmoCrmLeads: (fromDate: string, toDate: string) => Promise<void>;
   onRefreshRoistatFields: () => Promise<void>;
   tab: AdminTab;
   setTab: (tab: AdminTab) => void;
@@ -5833,6 +5899,8 @@ function AdminDashboard({
           onSaveDailyValues={onSaveDailyValues}
           onSyncRoistat={onSyncRoistat}
           onSyncYandexMetrika={onSyncYandexMetrika}
+          onTestAmoCrmConnection={onTestAmoCrmConnection}
+          onSyncAmoCrmLeads={onSyncAmoCrmLeads}
           onRefreshRoistatFields={onRefreshRoistatFields}
           isSavingDaily={isSavingDaily}
         />

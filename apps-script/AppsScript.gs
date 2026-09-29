@@ -3,6 +3,11 @@ const CONFIG = {
   roistatApiKeyProperty: 'ROISTAT_API_KEY',
   roistatProjectProperty: 'ROISTAT_PROJECT_ID',
   roistatDefaultProjectId: '301351',
+  amoCrmAccessTokenProperty: 'AMOCRM_ACCESS_TOKEN',
+  amoCrmApiDomainProperty: 'AMOCRM_API_DOMAIN',
+  amoCrmIntegrationIdProperty: 'AMOCRM_INTEGRATION_ID',
+  amoCrmSecretKeyProperty: 'AMOCRM_SECRET_KEY',
+  amoCrmDefaultApiDomain: 'https://api-b.amocrm.ru',
   mainSpreadsheetId: '1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s',
   roistatDirectSpreadsheetId: '1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc',
   roistatDirectMonthlySheet: 'помесячно',
@@ -25,6 +30,8 @@ const CONFIG = {
     roistatSyncLog: 'Roistat_Sync_Log',
     roistatFields: 'Roistat_Fields',
     metrikaDaily: 'Yandex_Metrika_Daily',
+    amoCrmRawLeads: 'AmoCRM_Raw_Leads',
+    amoCrmSyncLog: 'AmoCRM_Sync_Log',
   },
 };
 
@@ -290,6 +297,33 @@ const HEADERS = {
     'updatedAt',
     'comment',
   ],
+  AmoCRM_Raw_Leads: [
+    'id',
+    'leadId',
+    'createdAt',
+    'updatedAt',
+    'closedAt',
+    'name',
+    'price',
+    'pipelineId',
+    'statusId',
+    'responsibleUserId',
+    'source',
+    'contactIds',
+    'customFieldsJson',
+    'rawJson',
+    'syncedAt',
+  ],
+  AmoCRM_Sync_Log: [
+    'id',
+    'kind',
+    'fromDate',
+    'toDate',
+    'status',
+    'message',
+    'rows',
+    'updatedAt',
+  ],
 };
 
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
@@ -348,6 +382,9 @@ function doPost(e) {
       getRoistatFields: getRoistatFields_,
       refreshRoistatFields: refreshRoistatFields_,
       setRoistatRecommendedFields: setRoistatRecommendedFields_,
+      getAmoCrmStatus: getAmoCrmStatus_,
+      testAmoCrmConnection: testAmoCrmConnection_,
+      syncAmoCrmLeads: syncAmoCrmLeads_,
       getYandexMetrikaSyncStatus: getYandexMetrikaSyncStatus_,
       getMetrikaBrandSources: getMetrikaBrandSources_,
       syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
@@ -357,7 +394,7 @@ function doPost(e) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'syncYandexMetrikaBrandSources'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -396,6 +433,27 @@ function setYandexMetrikaCredentials(counterId, token, goalId) {
 
 function setYandexMetrikaCredentialsOnce() {
   return setYandexMetrikaCredentials('COUNTER_ID', 'OAUTH_TOKEN', '');
+}
+
+function setAmoCrmCredentials(accessToken, apiDomain, integrationId, secretKey) {
+  const properties = PropertiesService.getScriptProperties();
+  const normalizedToken = String(accessToken || '').trim();
+  if (!normalizedToken || normalizedToken === 'LONG_LIVED_TOKEN') {
+    throw new Error('Передайте долгосрочный токен amoCRM первым аргументом.');
+  }
+  properties.setProperty(CONFIG.amoCrmAccessTokenProperty, normalizedToken);
+  properties.setProperty(CONFIG.amoCrmApiDomainProperty, normalizeAmoCrmApiDomain_(apiDomain || CONFIG.amoCrmDefaultApiDomain));
+  if (integrationId !== undefined && integrationId !== null && String(integrationId).trim()) {
+    properties.setProperty(CONFIG.amoCrmIntegrationIdProperty, String(integrationId).trim());
+  }
+  if (secretKey !== undefined && secretKey !== null && String(secretKey).trim()) {
+    properties.setProperty(CONFIG.amoCrmSecretKeyProperty, String(secretKey).trim());
+  }
+  return getAmoCrmStatus_();
+}
+
+function setAmoCrmCredentialsOnce() {
+  return setAmoCrmCredentials('LONG_LIVED_TOKEN', 'https://api-b.amocrm.ru', 'INTEGRATION_ID', 'SECRET_KEY');
 }
 
 function setRoistatRecommendedFields_() {
@@ -455,6 +513,11 @@ function formatServiceSheetKeys_() {
     { sheet: CONFIG.sheets.roistatSyncLog, column: 4 },
     { sheet: CONFIG.sheets.metrikaDaily, column: 2 },
     { sheet: CONFIG.sheets.metrikaDaily, column: 3 },
+    { sheet: CONFIG.sheets.amoCrmRawLeads, column: 3 },
+    { sheet: CONFIG.sheets.amoCrmRawLeads, column: 4 },
+    { sheet: CONFIG.sheets.amoCrmRawLeads, column: 5 },
+    { sheet: CONFIG.sheets.amoCrmSyncLog, column: 3 },
+    { sheet: CONFIG.sheets.amoCrmSyncLog, column: 4 },
   ].forEach((entry) => {
     const sheet = ss.getSheetByName(entry.sheet);
     if (!sheet) return;
@@ -2384,6 +2447,213 @@ function roistatAnalyticsAttempts_(payload, fields, kind) {
     });
   });
   return uniqueJson_(attempts);
+}
+
+function getAmoCrmStatus_() {
+  const properties = PropertiesService.getScriptProperties();
+  return {
+    hasAccessToken: Boolean(properties.getProperty(CONFIG.amoCrmAccessTokenProperty)),
+    apiDomain: normalizeAmoCrmApiDomain_(properties.getProperty(CONFIG.amoCrmApiDomainProperty) || CONFIG.amoCrmDefaultApiDomain),
+    hasIntegrationId: Boolean(properties.getProperty(CONFIG.amoCrmIntegrationIdProperty)),
+    hasSecretKey: Boolean(properties.getProperty(CONFIG.amoCrmSecretKeyProperty)),
+  };
+}
+
+function testAmoCrmConnection_() {
+  const account = fetchAmoCrmEndpoint_('/api/v4/account', {});
+  return {
+    status: 'success',
+    message: 'amoCRM подключена: ' + String(account.name || account.id || 'account'),
+    accountId: account.id || '',
+    accountName: account.name || '',
+    apiDomain: getAmoCrmStatus_().apiDomain,
+  };
+}
+
+function syncAmoCrmLeads_(payload) {
+  const today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
+  const fromDate = normalizeAmoCrmDate_(payload && payload.fromDate, today);
+  const toDate = normalizeAmoCrmDate_(payload && payload.toDate, fromDate);
+  const leads = fetchAmoCrmLeads_(fromDate, toDate);
+  const records = leads.map(amoCrmLeadRecord_);
+  const upsertResult = records.length
+    ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
+    : { updated: 0 };
+  const result = {
+    kind: 'leads',
+    fromDate: fromDate,
+    toDate: toDate,
+    status: 'success',
+    message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads.',
+    rows: upsertResult.updated,
+    updatedAt: new Date(),
+  };
+  logAmoCrmSync_(result);
+  return result;
+}
+
+function fetchAmoCrmLeads_(fromDate, toDate) {
+  const createdFrom = Math.floor(new Date(fromDate + 'T00:00:00Z').getTime() / 1000);
+  const createdTo = Math.floor(new Date(toDate + 'T23:59:59Z').getTime() / 1000);
+  const result = [];
+  let page = 1;
+
+  while (page <= 80) {
+    const response = fetchAmoCrmEndpoint_('/api/v4/leads', {
+      limit: 250,
+      page: page,
+      'with': 'contacts,source_id',
+      'filter[created_at][from]': createdFrom,
+      'filter[created_at][to]': createdTo,
+    });
+    const leads = response && response._embedded && Array.isArray(response._embedded.leads)
+      ? response._embedded.leads
+      : [];
+    if (!leads.length) break;
+    result.push.apply(result, leads);
+    if (!response._links || !response._links.next || !response._links.next.href) break;
+    page += 1;
+  }
+
+  return result;
+}
+
+function fetchAmoCrmEndpoint_(path, params) {
+  const properties = PropertiesService.getScriptProperties();
+  const token = String(properties.getProperty(CONFIG.amoCrmAccessTokenProperty) || '').trim();
+  if (!token) {
+    throw new Error('Не задан AMOCRM_ACCESS_TOKEN в Script Properties.');
+  }
+
+  const baseUrl = normalizeAmoCrmApiDomain_(properties.getProperty(CONFIG.amoCrmApiDomainProperty) || CONFIG.amoCrmDefaultApiDomain);
+  const query = amoCrmQuery_(params || {});
+  const response = UrlFetchApp.fetch(baseUrl + path + (query ? '?' + query : ''), {
+    method: 'get',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      Accept: 'application/json',
+    },
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (ignore) {
+    parsed = null;
+  }
+  if (status < 200 || status >= 300) {
+    throw new Error('amoCRM HTTP ' + status + ': ' + sanitizeAmoCrmText_(text));
+  }
+  return parsed || {};
+}
+
+function amoCrmLeadRecord_(lead) {
+  const leadId = String(lead.id || '').trim();
+  const createdAt = amoCrmUnixToIso_(lead.created_at);
+  const updatedAt = amoCrmUnixToIso_(lead.updated_at);
+  const closedAt = amoCrmUnixToIso_(lead.closed_at);
+  const customFields = Array.isArray(lead.custom_fields_values) ? lead.custom_fields_values : [];
+  const contacts = lead._embedded && Array.isArray(lead._embedded.contacts) ? lead._embedded.contacts : [];
+  return {
+    id: 'amocrm-lead-' + leadId,
+    leadId: leadId,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    closedAt: closedAt,
+    name: lead.name || '',
+    price: Number(lead.price || 0),
+    pipelineId: String(lead.pipeline_id || ''),
+    statusId: String(lead.status_id || ''),
+    responsibleUserId: String(lead.responsible_user_id || ''),
+    source: amoCrmLeadSource_(lead, customFields),
+    contactIds: contacts.map((contact) => contact.id).filter(Boolean).join(','),
+    customFieldsJson: truncateAmoCrmCell_(JSON.stringify(customFields || [])),
+    rawJson: truncateAmoCrmCell_(JSON.stringify({
+      id: lead.id,
+      name: lead.name,
+      price: lead.price,
+      pipeline_id: lead.pipeline_id,
+      status_id: lead.status_id,
+      responsible_user_id: lead.responsible_user_id,
+      created_at: lead.created_at,
+      updated_at: lead.updated_at,
+      closed_at: lead.closed_at,
+      custom_fields_values: customFields,
+      embedded: lead._embedded || {},
+    })),
+    syncedAt: new Date(),
+  };
+}
+
+function amoCrmLeadRow_(record) {
+  return HEADERS.AmoCRM_Raw_Leads.map((header) => record[header] || '');
+}
+
+function amoCrmLeadSource_(lead, customFields) {
+  const direct = lead.source_name || lead.source || lead.source_id || '';
+  if (direct && typeof direct !== 'object') return String(direct);
+  const sourceField = (customFields || []).find((field) => {
+    const name = String(field.field_name || field.name || '').toLowerCase();
+    const code = String(field.field_code || field.code || '').toLowerCase();
+    return name.indexOf('источник') >= 0 || name.indexOf('utm') >= 0 || code.indexOf('utm') >= 0 || code.indexOf('source') >= 0;
+  });
+  if (!sourceField || !Array.isArray(sourceField.values) || !sourceField.values.length) return '';
+  return String(sourceField.values.map((item) => item.value || '').filter(Boolean).join(', '));
+}
+
+function logAmoCrmSync_(result) {
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.amoCrmSyncLog);
+  if (!sheet) return;
+  sheet.appendRow([
+    Utilities.getUuid(),
+    result.kind,
+    result.fromDate,
+    result.toDate,
+    result.status,
+    result.message,
+    Number(result.rows || 0),
+    result.updatedAt || new Date(),
+  ]);
+}
+
+function normalizeAmoCrmDate_(value, fallback) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : fallback;
+}
+
+function normalizeAmoCrmApiDomain_(value) {
+  const raw = String(value || CONFIG.amoCrmDefaultApiDomain).trim();
+  const withProtocol = raw.indexOf('http') === 0 ? raw : 'https://' + raw;
+  return withProtocol.replace(/\/+$/g, '');
+}
+
+function amoCrmQuery_(params) {
+  const parts = [];
+  Object.keys(params || {}).forEach((key) => {
+    const value = params[key];
+    if (value === undefined || value === null || value === '') return;
+    parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
+  });
+  return parts.join('&');
+}
+
+function amoCrmUnixToIso_(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) return '';
+  return Utilities.formatDate(new Date(timestamp * 1000), 'GMT', 'yyyy-MM-dd HH:mm:ss');
+}
+
+function truncateAmoCrmCell_(value) {
+  return String(value || '').slice(0, 45000);
+}
+
+function sanitizeAmoCrmText_(text) {
+  return String(text || '')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/ig, 'Bearer ***')
+    .replace(/access_token["':=\s]+[^"',\s}]+/ig, 'access_token=***')
+    .slice(0, 900);
 }
 
 function fetchRoistatEndpoint_(method, payload, httpMethod) {
