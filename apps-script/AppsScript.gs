@@ -306,8 +306,26 @@ const HEADERS = {
     'name',
     'price',
     'pipelineId',
+    'pipelineName',
     'statusId',
+    'statusName',
     'responsibleUserId',
+    'responsibleUserName',
+    'city',
+    'managerName',
+    'stageName',
+    'typeLabel',
+    'leadType',
+    'createdDate',
+    'closedDate',
+    'isQualified',
+    'isNotQualifiedYet',
+    'isWon',
+    'isVip',
+    'isDistant',
+    'isAB',
+    'budget',
+    'excludeReason',
     'source',
     'contactIds',
     'customFieldsJson',
@@ -844,26 +862,40 @@ function salesReadAmoDepartmentData_(config, warnings) {
   const daily = salesCreateAmoDaily_(config);
   let dictionaries = { users: {}, pipelines: {}, statuses: {} };
   let leads = [];
+  const debug = {
+    loaded: 0,
+    accepted: 0,
+    excludedNoCity: 0,
+    excludedMessagesPipeline: 0,
+    excludedMessagesType: 0,
+    createdInMonth: 0,
+    closedWonInMonth: 0,
+  };
 
   try {
-    dictionaries = salesFetchAmoDictionaries_();
-  } catch (error) {
-    warnings.push('amoCRM: не удалось прочитать справочники воронок/пользователей: ' + salesErrorMessage_(error));
-  }
-
-  try {
-    leads = salesFetchAmoLeadsForMonth_(config, warnings);
+    leads = salesReadCachedAmoLeadsForMonth_(config, warnings);
+    if (!leads.length) {
+      warnings.push('amoCRM: кэш сделок пустой. Нажмите обновить, чтобы сохранить слой AmoCRM_Raw_Leads.');
+    }
+    debug.loaded = leads.length;
   } catch (error) {
     warnings.push('amoCRM: не удалось загрузить сделки: ' + salesErrorMessage_(error));
   }
 
   leads.forEach((lead) => {
     const normalized = salesNormalizeAmoLead_(lead, dictionaries, config);
-    if (!normalized || normalized.exclude) return;
+    if (!normalized || normalized.exclude) {
+      if (normalized && normalized.excludeReason === 'noCity') debug.excludedNoCity += 1;
+      if (normalized && normalized.excludeReason === 'messagesPipeline') debug.excludedMessagesPipeline += 1;
+      if (normalized && normalized.excludeReason === 'messagesType') debug.excludedMessagesType += 1;
+      return;
+    }
+    debug.accepted += 1;
     const manager = normalized.manager || 'Без ответственного';
     const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
 
     if (normalized.createdInMonth) {
+      debug.createdInMonth += 1;
       item.totalTraffic += 1;
       if (normalized.city === 'МСК') item.mskTraffic += 1;
       if (normalized.city === 'СПБ') item.spbTraffic += 1;
@@ -907,6 +939,7 @@ function salesReadAmoDepartmentData_(config, warnings) {
     }
 
     if (normalized.closedInMonth && normalized.isWon) {
+      debug.closedWonInMonth += 1;
       item.factDeals += 1;
       item.orderCount += 1;
       item.paidDeals += 1;
@@ -934,9 +967,21 @@ function salesReadAmoDepartmentData_(config, warnings) {
       .slice(0, 300);
   });
 
+  warnings.push(
+    'amoCRM: принято в отчет ' + debug.accepted
+      + ' из ' + debug.loaded
+      + '; создано в месяце ' + debug.createdInMonth
+      + '; продаж в месяце ' + debug.closedWonInMonth
+      + '; без города ' + debug.excludedNoCity
+      + '; сообщения-воронка ' + debug.excludedMessagesPipeline
+      + '; сообщения-тип ' + debug.excludedMessagesType
+      + '.',
+  );
+
   return {
     byManager: byManager,
     daily: Object.keys(daily).sort().map((key) => daily[key]),
+    debug: debug,
   };
 }
 
@@ -1025,11 +1070,24 @@ function salesFetchAmoDictionaries_() {
   return { users: users, pipelines: pipelines, statuses: statuses };
 }
 
-function salesFetchAmoLeadsForMonth_(config, warnings) {
+function salesFetchAmoLeadsForMonth_(config, warnings, dictionaries) {
   const fromDate = config.monthKey + '-01';
   const lastDay = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
   const toDate = config.monthKey + '-' + String(lastDay).padStart(2, '0');
+  return salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionaries);
+}
+
+function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionaries) {
   const byId = {};
+  const pipelineIds = salesTargetPipelineIds_(dictionaries);
+  const pipelineNames = pipelineIds.map((pipelineId) => dictionaries.pipelines[pipelineId] || pipelineId);
+  const stats = { created: 0, closed: 0 };
+
+  if (!pipelineIds.length) {
+    const available = Object.keys(dictionaries.pipelines || {}).map((pipelineId) => dictionaries.pipelines[pipelineId]).filter(Boolean).slice(0, 12);
+    warnings.push('amoCRM: не найдены воронки МСК АШ / СПБ АШ. Доступные воронки: ' + (available.join(', ') || 'пусто') + '.');
+    return [];
+  }
 
   function addRows(rows) {
     (rows || []).forEach((lead) => {
@@ -1037,58 +1095,280 @@ function salesFetchAmoLeadsForMonth_(config, warnings) {
     });
   }
 
-  addRows(fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'created_at'));
-  try {
-    addRows(fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'closed_at'));
-  } catch (error) {
-    warnings.push('amoCRM: фильтр по дате завершения не сработал, продажи считаются по сделкам из периода создания.');
-  }
+  pipelineIds.forEach((pipelineId) => {
+    const createdRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'created_at', pipelineId, 1, warnings);
+    stats.created += createdRows.length;
+    addRows(createdRows);
+
+    try {
+      const closedRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'closed_at', pipelineId, 1, warnings);
+      stats.closed += closedRows.length;
+      addRows(closedRows);
+    } catch (error) {
+      warnings.push('amoCRM: фильтр по дате завершения не сработал для воронки ' + (dictionaries.pipelines[pipelineId] || pipelineId) + ', продажи считаются по сделкам из периода создания.');
+    }
+  });
+
+  warnings.push('amoCRM: воронки отчета: ' + pipelineNames.join(', ') + '. Загружено созданных: ' + stats.created + ', завершенных: ' + stats.closed + ', уникальных: ' + Object.keys(byId).length + '.');
 
   return Object.keys(byId).map((key) => byId[key]);
 }
 
-function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName) {
+function salesTargetPipelineIds_(dictionaries) {
+  const pipelines = dictionaries && dictionaries.pipelines ? dictionaries.pipelines : {};
+  return Object.keys(pipelines).filter((pipelineId) => salesAmoCity_(pipelines[pipelineId]));
+}
+
+function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, maxPages, warnings) {
   const dateFrom = Math.floor(new Date(fromDate + 'T00:00:00Z').getTime() / 1000);
   const dateTo = Math.floor(new Date(toDate + 'T23:59:59Z').getTime() / 1000);
   const result = [];
-  let page = 1;
+  const safeMaxPages = Math.max(1, Number(maxPages || 18));
 
-  while (page <= 80) {
+  for (let page = 1; page <= safeMaxPages; page += 1) {
     const params = {
       limit: 250,
       page: page,
-      with: 'contacts,loss_reason',
     };
     params['filter[' + fieldName + '][from]'] = dateFrom;
     params['filter[' + fieldName + '][to]'] = dateTo;
-    const response = fetchAmoCrmEndpoint_('/api/v4/leads', params);
+    if (pipelineId) params['filter[pipeline_id]'] = pipelineId;
+    let response = null;
+    try {
+      response = fetchAmoCrmEndpoint_('/api/v4/leads', params);
+    } catch (error) {
+      if (warnings) warnings.push('amoCRM: страница ' + page + ' не загрузилась (' + fieldName + ':' + pipelineId + '), сохранено уже ' + result.length + ' сделок: ' + salesErrorMessage_(error));
+      break;
+    }
     const leads = response && response._embedded && Array.isArray(response._embedded.leads)
       ? response._embedded.leads
       : [];
     if (!leads.length) break;
     result.push.apply(result, leads);
     if (!response._links || !response._links.next || !response._links.next.href) break;
-    page += 1;
+    if (page === safeMaxPages && warnings) {
+      warnings.push('amoCRM: загрузка ' + fieldName + ' остановлена по лимиту страниц, уже загружено сделок ' + result.length + '.');
+    }
   }
-
   return result;
 }
 
+function salesReadCachedAmoLeadsForMonth_(config, warnings) {
+  let rows = [];
+  try {
+    rows = readAmoCrmRawLeadObjectsFast_();
+  } catch (error) {
+    warnings.push('amoCRM: не удалось прочитать кэш AmoCRM_Raw_Leads: ' + salesErrorMessage_(error));
+    return [];
+  }
+
+  const leads = [];
+  rows.forEach((row) => {
+    const createdAt = String(row.createdAt || '');
+    const closedAt = String(row.closedAt || '');
+    if (createdAt.indexOf(config.monthKey) !== 0 && closedAt.indexOf(config.monthKey) !== 0) return;
+    const lead = salesAmoLeadFromCachedRecord_(row);
+    if (lead) leads.push(lead);
+  });
+
+  if (leads.length) {
+    warnings.push('amoCRM: отчет прочитал сохраненный слой AmoCRM_Raw_Leads, сделок за месяц: ' + leads.length + '.');
+  }
+  return leads;
+}
+
+function readAmoCrmRawLeadObjectsFast_() {
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.amoCrmRawLeads);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const rowCount = sheet.getLastRow() - 1;
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map((header) => String(header || '').trim());
+  const required = [
+    'id',
+    'leadId',
+    'createdAt',
+    'updatedAt',
+    'closedAt',
+    'name',
+    'price',
+    'pipelineId',
+    'pipelineName',
+    'statusId',
+    'statusName',
+    'responsibleUserId',
+    'responsibleUserName',
+    'city',
+    'managerName',
+    'stageName',
+    'typeLabel',
+    'leadType',
+    'createdDate',
+    'closedDate',
+    'isQualified',
+    'isNotQualifiedYet',
+    'isWon',
+    'isVip',
+    'isDistant',
+    'isAB',
+    'budget',
+    'excludeReason',
+    'source',
+  ];
+  const columns = {};
+  required.forEach((header) => {
+    const index = headers.indexOf(header);
+    if (index >= 0) columns[header] = sheet.getRange(2, index + 1, rowCount, 1).getValues();
+  });
+  const rows = [];
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const row = {};
+    let hasValue = false;
+    required.forEach((header) => {
+      const value = columns[header] ? columns[header][rowIndex][0] : '';
+      row[header] = value;
+      if (value !== '' && value !== null && value !== undefined) hasValue = true;
+    });
+    if (hasValue) rows.push(row);
+  }
+  return rows;
+}
+
+function salesAmoLeadFromCachedRecord_(record) {
+  const leadId = String(record.leadId || '').trim();
+  if (!leadId) return null;
+  const createdAt = salesCachedDateTimeString_(record.createdAt);
+  const closedAt = salesCachedDateTimeString_(record.closedAt);
+  const createdDate = salesCachedDateOnlyString_(record.createdDate) || String(createdAt).slice(0, 10);
+  const closedDate = salesCachedDateOnlyString_(record.closedDate) || String(closedAt).slice(0, 10);
+  const city = salesValidCachedCity_(record.city);
+  const cachedNormalized = {
+    id: 'amocrm-lead-' + leadId,
+    leadId: leadId,
+    name: String(record.name || ''),
+    pipeline: String(record.pipelineName || record.pipelineId || ''),
+    stage: String(record.stageName || record.statusName || record.statusId || ''),
+    city: city,
+    manager: String(record.managerName || record.responsibleUserName || record.responsibleUserId || '').trim(),
+    createdDate: createdDate,
+    closedDate: closedDate,
+    isQualified: salesParseBoolean_(record.isQualified),
+    isNotQualifiedYet: salesParseBoolean_(record.isNotQualifiedYet),
+    isWon: salesParseBoolean_(record.isWon),
+    isVip: salesParseBoolean_(record.isVip),
+    isDistant: salesParseBoolean_(record.isDistant),
+    isAB: salesParseBoolean_(record.isAB),
+    budget: Number(record.budget || record.price || 0) || 0,
+    leadType: String(record.leadType || ''),
+    typeLabel: String(record.typeLabel || ''),
+    url: '',
+    excludeReason: String(record.excludeReason || (!city ? 'noCity' : '')),
+  };
+  return {
+    id: leadId,
+    name: cachedNormalized.name,
+    price: cachedNormalized.budget,
+    pipeline_id: record.pipelineId || '',
+    pipeline_name: record.pipelineName || '',
+    status_id: record.statusId || '',
+    status_name: record.statusName || '',
+    responsible_user_id: record.responsibleUserId || '',
+    responsible_user_name: record.responsibleUserName || '',
+    created_at: salesTimestampFromCachedDate_(createdAt),
+    updated_at: salesTimestampFromCachedDate_(record.updatedAt),
+    closed_at: salesTimestampFromCachedDate_(closedAt),
+    custom_fields_values: [],
+    cachedNormalized: cachedNormalized,
+  };
+}
+
+function salesCachedDateOnlyString_(value) {
+  const date = salesCachedDateObject_(value);
+  if (date) return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const text = String(value || '').trim();
+  return text ? text.slice(0, 10) : '';
+}
+
+function salesCachedDateTimeString_(value) {
+  const date = salesCachedDateObject_(value);
+  if (date) return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  return String(value || '').trim();
+}
+
+function salesCachedDateObject_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return value;
+  }
+  const text = String(value || '').trim();
+  if (!text || /^\d{4}-\d{2}-\d{2}/.test(text)) return null;
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function salesValidCachedCity_(value) {
+  const text = String(value || '').trim();
+  return text === 'МСК' || text === 'СПБ' ? text : '';
+}
+
+function salesParseBoolean_(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return value === true || value === 1 || text === 'true' || text === 'yes' || text === 'да' || text === '1';
+}
+
+function salesParseJsonSafe_(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (ignore) {
+    return null;
+  }
+}
+
+function salesTimestampFromCachedDate_(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const date = new Date(text.replace(' ', 'T') + (text.indexOf('Z') >= 0 ? '' : 'Z'));
+  const millis = date.getTime();
+  return Number.isFinite(millis) ? Math.floor(millis / 1000) : '';
+}
+
 function salesNormalizeAmoLead_(lead, dictionaries, config) {
+  if (lead && lead.cachedNormalized) {
+    const cached = lead.cachedNormalized;
+    if (cached.excludeReason || !cached.city) {
+      return {
+        exclude: true,
+        excludeReason: cached.excludeReason || 'noCity',
+        pipeline: cached.pipeline,
+        stage: cached.stage,
+        typeLabel: cached.typeLabel,
+      };
+    }
+    cached.createdInMonth = Boolean(cached.createdDate && cached.createdDate.indexOf(config.monthKey) === 0);
+    cached.closedInMonth = Boolean(cached.closedDate && cached.closedDate.indexOf(config.monthKey) === 0);
+    return cached;
+  }
   const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
   const pipelineId = String(lead.pipeline_id || '');
   const statusId = String(lead.status_id || '');
-  const pipeline = dictionaries.pipelines[pipelineId] || pipelineId;
-  const stage = dictionaries.statuses[pipelineId + ':' + statusId] || statusId;
+  const pipeline = lead.pipeline_name || dictionaries.pipelines[pipelineId] || pipelineId;
+  const stage = lead.status_name || dictionaries.statuses[pipelineId + ':' + statusId] || statusId;
   const typeLabel = salesAmoField_(fields, ['тип лида', 'тип обращения']);
   const city = salesAmoCity_(pipeline);
   const excludedByPipeline = salesNormalizeText_(pipeline).indexOf('сообщ') >= 0;
   const excludedByType = salesNormalizeText_(typeLabel).indexOf('сообщ') >= 0;
   if (!city || excludedByPipeline || excludedByType) {
-    return { exclude: true };
+    return {
+      exclude: true,
+      excludeReason: excludedByPipeline ? 'messagesPipeline' : (excludedByType ? 'messagesType' : 'noCity'),
+      pipeline: pipeline,
+      stage: stage,
+      typeLabel: typeLabel,
+    };
   }
 
   const manager = salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
+    || lead.responsible_user_name
     || dictionaries.users[String(lead.responsible_user_id || '')]
     || String(lead.responsible_user_id || '').trim()
     || 'Без ответственного';
@@ -1101,7 +1381,6 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
   const format = salesAmoField_(fields, ['формат']);
   const vip = salesAmoField_(fields, ['вип пакет', 'vip пакет']);
   const budget = Number(lead.price || salesAmoField_(fields, ['бюджет']) || 0) || 0;
-  const baseDomain = getAmoCrmStatus_().apiDomain.replace(/^https?:\/\//, '');
 
   return {
     id: 'amocrm-lead-' + String(lead.id || ''),
@@ -1124,8 +1403,13 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     budget: budget,
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
-    url: baseDomain ? 'https://' + baseDomain + '/leads/detail/' + String(lead.id || '') : '',
+    url: '',
   };
+}
+
+function getAmoCrmLeadUrl_(leadId) {
+  const baseDomain = getAmoCrmStatus_().apiDomain.replace(/^https?:\/\//, '');
+  return baseDomain && leadId ? 'https://' + baseDomain + '/leads/detail/' + leadId : '';
 }
 
 function salesAmoFieldMap_(customFields) {
@@ -1184,6 +1468,8 @@ function salesAmoIsWon_(stageName) {
 
 function salesAmoIsQualified_(stageName, lead) {
   const stage = salesNormalizeLabel_(stageName);
+  const fields = salesAmoFieldMap_((lead && lead.custom_fields_values) || []);
+  if (salesNormalizeText_(salesAmoField_(fields, ['квал лид', 'квал', 'целевой лид'])) === 'да') return true;
   const directStages = [
     'недозвоны целевые',
     'брифинг',
@@ -1203,7 +1489,7 @@ function salesAmoIsQualified_(stageName, lead) {
   ];
   if (directStages.some((item) => stage.indexOf(salesNormalizeLabel_(item)) >= 0)) return true;
 
-  if (stage.indexOf(salesNormalizeLabel_('закрыто и нереализовано')) >= 0) {
+  if (stage.indexOf(salesNormalizeLabel_('закрыто и нереализовано')) >= 0 || stage.indexOf(salesNormalizeLabel_('закрыто и не реализовано')) >= 0) {
     const embeddedLoss = lead && lead._embedded && lead._embedded.loss_reason ? lead._embedded.loss_reason.name : '';
     const lossText = [
       stageName,
@@ -2882,11 +3168,14 @@ function testAmoCrmConnection_() {
 }
 
 function syncAmoCrmLeads_(payload) {
+  ensureAmoCrmRawLeadSheet_();
   const today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   const fromDate = normalizeAmoCrmDate_(payload && payload.fromDate, today);
   const toDate = normalizeAmoCrmDate_(payload && payload.toDate, fromDate);
-  const leads = fetchAmoCrmLeads_(fromDate, toDate);
-  const records = leads.map(amoCrmLeadRecord_);
+  const warnings = [];
+  const dictionaries = salesFetchAmoDictionaries_();
+  const leads = salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionaries);
+  const records = leads.map((lead) => amoCrmLeadRecord_(lead, dictionaries));
   const upsertResult = records.length
     ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
     : { updated: 0 };
@@ -2897,10 +3186,24 @@ function syncAmoCrmLeads_(payload) {
     status: 'success',
     message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads.',
     rows: upsertResult.updated,
+    warnings: warnings,
     updatedAt: new Date(),
   };
   logAmoCrmSync_(result);
   return result;
+}
+
+function ensureAmoCrmRawLeadSheet_() {
+  const ss = getWeeklyReportSpreadsheet_();
+  let sheet = ss.getSheetByName(CONFIG.sheets.amoCrmRawLeads);
+  if (!sheet) sheet = ss.insertSheet(CONFIG.sheets.amoCrmRawLeads);
+  const headers = HEADERS.AmoCRM_Raw_Leads;
+  const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  if (current.join('|') !== headers.join('|')) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
 }
 
 function fetchAmoCrmLeads_(fromDate, toDate) {
@@ -2936,7 +3239,7 @@ function fetchAmoCrmEndpoint_(path, params) {
     throw new Error('Не задан AMOCRM_ACCESS_TOKEN в Script Properties.');
   }
 
-  const baseUrl = normalizeAmoCrmApiDomain_(properties.getProperty(CONFIG.amoCrmApiDomainProperty) || CONFIG.amoCrmDefaultApiDomain);
+  const baseUrl = getAmoCrmApiBaseUrl_();
   const query = amoCrmQuery_(params || {});
   const response = UrlFetchApp.fetch(baseUrl + path + (query ? '?' + query : ''), {
     method: 'get',
@@ -2960,13 +3263,67 @@ function fetchAmoCrmEndpoint_(path, params) {
   return parsed || {};
 }
 
-function amoCrmLeadRecord_(lead) {
+function fetchAmoCrmEndpointPages_(path, paramsList, warnings, label) {
+  const properties = PropertiesService.getScriptProperties();
+  const token = String(properties.getProperty(CONFIG.amoCrmAccessTokenProperty) || '').trim();
+  if (!token) {
+    throw new Error('Не задан AMOCRM_ACCESS_TOKEN в Script Properties.');
+  }
+
+  const baseUrl = getAmoCrmApiBaseUrl_();
+  const requests = (paramsList || []).map((params) => {
+    const query = amoCrmQuery_(params || {});
+    return {
+      url: baseUrl + path + (query ? '?' + query : ''),
+      method: 'get',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/json',
+      },
+      muteHttpExceptions: true,
+    };
+  });
+
+  if (!requests.length) return [];
+  const responses = UrlFetchApp.fetchAll(requests);
+  const result = [];
+  responses.forEach((response, index) => {
+    const status = response.getResponseCode();
+    const text = response.getContentText();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch (ignore) {
+      parsed = null;
+    }
+    if (status < 200 || status >= 300) {
+      if (warnings) {
+        const page = paramsList[index] && paramsList[index].page ? paramsList[index].page : index + 1;
+        warnings.push('amoCRM: страница ' + page + ' не загрузилась (' + (label || path) + '): HTTP ' + status + ' ' + sanitizeAmoCrmText_(text));
+      }
+      return;
+    }
+    result.push(parsed || {});
+  });
+  return result;
+}
+
+function amoCrmLeadRecord_(lead, dictionaries) {
   const leadId = String(lead.id || '').trim();
   const createdAt = amoCrmUnixToIso_(lead.created_at);
   const updatedAt = amoCrmUnixToIso_(lead.updated_at);
   const closedAt = amoCrmUnixToIso_(lead.closed_at);
   const customFields = Array.isArray(lead.custom_fields_values) ? lead.custom_fields_values : [];
   const contacts = lead._embedded && Array.isArray(lead._embedded.contacts) ? lead._embedded.contacts : [];
+  const pipelineName = dictionaries && dictionaries.pipelines ? (dictionaries.pipelines[String(lead.pipeline_id || '')] || '') : '';
+  const statusName = dictionaries && dictionaries.statuses ? (dictionaries.statuses[String(lead.pipeline_id || '') + ':' + String(lead.status_id || '')] || '') : '';
+  const responsibleUserName = dictionaries && dictionaries.users ? (dictionaries.users[String(lead.responsible_user_id || '')] || '') : '';
+  const leadWithNames = Object.assign({}, lead, {
+    pipeline_name: pipelineName,
+    status_name: statusName,
+    responsible_user_name: responsibleUserName,
+  });
+  const normalized = salesNormalizeAmoLead_(leadWithNames, dictionaries || { users: {}, pipelines: {}, statuses: {} }, { monthKey: '0000-00' }) || {};
   return {
     id: 'amocrm-lead-' + leadId,
     leadId: leadId,
@@ -2976,24 +3333,30 @@ function amoCrmLeadRecord_(lead) {
     name: lead.name || '',
     price: Number(lead.price || 0),
     pipelineId: String(lead.pipeline_id || ''),
+    pipelineName: pipelineName,
     statusId: String(lead.status_id || ''),
+    statusName: statusName,
     responsibleUserId: String(lead.responsible_user_id || ''),
+    responsibleUserName: responsibleUserName,
+    city: normalized.city || '',
+    managerName: normalized.manager || responsibleUserName || '',
+    stageName: normalized.stage || statusName || '',
+    typeLabel: normalized.typeLabel || '',
+    leadType: normalized.leadType || '',
+    createdDate: normalized.createdDate || String(createdAt).slice(0, 10),
+    closedDate: normalized.closedDate || String(closedAt).slice(0, 10),
+    isQualified: normalized.isQualified ? 'TRUE' : '',
+    isNotQualifiedYet: normalized.isNotQualifiedYet ? 'TRUE' : '',
+    isWon: normalized.isWon ? 'TRUE' : '',
+    isVip: normalized.isVip ? 'TRUE' : '',
+    isDistant: normalized.isDistant ? 'TRUE' : '',
+    isAB: normalized.isAB ? 'TRUE' : '',
+    budget: Number(normalized.budget || lead.price || 0) || 0,
+    excludeReason: normalized.exclude ? (normalized.excludeReason || 'excluded') : '',
     source: amoCrmLeadSource_(lead, customFields),
     contactIds: contacts.map((contact) => contact.id).filter(Boolean).join(','),
-    customFieldsJson: truncateAmoCrmCell_(JSON.stringify(customFields || [])),
-    rawJson: truncateAmoCrmCell_(JSON.stringify({
-      id: lead.id,
-      name: lead.name,
-      price: lead.price,
-      pipeline_id: lead.pipeline_id,
-      status_id: lead.status_id,
-      responsible_user_id: lead.responsible_user_id,
-      created_at: lead.created_at,
-      updated_at: lead.updated_at,
-      closed_at: lead.closed_at,
-      custom_fields_values: customFields,
-      embedded: lead._embedded || {},
-    })),
+    customFieldsJson: '',
+    rawJson: '',
     syncedAt: new Date(),
   };
 }
@@ -3038,6 +3401,11 @@ function normalizeAmoCrmApiDomain_(value) {
   const raw = String(value || CONFIG.amoCrmDefaultApiDomain).trim();
   const withProtocol = raw.indexOf('http') === 0 ? raw : 'https://' + raw;
   return withProtocol.replace(/\/+$/g, '');
+}
+
+function getAmoCrmApiBaseUrl_() {
+  const properties = PropertiesService.getScriptProperties();
+  return normalizeAmoCrmApiDomain_(properties.getProperty(CONFIG.amoCrmApiDomainProperty) || CONFIG.amoCrmDefaultApiDomain);
 }
 
 function amoCrmQuery_(params) {
@@ -3656,14 +4024,7 @@ function readObjects_(sheetName) {
 
 function upsertRowsById_(sheetName, headers, records, mapRow) {
   const sheet = getWeeklyReportSpreadsheet_().getSheetByName(sheetName);
-  const existing = readObjects_(sheetName);
-  const rowsById = {};
-  existing.forEach((row, index) => {
-    const id = String(row.id || '').trim();
-    if (!id) return;
-    if (!rowsById[id]) rowsById[id] = [];
-    rowsById[id].push(index + 2);
-  });
+  const rowsById = readRowNumbersById_(sheet, headers);
   const duplicateRows = [];
   Object.keys(rowsById).forEach((id) => {
     const rows = rowsById[id];
@@ -3673,9 +4034,9 @@ function upsertRowsById_(sheetName, headers, records, mapRow) {
   const rowById = {};
   if (duplicateRows.length) {
     unique_(duplicateRows).sort((a, b) => b - a).forEach((rowNumber) => sheet.deleteRow(rowNumber));
-    readObjects_(sheetName).forEach((row, index) => {
-      const id = String(row.id || '').trim();
-      if (id) rowById[id] = index + 2;
+    const refreshedRowsById = readRowNumbersById_(sheet, headers);
+    Object.keys(refreshedRowsById).forEach((id) => {
+      rowById[id] = refreshedRowsById[id][0];
     });
   } else {
     Object.keys(rowsById).forEach((id) => {
@@ -3694,6 +4055,21 @@ function upsertRowsById_(sheetName, headers, records, mapRow) {
   });
 
   return { updated: records.length };
+}
+
+function readRowNumbersById_(sheet, headers) {
+  const rowsById = {};
+  if (!sheet || sheet.getLastRow() < 2) return rowsById;
+  const headerValues = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), headers.length)).getValues()[0];
+  const idColumn = Math.max(1, headerValues.map((header) => String(header || '').trim()).indexOf('id') + 1);
+  const ids = sheet.getRange(2, idColumn, sheet.getLastRow() - 1, 1).getValues();
+  ids.forEach((row, index) => {
+    const id = String(row[0] || '').trim();
+    if (!id) return;
+    if (!rowsById[id]) rowsById[id] = [];
+    rowsById[id].push(index + 2);
+  });
+  return rowsById;
 }
 
 function dailyRow_(record) {
