@@ -1638,6 +1638,7 @@ function SalesDepartmentDashboard({
   const [loadError, setLoadError] = useState("");
   const [activeRop, setActiveRop] = useState<SalesDepartmentRop>("Дакоро");
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
+  const [showManagersList, setShowManagersList] = useState(false);
   const [showNotQualified, setShowNotQualified] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const integrationsEnabled = true;
@@ -1831,12 +1832,12 @@ function SalesDepartmentDashboard({
             <article className="sales-panel sales-manager-panel">
               <PanelHead
                 title="Кто сколько квалов берет"
-                description="Доля менеджеров по квалам и быстрый переход в персональную вкладку."
+                description="Команда всегда сверху, менеджеры раскрываются по необходимости."
               />
               <div className="sales-manager-list">
                 <button
                   type="button"
-                  className={selectedManagerName === "team" ? "active" : ""}
+                  className={selectedManagerName === "team" ? "sales-team-button active" : "sales-team-button"}
                   onClick={() => setSelectedManagerName("team")}
                 >
                   <span>Команда Дакоро</span>
@@ -1844,7 +1845,17 @@ function SalesDepartmentDashboard({
                   <i style={{ width: "100%" }} />
                   <small>{formatNumber(totals.factDeals)} договоров · {formatNullablePercent(totals.conversionToDeals)} квал → договор</small>
                 </button>
-                {topManagers.map((manager) => (
+                <button
+                  type="button"
+                  className={showManagersList ? "sales-manager-toggle active" : "sales-manager-toggle"}
+                  onClick={() => setShowManagersList((current) => !current)}
+                  aria-expanded={showManagersList}
+                >
+                  <span>{showManagersList ? "Скрыть менеджеров" : "Показать менеджеров"}</span>
+                  <strong>{topManagers.length}</strong>
+                  <ChevronDown size={15} />
+                </button>
+                {showManagersList && topManagers.map((manager) => (
                   <button
                     key={manager.name}
                     type="button"

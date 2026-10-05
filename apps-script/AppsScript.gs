@@ -333,6 +333,8 @@ const HEADERS = {
     'syncedAt',
     'isDoubleAB',
     'category',
+    'lossReasonId',
+    'lossReasonName',
   ],
   AmoCRM_Sync_Log: [
     'id',
@@ -1114,12 +1116,12 @@ function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionarie
   }
 
   pipelineIds.forEach((pipelineId) => {
-    const createdRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'created_at', pipelineId, 1, warnings);
+    const createdRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'created_at', pipelineId, 80, warnings);
     stats.created += createdRows.length;
     addRows(createdRows);
 
     try {
-      const closedRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'closed_at', pipelineId, 1, warnings);
+      const closedRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'closed_at', pipelineId, 80, warnings);
       stats.closed += closedRows.length;
       addRows(closedRows);
     } catch (error) {
@@ -1233,6 +1235,8 @@ function readAmoCrmRawLeadObjectsFast_() {
     'budget',
     'excludeReason',
     'source',
+    'lossReasonId',
+    'lossReasonName',
   ];
   const columns = {};
   required.forEach((header) => {
@@ -1284,6 +1288,8 @@ function salesAmoLeadFromCachedRecord_(record) {
     typeLabel: String(record.typeLabel || ''),
     url: '',
     excludeReason: String(record.excludeReason || (!city ? 'noCity' : '')),
+    lossReasonId: String(record.lossReasonId || '').trim(),
+    lossReasonName: String(record.lossReasonName || '').trim(),
   };
   return {
     id: leadId,
@@ -1295,6 +1301,8 @@ function salesAmoLeadFromCachedRecord_(record) {
     status_name: record.statusName || '',
     responsible_user_id: record.responsibleUserId || '',
     responsible_user_name: record.responsibleUserName || '',
+    loss_reason_id: cachedNormalized.lossReasonId,
+    loss_reason: cachedNormalized.lossReasonName ? { name: cachedNormalized.lossReasonName } : null,
     created_at: salesTimestampFromCachedDate_(createdAt),
     updated_at: salesTimestampFromCachedDate_(record.updatedAt),
     closed_at: salesTimestampFromCachedDate_(closedAt),
@@ -1368,6 +1376,9 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     }
     cached.createdInMonth = Boolean(cached.createdDate && cached.createdDate.indexOf(config.monthKey) === 0);
     cached.closedInMonth = Boolean(cached.closedDate && cached.closedDate.indexOf(config.monthKey) === 0);
+    cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
+    cached.isQualified = Boolean(cached.isQualified) || salesAmoIsQualified_(cached.stage, lead);
+    cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
   }
   const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
@@ -1396,7 +1407,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     || 'Без ответственного';
   const createdDate = salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at);
   const closedDate = salesAmoDate_(salesAmoField_(fields, ['дата завершения', 'дата оплаты']), lead.closed_at);
-  const won = salesAmoIsWon_(stage);
+  const won = salesAmoIsWon_(stage, statusId);
   const qualified = salesAmoIsQualified_(stage, lead);
   const notQualifiedYet = !qualified && salesAmoIsNotQualifiedYet_(stage);
   const category = salesAmoField_(fields, ['категория']);
@@ -1427,6 +1438,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     budget: budget,
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
+    lossReasonId: String(lead.loss_reason_id || '').trim(),
+    lossReasonName: lead && lead.loss_reason && lead.loss_reason.name ? String(lead.loss_reason.name) : '',
     url: '',
   };
 }
@@ -1486,12 +1499,18 @@ function salesAmoDate_(customValue, unixValue) {
   return Utilities.formatDate(new Date(timestamp * 1000), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
 
-function salesAmoIsWon_(stageName) {
+function salesAmoIsWon_(stageName, statusId) {
+  if (String(statusId || '').trim() === '142') return true;
   return salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('успешно реализовано')) >= 0;
 }
 
 function salesAmoIsQualified_(stageName, lead) {
   const stage = salesNormalizeLabel_(stageName);
+  const pipelineId = String((lead && (lead.pipeline_id || lead.pipelineId)) || '').trim();
+  const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
+  const statusKey = pipelineId + ':' + statusId;
+  const directStatusIds = salesAmoQualifiedStatusKeys_();
+  if (directStatusIds.indexOf(statusKey) >= 0 || statusId === '142') return true;
   const fields = salesAmoFieldMap_((lead && lead.custom_fields_values) || []);
   if (salesNormalizeText_(salesAmoField_(fields, ['квал лид', 'квал', 'целевой лид'])) === 'да') return true;
   const directStages = [
@@ -1514,6 +1533,8 @@ function salesAmoIsQualified_(stageName, lead) {
   if (directStages.some((item) => stage.indexOf(salesNormalizeLabel_(item)) >= 0)) return true;
 
   if (stage.indexOf(salesNormalizeLabel_('закрыто и нереализовано')) >= 0 || stage.indexOf(salesNormalizeLabel_('закрыто и не реализовано')) >= 0) {
+    const lossReasonId = String((lead && (lead.loss_reason_id || lead.lossReasonId)) || '').trim();
+    if (salesAmoQualifiedLossReasonIds_().indexOf(lossReasonId) >= 0) return true;
     const embeddedLoss = lead && lead._embedded && lead._embedded.loss_reason ? lead._embedded.loss_reason.name : '';
     const lossText = [
       stageName,
@@ -1524,6 +1545,51 @@ function salesAmoIsQualified_(stageName, lead) {
     return salesAmoQualifiedLossReasons_().some((reason) => salesNormalizeText_(lossText).indexOf(salesNormalizeText_(reason)) >= 0);
   }
   return false;
+}
+
+function salesAmoQualifiedStatusKeys_() {
+  return [
+    '4535035:41892640',
+    '4535035:55269086',
+    '4535035:60792430',
+    '4535035:60792434',
+    '4535035:65074610',
+    '4535035:68614874',
+    '4535035:73037606',
+    '4535035:74332418',
+    '4535035:78923346',
+    '4535038:41892613',
+    '4535038:55269110',
+    '4535038:60792566',
+    '4535038:65074614',
+    '4535038:68614902',
+    '4535038:73017614',
+    '4535038:74332454',
+    '4535038:75279542',
+    '4535038:76917942',
+    '4535038:78923402',
+    '9926210:78854542',
+    '9926210:78854546',
+    '9926210:78854642',
+    '9926210:78854650',
+    '9926210:78854658',
+    '9926210:78854662',
+    '9926246:78854846',
+    '9926246:78854850',
+    '9926246:78855942',
+    '9926246:78855946',
+    '9926246:78855950',
+  ];
+}
+
+function salesAmoQualifiedLossReasonIds_() {
+  return [
+    '13957954',
+    '19999678',
+    '3421768',
+    '3421771',
+    '3421777',
+  ];
 }
 
 function salesAmoQualifiedLossReasons_() {
@@ -3444,6 +3510,8 @@ function amoCrmLeadRecord_(lead, dictionaries) {
   const pipelineName = dictionaries && dictionaries.pipelines ? (dictionaries.pipelines[String(lead.pipeline_id || '')] || '') : '';
   const statusName = dictionaries && dictionaries.statuses ? (dictionaries.statuses[String(lead.pipeline_id || '') + ':' + String(lead.status_id || '')] || '') : '';
   const responsibleUserName = dictionaries && dictionaries.users ? (dictionaries.users[String(lead.responsible_user_id || '')] || '') : '';
+  const lossReasonId = String(lead.loss_reason_id || '').trim();
+  const lossReasonName = lead && lead.loss_reason && lead.loss_reason.name ? String(lead.loss_reason.name) : '';
   const leadWithNames = Object.assign({}, lead, {
     pipeline_name: pipelineName,
     status_name: statusName,
@@ -3486,6 +3554,8 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     rawJson: '',
     syncedAt: new Date(),
     category: normalized.category || '',
+    lossReasonId: lossReasonId,
+    lossReasonName: lossReasonName,
   };
 }
 
