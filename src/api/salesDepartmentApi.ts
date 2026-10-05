@@ -2,7 +2,7 @@ import { callReportApi } from "./reportApi";
 
 const salesDepartmentSpreadsheetId = "1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI";
 const dakoroPlanSpreadsheetId = "1AabnCG2SckbpbrOAhh2J45eLXEqNEvbma1UNMTFetr4";
-const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v9:";
+const salesDepartmentCachePrefix = "rectop-sales-department-snapshot-v10:";
 const salesDepartmentCacheTtlMs = 1000 * 60 * 10;
 const gvizTimeouts = {
   plan: 9000,
@@ -326,7 +326,7 @@ async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): P
 async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot> {
   const warnings: string[] = [];
   const [planResult, dynamicsResult, dailyResult, psResult, specialResult] = await Promise.all([
-    settle(loadGvizRange(dakoroPlanSpreadsheetId, "Лист1", "A1:Z20", gvizTimeouts.plan)),
+    settle(loadFirstGvizRange(dakoroPlanSpreadsheetId, getSalesPlanSheetCandidates(context), "A1:AZ60", gvizTimeouts.plan)),
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика", "A1:AZ38", gvizTimeouts.dynamics)),
     settle(loadGvizRange(salesDepartmentSpreadsheetId, "Динамика по дням", "A1:AF20", gvizTimeouts.daily)),
     settle(loadGvizQuery(salesDepartmentSpreadsheetId, "Выгрузка PS", "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL,AM,AN,AO,AP limit 5000", gvizTimeouts.ps)),
@@ -349,7 +349,9 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   const dynamicsByManager = dynamicsParsed.metrics;
   if (!dynamicsResult.ok) warnings.push("Динамика отдела продаж не загрузилась из живого листа.");
 
-  const baseManagerNames = uniqueManagers([...planManagerNames, ...dynamicsParsed.managers, ...dakoroManagers]);
+  const baseManagerNames = planManagerNames.length
+    ? planManagerNames
+    : uniqueManagers([...dynamicsParsed.managers, ...dakoroManagers]);
 
   const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
   if (!dailyResult.ok) warnings.push("Дневная динамика не загрузилась, линейный прогноз посчитан по текущему факту.");
@@ -361,13 +363,14 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     : new Map<string, ManagerSpecialMetrics>();
   if (!specialResult.ok) warnings.push("VIP и дистанты не прочитались из мини-таблиц листа Динамика.");
 
-  const managerNames = uniqueManagers([
-    ...planManagerNames,
-    ...dynamicsParsed.managers,
-    ...Array.from(psByManager.keys()),
-    ...Array.from(specialByManager.keys()),
-    ...dakoroManagers,
-  ]);
+  const managerNames = planManagerNames.length
+    ? planManagerNames
+    : uniqueManagers([
+        ...dynamicsParsed.managers,
+        ...Array.from(psByManager.keys()),
+        ...Array.from(specialByManager.keys()),
+        ...dakoroManagers,
+      ]);
 
   const workingDaysInMonth = countWorkingDaysInMonth(context.monthYear, context.monthIndex);
   const latestActualDate = getCurrentMonthDateKey(context) ?? getLatestActualDate(daily);
@@ -614,6 +617,32 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   });
 }
 
+async function loadFirstGvizRange(spreadsheetId: string, sheetNames: string[], range: string, timeoutMs: number): Promise<GvizTable> {
+  let lastError: unknown = null;
+  for (const sheetName of sheetNames) {
+    try {
+      return await loadGvizRange(spreadsheetId, sheetName, range, timeoutMs);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Не найден лист плана менеджеров");
+}
+
+function getSalesPlanSheetCandidates(context: SalesMonthContext): string[] {
+  const monthName = monthNames[context.monthIndex] ?? "";
+  return uniqueText([
+    context.monthLabel,
+    context.monthLabel.toLowerCase(),
+    monthName,
+    monthName.toLowerCase(),
+    `${monthName} ${context.monthYear}`,
+    `${monthName.toLowerCase()} ${context.monthYear}`,
+    context.monthKey,
+    "Лист1",
+  ]);
+}
+
 function loadGvizRange(spreadsheetId: string, sheetName: string, range: string, timeoutMs: number): Promise<GvizTable> {
   return loadGviz(spreadsheetId, sheetName, { range, timeoutMs });
 }
@@ -708,7 +737,7 @@ function extractPlanManagerNames(table: GvizTable): string[] {
     .slice(1)
     .map((value) => value.trim())
     .filter((value) => value && !normalizeLabel(value).includes(normalizeLabel("Итого")));
-  return uniqueManagers(names.length ? names : [...dakoroManagers]);
+  return uniqueManagers(names);
 }
 
 function parseRopDynamicsSheet(table: GvizTable, ropName: string): { managers: string[]; metrics: Map<string, Map<string, string>> } {
@@ -786,6 +815,17 @@ function uniqueManagers(names: readonly string[]): string[] {
     const trimmed = String(name || "").trim();
     if (!trimmed) return;
     if (result.some((existing) => managerMatches(existing, trimmed))) return;
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function uniqueText(values: readonly string[]): string[] {
+  const result: string[] = [];
+  values.forEach((value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return;
+    if (result.some((existing) => normalizeLabel(existing) === normalizeLabel(trimmed))) return;
     result.push(trimmed);
   });
   return result;

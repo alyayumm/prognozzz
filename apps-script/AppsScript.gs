@@ -331,6 +331,7 @@ const HEADERS = {
     'customFieldsJson',
     'rawJson',
     'syncedAt',
+    'isDoubleAB',
   ],
   AmoCRM_Sync_Log: [
     'id',
@@ -743,9 +744,17 @@ function getSalesDepartmentDashboard_(payload) {
   const config = salesDepartmentConfigForRequest_(payload);
   const warnings = [];
 
-  const planByManager = salesStaticPlanByManager_();
-  const amo = salesReadAmoDepartmentData_(config, warnings);
-  const managerNames = salesResolveManagerNames_(planByManager, amo.byManager, {}, {}, config.managers);
+  const planSnapshot = salesReadDepartmentPlan_(config, warnings);
+  const planByManager = salesHasAnyObjectValues_(planSnapshot.planByManager)
+    ? planSnapshot.planByManager
+    : salesStaticPlanByManager_();
+  const planManagerNames = salesUniqueManagers_(planSnapshot.managerNames.length ? planSnapshot.managerNames : Object.keys(planByManager));
+  const authoritativeManagerNames = planManagerNames.length ? planManagerNames : salesUniqueManagers_(config.managers);
+  const amo = salesReadAmoDepartmentData_(Object.assign({}, config, {
+    managers: authoritativeManagerNames,
+    restrictManagers: true,
+  }), warnings);
+  const managerNames = authoritativeManagerNames;
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesLatestActualDate_(amo.daily) || salesCurrentMonthDateKey_(config);
   const workingDaysPassed = Math.max(
@@ -823,7 +832,7 @@ function getSalesDepartmentDashboard_(payload) {
     rop: config.rop,
     monthKey: config.monthKey,
     monthLabel: config.monthLabel,
-    planLabel: SALES_DEPARTMENT_STATIC_PLAN_LABEL,
+    planLabel: planSnapshot.planLabel || SALES_DEPARTMENT_STATIC_PLAN_LABEL,
     latestActualDate: latestActualDate,
     workingDaysPassed: workingDaysPassed,
     workingDaysInMonth: workingDaysInMonth,
@@ -834,7 +843,7 @@ function getSalesDepartmentDashboard_(payload) {
     warnings: warnings,
     sourceLinks: {
       dynamics: getAmoCrmStatus_().apiDomain,
-      plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit#gid=0',
+      plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit',
     },
   };
 }
@@ -868,6 +877,7 @@ function salesReadAmoDepartmentData_(config, warnings) {
     excludedNoCity: 0,
     excludedMessagesPipeline: 0,
     excludedMessagesType: 0,
+    excludedManager: 0,
     createdInMonth: 0,
     closedWonInMonth: 0,
   };
@@ -890,8 +900,13 @@ function salesReadAmoDepartmentData_(config, warnings) {
       if (normalized && normalized.excludeReason === 'messagesType') debug.excludedMessagesType += 1;
       return;
     }
+    const canonicalManager = salesCanonicalManagerName_(normalized.manager, config.managers);
+    if (config.restrictManagers && !canonicalManager) {
+      debug.excludedManager += 1;
+      return;
+    }
     debug.accepted += 1;
-    const manager = normalized.manager || 'Без ответственного';
+    const manager = canonicalManager || normalized.manager || 'Без ответственного';
     const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
 
     if (normalized.createdInMonth) {
@@ -940,21 +955,22 @@ function salesReadAmoDepartmentData_(config, warnings) {
 
     if (normalized.closedInMonth && normalized.isWon) {
       debug.closedWonInMonth += 1;
-      item.factDeals += 1;
-      item.orderCount += 1;
-      item.paidDeals += 1;
+      const dealCount = salesAmoDealCount_(normalized);
+      item.factDeals += dealCount;
+      item.orderCount += dealCount;
+      item.paidDeals += dealCount;
       item.revenue += normalized.budget;
-      if (normalized.city === 'МСК') item.mskDeals += 1;
-      if (normalized.city === 'СПБ') item.spbDeals += 1;
-      if (normalized.isVip) item.vipDeals += 1;
-      if (normalized.isDistant) item.distantDeals += 1;
-      if (normalized.isAB) item.abDeals += 1;
+      if (normalized.city === 'МСК') item.mskDeals += dealCount;
+      if (normalized.city === 'СПБ') item.spbDeals += dealCount;
+      if (normalized.isVip) item.vipDeals += dealCount;
+      if (normalized.isDistant) item.distantDeals += dealCount;
+      if (normalized.isAB) item.abDeals += dealCount;
 
       const closedDay = daily[normalized.closedDate];
       if (closedDay) {
-        closedDay.totalDeals += 1;
-        if (normalized.city === 'МСК') closedDay.mskDeals += 1;
-        if (normalized.city === 'СПБ') closedDay.spbDeals += 1;
+        closedDay.totalDeals += dealCount;
+        if (normalized.city === 'МСК') closedDay.mskDeals += dealCount;
+        if (normalized.city === 'СПБ') closedDay.spbDeals += dealCount;
       }
     }
 
@@ -975,6 +991,7 @@ function salesReadAmoDepartmentData_(config, warnings) {
       + '; без города ' + debug.excludedNoCity
       + '; сообщения-воронка ' + debug.excludedMessagesPipeline
       + '; сообщения-тип ' + debug.excludedMessagesType
+      + '; не из списка Дакоро ' + debug.excludedManager
       + '.',
   );
 
@@ -1210,6 +1227,7 @@ function readAmoCrmRawLeadObjectsFast_() {
     'isVip',
     'isDistant',
     'isAB',
+    'isDoubleAB',
     'budget',
     'excludeReason',
     'source',
@@ -1257,6 +1275,7 @@ function salesAmoLeadFromCachedRecord_(record) {
     isVip: salesParseBoolean_(record.isVip),
     isDistant: salesParseBoolean_(record.isDistant),
     isAB: salesParseBoolean_(record.isAB),
+    isDoubleAB: salesParseBoolean_(record.isDoubleAB),
     budget: Number(record.budget || record.price || 0) || 0,
     leadType: String(record.leadType || ''),
     typeLabel: String(record.typeLabel || ''),
@@ -1400,6 +1419,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     isVip: salesNormalizeText_(vip) === 'да',
     isDistant: salesNormalizeText_(format) === 'онлайн',
     isAB: salesAmoIsAB_(category),
+    isDoubleAB: salesAmoIsDoubleAB_(category),
     budget: budget,
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
@@ -1530,6 +1550,15 @@ function salesAmoIsAB_(category) {
   return normalized === 'a' || normalized === 'b' || normalized === 'ab' || normalized === 'a+b';
 }
 
+function salesAmoIsDoubleAB_(category) {
+  const normalized = salesNormalizeLabel_(category);
+  return normalized === 'ab' || normalized === 'a+b';
+}
+
+function salesAmoDealCount_(normalized) {
+  return normalized && normalized.isDoubleAB ? 2 : 1;
+}
+
 function salesReadLiveDepartmentData_(config, warnings) {
   const result = {
     planByManager: {},
@@ -1591,6 +1620,93 @@ function salesErrorMessage_(error) {
 function salesReadDisplayRange_(sheet, range) {
   if (!sheet) return [];
   return sheet.getRange(range).getDisplayValues();
+}
+
+function salesReadDepartmentPlan_(config, warnings) {
+  const result = {
+    planByManager: {},
+    managerNames: [],
+    planLabel: '',
+    sheetName: '',
+  };
+
+  try {
+    const spreadsheet = SpreadsheetApp.openById(config.planSpreadsheetId);
+    const sheet = salesFindDepartmentPlanSheet_(spreadsheet, config);
+    if (!sheet) {
+      warnings.push('План Дакоро: не найден лист месяца ' + config.monthLabel + '. Использован резервный список.');
+      return result;
+    }
+
+    const rows = salesReadDisplayRange_(sheet, 'A1:AZ60');
+    result.sheetName = sheet.getName();
+    result.planByManager = salesParsePlanSheet_(rows);
+    result.managerNames = salesExtractPlanManagerNames_(rows);
+    result.planLabel = String((rows[0] && rows[0][0]) || ('Планы Дакоро ' + sheet.getName())).trim();
+
+    if (!result.managerNames.length) {
+      warnings.push('План Дакоро: на листе ' + sheet.getName() + ' не найдена строка "Менеджеры". Использован резервный список.');
+    } else {
+      warnings.push('План Дакоро: лист ' + sheet.getName() + ', менеджеров ' + result.managerNames.length + '.');
+    }
+  } catch (error) {
+    warnings.push('План Дакоро не загрузился: ' + salesErrorMessage_(error));
+  }
+
+  return result;
+}
+
+function salesFindDepartmentPlanSheet_(spreadsheet, config) {
+  if (!spreadsheet) return null;
+  const sheets = spreadsheet.getSheets();
+  const candidates = salesDepartmentPlanSheetCandidates_(config).map((name) => salesNormalizeLabel_(name));
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (!candidate) continue;
+    const exact = sheets.find((sheet) => salesNormalizeLabel_(sheet.getName()) === candidate);
+    if (exact) return exact;
+  }
+
+  const monthName = salesNormalizeLabel_(salesMonthName_(config.monthIndex));
+  const yearText = String(config.monthYear || '');
+  const loose = sheets.find((sheet) => {
+    const normalized = salesNormalizeLabel_(sheet.getName());
+    return normalized.indexOf(monthName) >= 0 && (!yearText || normalized.indexOf(yearText) >= 0 || normalized === monthName);
+  });
+  if (loose) return loose;
+
+  return sheets.find((sheet) => salesNormalizeLabel_(sheet.getName()) === salesNormalizeLabel_(config.planSheet)) || null;
+}
+
+function salesDepartmentPlanSheetCandidates_(config) {
+  const monthName = salesMonthName_(config.monthIndex);
+  return salesUniqueText_([
+    config.monthLabel,
+    String(config.monthLabel || '').toLowerCase(),
+    monthName,
+    monthName.toLowerCase(),
+    monthName + ' ' + config.monthYear,
+    monthName.toLowerCase() + ' ' + config.monthYear,
+    config.monthKey,
+    config.planSheet,
+  ]);
+}
+
+function salesMonthName_(monthIndex) {
+  const names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  return names[Number(monthIndex || 0)] || '';
+}
+
+function salesUniqueText_(values) {
+  const result = [];
+  values.forEach((value) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    if (result.some((existing) => salesNormalizeLabel_(existing) === salesNormalizeLabel_(text))) return;
+    result.push(text);
+  });
+  return result;
 }
 
 function salesStaticPlanByManager_() {
@@ -1700,7 +1816,7 @@ function salesExtractPlanManagerNames_(rows) {
     .slice(1)
     .map((value) => String(value || '').trim())
     .filter((value) => value && salesNormalizeLabel_(value).indexOf(salesNormalizeLabel_('Итого')) < 0);
-  return salesUniqueManagers_(names.length ? names : SALES_DEPARTMENT_CONFIG.managers);
+  return salesUniqueManagers_(names);
 }
 
 function salesParseSpecialManagerTables_(sheet) {
@@ -2053,6 +2169,12 @@ function salesManagerMatches_(candidate, manager) {
   const normalizedManager = salesNormalizePerson_(manager);
   if (!normalizedCandidate || !normalizedManager) return false;
   return normalizedCandidate.indexOf(normalizedManager) >= 0 || normalizedManager.indexOf(normalizedCandidate) >= 0;
+}
+
+function salesCanonicalManagerName_(manager, allowedManagers) {
+  const names = salesUniqueManagers_(allowedManagers || []);
+  if (!names.length) return String(manager || '').trim();
+  return names.find((name) => salesManagerMatches_(manager, name)) || '';
 }
 
 function salesNormalizeLabel_(value) {
@@ -3351,6 +3473,7 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     isVip: normalized.isVip ? 'TRUE' : '',
     isDistant: normalized.isDistant ? 'TRUE' : '',
     isAB: normalized.isAB ? 'TRUE' : '',
+    isDoubleAB: normalized.isDoubleAB ? 'TRUE' : '',
     budget: Number(normalized.budget || lead.price || 0) || 0,
     excludeReason: normalized.exclude ? (normalized.excludeReason || 'excluded') : '',
     source: amoCrmLeadSource_(lead, customFields),
