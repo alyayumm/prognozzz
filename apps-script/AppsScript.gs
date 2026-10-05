@@ -332,6 +332,7 @@ const HEADERS = {
     'rawJson',
     'syncedAt',
     'isDoubleAB',
+    'category',
   ],
   AmoCRM_Sync_Log: [
     'id',
@@ -1228,6 +1229,7 @@ function readAmoCrmRawLeadObjectsFast_() {
     'isDistant',
     'isAB',
     'isDoubleAB',
+    'category',
     'budget',
     'excludeReason',
     'source',
@@ -1275,7 +1277,8 @@ function salesAmoLeadFromCachedRecord_(record) {
     isVip: salesParseBoolean_(record.isVip),
     isDistant: salesParseBoolean_(record.isDistant),
     isAB: salesParseBoolean_(record.isAB),
-    isDoubleAB: salesParseBoolean_(record.isDoubleAB),
+    isDoubleAB: salesParseBoolean_(record.isDoubleAB) || salesAmoIsDoubleAB_(record.category),
+    category: String(record.category || ''),
     budget: Number(record.budget || record.price || 0) || 0,
     leadType: String(record.leadType || ''),
     typeLabel: String(record.typeLabel || ''),
@@ -1420,6 +1423,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     isDistant: salesNormalizeText_(format) === 'онлайн',
     isAB: salesAmoIsAB_(category),
     isDoubleAB: salesAmoIsDoubleAB_(category),
+    category: category,
     budget: budget,
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
@@ -3481,6 +3485,7 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     customFieldsJson: '',
     rawJson: '',
     syncedAt: new Date(),
+    category: normalized.category || '',
   };
 }
 
