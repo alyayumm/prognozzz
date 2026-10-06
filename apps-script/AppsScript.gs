@@ -965,8 +965,8 @@ function salesReadAmoDepartmentData_(config, warnings) {
       item.revenue += normalized.budget;
       if (normalized.city === 'МСК') item.mskDeals += dealCount;
       if (normalized.city === 'СПБ') item.spbDeals += dealCount;
-      if (normalized.isVip) item.vipDeals += dealCount;
-      if (normalized.isDistant) item.distantDeals += dealCount;
+      if (normalized.isVip) item.vipDeals += 1;
+      if (normalized.isDistant) item.distantDeals += 1;
       if (normalized.isAB) item.abDeals += dealCount;
 
       const closedDay = daily[normalized.closedDate];
@@ -1265,6 +1265,7 @@ function salesAmoLeadFromCachedRecord_(record) {
   const createdDate = salesCachedDateOnlyString_(record.createdDate) || String(createdAt).slice(0, 10);
   const closedDate = salesCachedDateOnlyString_(record.closedDate) || String(closedAt).slice(0, 10);
   const city = salesValidCachedCity_(record.city);
+  const isDoubleAB = salesAmoIsDoubleAB_(record.category) || salesParseBoolean_(record.isDoubleAB);
   const cachedNormalized = {
     id: 'amocrm-lead-' + leadId,
     leadId: leadId,
@@ -1280,8 +1281,8 @@ function salesAmoLeadFromCachedRecord_(record) {
     isWon: salesParseBoolean_(record.isWon),
     isVip: salesParseBoolean_(record.isVip),
     isDistant: salesParseBoolean_(record.isDistant),
-    isAB: salesParseBoolean_(record.isAB),
-    isDoubleAB: salesParseBoolean_(record.isDoubleAB) || salesAmoIsDoubleAB_(record.category),
+    isAB: isDoubleAB,
+    isDoubleAB: isDoubleAB,
     category: String(record.category || ''),
     budget: Number(record.budget || record.price || 0) || 0,
     leadType: String(record.leadType || ''),
@@ -1616,17 +1617,22 @@ function salesAmoIsNotQualifiedYet_(stageName) {
 }
 
 function salesAmoIsAB_(category) {
-  const normalized = salesNormalizeLabel_(category);
-  return normalized === 'a' || normalized === 'b' || normalized === 'ab' || normalized === 'a+b';
+  return salesAmoIsDoubleAB_(category);
 }
 
 function salesAmoIsDoubleAB_(category) {
-  const normalized = salesNormalizeLabel_(category);
+  const normalized = salesAmoCategoryKey_(category);
   return normalized === 'ab' || normalized === 'a+b';
 }
 
 function salesAmoDealCount_(normalized) {
   return normalized && normalized.isDoubleAB ? 2 : 1;
+}
+
+function salesAmoCategoryKey_(category) {
+  return salesNormalizeLabel_(category)
+    .replace(/а/g, 'a')
+    .replace(/в/g, 'b');
 }
 
 function salesReadLiveDepartmentData_(config, warnings) {
