@@ -42,6 +42,17 @@ export type SalesDayPoint = {
   totalDeals: number;
   mskDeals: number;
   spbDeals: number;
+  manualRecommendedDeals?: number;
+  planFactDeals?: number;
+};
+
+export type SalesDepartmentPeriodMode = "day" | "week" | "sprint" | "month" | "all";
+
+export type SalesDepartmentPeriodRequest = {
+  mode: SalesDepartmentPeriodMode;
+  startDate?: string;
+  endDate?: string;
+  label?: string;
 };
 
 export type SalesNotQualifiedDetail = {
@@ -138,6 +149,10 @@ export type SalesDepartmentSnapshot = {
   rop: SalesDepartmentRop;
   monthKey: string;
   monthLabel: string;
+  periodMode?: SalesDepartmentPeriodMode;
+  periodLabel?: string;
+  periodStart?: string;
+  periodEnd?: string;
   planLabel: string;
   latestActualDate: string | null;
   workingDaysPassed: number;
@@ -145,6 +160,8 @@ export type SalesDepartmentSnapshot = {
   activeCalendarDays: number;
   managers: SalesManagerMetrics[];
   daily: SalesDayPoint[];
+  manualRecommendedByDate?: Record<string, number>;
+  manualRecommendedByDateByManager?: Record<string, number>;
   totals: SalesDepartmentTotals;
   warnings: string[];
   sourceLinks: {
@@ -218,6 +235,30 @@ const monthNames = [
   "Декабрь",
 ] as const;
 
+function normalizeSalesDepartmentPeriod(
+  period: SalesDepartmentPeriodRequest | undefined,
+  context: SalesMonthContext,
+): SalesDepartmentPeriodRequest {
+  if (period?.mode === "all") {
+    return { mode: "all", label: period.label ?? "Все время" };
+  }
+
+  const lastDay = new Date(context.monthYear, context.monthIndex + 1, 0).getDate();
+  const startDate = period?.startDate && period.startDate.startsWith(context.monthKey)
+    ? period.startDate
+    : `${context.monthKey}-01`;
+  const endDate = period?.endDate && period.endDate.startsWith(context.monthKey)
+    ? period.endDate
+    : `${context.monthKey}-${String(lastDay).padStart(2, "0")}`;
+
+  return {
+    mode: period?.mode ?? "month",
+    startDate,
+    endDate,
+    label: period?.label ?? context.monthLabel,
+  };
+}
+
 const dynamicsRowLabels = [
   "Менеджеры",
   "Обращения всего",
@@ -270,22 +311,23 @@ const dynamicsRanges: DynamicsRangeConfig[] = [
 
 export async function loadSalesDepartmentSnapshot(
   requestedMonthKey = defaultSalesDepartmentMonthKey,
-  options: { forceFresh?: boolean; allowStaleFallback?: boolean } = {},
+  options: { forceFresh?: boolean; allowStaleFallback?: boolean; period?: SalesDepartmentPeriodRequest } = {},
 ): Promise<SalesDepartmentSnapshot> {
   const context = getSalesMonthContext(requestedMonthKey);
+  const period = normalizeSalesDepartmentPeriod(options.period, context);
   const allowStaleFallback = options.allowStaleFallback ?? false;
-  const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context) : null;
+  const cachedSnapshot = allowStaleFallback ? readCachedSalesDepartmentSnapshot(context, period) : null;
 
   let serviceSnapshot: SalesDepartmentSnapshot | null = null;
   let serviceError = "";
   try {
-    serviceSnapshot = normalizeSalesDepartmentSnapshot(await loadSalesDepartmentServiceSnapshot(context));
+    serviceSnapshot = normalizeSalesDepartmentSnapshot(await loadSalesDepartmentServiceSnapshot(context, period));
   } catch (error) {
     serviceError = getSalesDepartmentErrorMessage(error);
   }
 
   if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
-    const liveSnapshot = cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context));
+    const liveSnapshot = cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context), period);
     return isCompleteSalesDepartmentSnapshot(liveSnapshot)
       ? liveSnapshot
       : withSalesDepartmentWarning(liveSnapshot, "Apps Script вернул снимок отдела продаж с предупреждениями.");
@@ -316,12 +358,13 @@ export async function loadSalesDepartmentSnapshot(
 }
 
 export function getCachedSalesDepartmentSnapshot(requestedMonthKey = defaultSalesDepartmentMonthKey): SalesDepartmentSnapshot | null {
-  return readCachedSalesDepartmentSnapshot(getSalesMonthContext(requestedMonthKey));
+  const context = getSalesMonthContext(requestedMonthKey);
+  return readCachedSalesDepartmentSnapshot(context, normalizeSalesDepartmentPeriod(undefined, context));
 }
 
-async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext): Promise<SalesDepartmentSnapshot | null> {
+async function loadSalesDepartmentServiceSnapshot(context: SalesMonthContext, period: SalesDepartmentPeriodRequest): Promise<SalesDepartmentSnapshot | null> {
   return await withTimeout(
-    callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey }),
+    callReportApi<SalesDepartmentSnapshot>("getSalesDepartmentDashboard", { monthKey: context.monthKey, period }),
     gvizTimeouts.service,
     "Apps Script не успел ответить за 90 секунд",
   );
@@ -502,7 +545,13 @@ function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | nu
       notQualifiedLeads: Number(manager.notQualifiedLeads ?? 0),
       notQualifiedDetails: Array.isArray(manager.notQualifiedDetails) ? manager.notQualifiedDetails : [],
     })),
-    daily,
+    daily: daily.map((day) => ({
+      ...day,
+      manualRecommendedDeals: Number(day.manualRecommendedDeals ?? 0),
+      planFactDeals: Number(day.planFactDeals ?? day.totalDeals ?? 0),
+    })),
+    manualRecommendedByDate: normalizeNumberRecord(snapshot.manualRecommendedByDate),
+    manualRecommendedByDateByManager: normalizeNumberRecord(snapshot.manualRecommendedByDateByManager),
     totals: {
       ...totals,
       totalTraffic: Number(totals.totalTraffic ?? 0),
@@ -517,6 +566,13 @@ function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | nu
     warnings: Array.isArray(snapshot.warnings) ? snapshot.warnings : [],
     sourceLinks: snapshot.sourceLinks ?? { dynamics: "", plans: "" },
   };
+}
+
+function normalizeNumberRecord(record: Record<string, number> | undefined): Record<string, number> {
+  if (!record || typeof record !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [key, Number(value ?? 0)]),
+  );
 }
 
 function getSalesDepartmentErrorMessage(error: unknown): string {
@@ -568,10 +624,10 @@ function withSalesDepartmentFactDate(snapshot: SalesDepartmentSnapshot, context:
   };
 }
 
-function readCachedSalesDepartmentSnapshot(context: SalesMonthContext): SalesDepartmentSnapshot | null {
+function readCachedSalesDepartmentSnapshot(context: SalesMonthContext, period: SalesDepartmentPeriodRequest): SalesDepartmentSnapshot | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(getSalesDepartmentCacheKey(context.monthKey));
+    const raw = window.localStorage.getItem(getSalesDepartmentCacheKey(context.monthKey, period));
     if (!raw) return null;
 
     const cached = JSON.parse(raw) as CachedSalesDepartmentSnapshot;
@@ -585,22 +641,22 @@ function readCachedSalesDepartmentSnapshot(context: SalesMonthContext): SalesDep
   }
 }
 
-function cacheSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot): SalesDepartmentSnapshot {
+function cacheSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot, period: SalesDepartmentPeriodRequest): SalesDepartmentSnapshot {
   if (typeof window === "undefined" || !isUsableSalesDepartmentSnapshot(snapshot)) return snapshot;
   try {
     const cached: CachedSalesDepartmentSnapshot = {
       savedAt: Date.now(),
       snapshot,
     };
-    window.localStorage.setItem(getSalesDepartmentCacheKey(snapshot.monthKey), JSON.stringify(cached));
+    window.localStorage.setItem(getSalesDepartmentCacheKey(snapshot.monthKey, period), JSON.stringify(cached));
   } catch {
     // Cache is a speed boost only; storage failures must not break the report.
   }
   return snapshot;
 }
 
-function getSalesDepartmentCacheKey(monthKey: string): string {
-  return `${salesDepartmentCachePrefix}${monthKey}`;
+function getSalesDepartmentCacheKey(monthKey: string, period: SalesDepartmentPeriodRequest): string {
+  return `${salesDepartmentCachePrefix}${monthKey}:${period.mode}:${period.startDate ?? ""}:${period.endDate ?? ""}`;
 }
 
 function withSalesDepartmentWarning(snapshot: SalesDepartmentSnapshot, warning: string): SalesDepartmentSnapshot {

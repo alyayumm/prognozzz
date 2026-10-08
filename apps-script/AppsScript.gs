@@ -769,7 +769,8 @@ function getSalesDepartmentDashboard_(payload) {
     managers: authoritativeManagerNames,
     restrictManagers: true,
   }), warnings);
-  const manualDealsByManager = salesReadManualDealsByManager_(config, warnings);
+  const manualDeals = salesReadManualDeals_(config, warnings);
+  const manualDealsByManager = manualDeals.byManager;
   const managerNames = authoritativeManagerNames;
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesLatestActualDate_(amo.daily) || salesCurrentMonthDateKey_(config);
@@ -782,7 +783,7 @@ function getSalesDepartmentDashboard_(payload) {
   const activeCalendarDays = amo.daily.filter((day) => day.totalTraffic > 0 || day.totalQualified > 0 || day.totalDeals > 0).length || workingDaysPassed;
 
   const managers = managerNames.map((name) => {
-    const plan = salesGetManagerValue_(planByManager, name) || salesEmptyPlan_();
+    const plan = salesScalePlanForPeriod_(salesGetManagerValue_(planByManager, name) || salesEmptyPlan_(), config);
     const fact = salesGetManagerValue_(amo.byManager, name) || salesEmptyAmoManagerStats_(name);
     const factDeals = fact.factDeals;
     const manualRecommendedDeals = manualDealsByManager[name] || 0;
@@ -852,13 +853,19 @@ function getSalesDepartmentDashboard_(payload) {
     rop: config.rop,
     monthKey: config.monthKey,
     monthLabel: config.monthLabel,
+    periodMode: config.periodMode,
+    periodLabel: config.periodLabel,
+    periodStart: config.periodStart,
+    periodEnd: config.periodEnd,
     planLabel: planSnapshot.planLabel || SALES_DEPARTMENT_STATIC_PLAN_LABEL,
     latestActualDate: latestActualDate,
     workingDaysPassed: workingDaysPassed,
     workingDaysInMonth: workingDaysInMonth,
     activeCalendarDays: activeCalendarDays,
     managers: managers,
-    daily: amo.daily,
+    daily: salesApplyManualDealsToDaily_(amo.daily, manualDeals.byDate),
+    manualRecommendedByDate: manualDeals.byDate,
+    manualRecommendedByDateByManager: manualDeals.byManagerDate,
     totals: totals,
     warnings: warnings,
     sourceLinks: {
@@ -883,6 +890,15 @@ function salesDepartmentConfigForRequest_(payload) {
   base.monthYear = year;
   base.monthIndex = monthIndex;
   base.monthLabel = names[monthIndex] + ' ' + year;
+  const safePayload = payload || {};
+  const period = safePayload.period ? safePayload.period : {};
+  const mode = String(period.mode || safePayload.periodMode || 'month').trim() || 'month';
+  const periodStart = salesNormalizeDateKey_(period.startDate || safePayload.periodStart || '');
+  const periodEnd = salesNormalizeDateKey_(period.endDate || safePayload.periodEnd || '');
+  base.periodMode = mode;
+  base.periodLabel = String(period.label || safePayload.periodLabel || '').trim();
+  base.periodStart = mode === 'all' ? '' : (periodStart || monthKey + '-01');
+  base.periodEnd = mode === 'all' ? '' : (periodEnd || monthKey + '-' + String(new Date(year, monthIndex + 1, 0).getDate()).padStart(2, '0'));
   return base;
 }
 
@@ -1048,6 +1064,24 @@ function salesEmptyAmoManagerStats_(name) {
   };
 }
 
+function salesScalePlanForPeriod_(plan, config) {
+  if (!config || config.periodMode === 'month' || config.periodMode === 'all') return plan;
+  const start = salesNormalizeDateKey_(config.periodStart);
+  const end = salesNormalizeDateKey_(config.periodEnd);
+  if (!start || !end || start.slice(0, 7) !== config.monthKey || end.slice(0, 7) !== config.monthKey) return plan;
+  const totalDays = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
+  const startDay = Math.max(1, Number(start.slice(8, 10)) || 1);
+  const endDay = Math.min(totalDays, Number(end.slice(8, 10)) || totalDays);
+  const ratio = Math.max(1, endDay - startDay + 1) / totalDays;
+  return {
+    planTraffic: Math.round(salesNumber_(plan.planTraffic) * ratio),
+    planQualified: Math.round(salesNumber_(plan.planQualified) * ratio),
+    planDeals: Math.round(salesNumber_(plan.planDeals) * ratio),
+    planVip: Math.round(salesNumber_(plan.planVip) * ratio),
+    planDistant: Math.round(salesNumber_(plan.planDistant) * ratio),
+  };
+}
+
 function salesCreateAmoDaily_(config) {
   const result = {};
   const daysInMonth = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
@@ -1203,7 +1237,7 @@ function salesReadCachedAmoLeadsForMonth_(config, warnings) {
   rows.forEach((row) => {
     const createdAt = String(row.createdAt || '');
     const closedAt = String(row.closedAt || '');
-    if (createdAt.indexOf(config.monthKey) !== 0 && closedAt.indexOf(config.monthKey) !== 0) return;
+    if (!salesDateInReportPeriod_(createdAt.slice(0, 10), config) && !salesDateInReportPeriod_(closedAt.slice(0, 10), config)) return;
     const lead = salesAmoLeadFromCachedRecord_(row);
     if (lead) leads.push(lead);
   });
@@ -1392,8 +1426,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
         typeLabel: cached.typeLabel,
       };
     }
-    cached.createdInMonth = Boolean(cached.createdDate && cached.createdDate.indexOf(config.monthKey) === 0);
-    cached.closedInMonth = Boolean(cached.closedDate && cached.closedDate.indexOf(config.monthKey) === 0);
+    cached.createdInMonth = salesDateInReportPeriod_(cached.createdDate, config);
+    cached.closedInMonth = salesDateInReportPeriod_(cached.closedDate, config);
     cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
     cached.isQualified = !salesAmoIsTargetDuplicate_(cached.stage, lead) && (Boolean(cached.isQualified) || salesAmoIsQualified_(cached.stage, lead));
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
@@ -1443,8 +1477,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     manager: String(manager || '').trim(),
     createdDate: createdDate,
     closedDate: closedDate,
-    createdInMonth: Boolean(createdDate && createdDate.indexOf(config.monthKey) === 0),
-    closedInMonth: Boolean(closedDate && closedDate.indexOf(config.monthKey) === 0),
+    createdInMonth: salesDateInReportPeriod_(createdDate, config),
+    closedInMonth: salesDateInReportPeriod_(closedDate, config),
     isQualified: qualified,
     isNotQualifiedYet: notQualifiedYet,
     isWon: won,
@@ -2148,20 +2182,43 @@ function salesBuildTotals_(managers) {
   };
 }
 
-function salesReadManualDealsByManager_(config, warnings) {
-  const result = {};
+function salesReadManualDeals_(config, warnings) {
+  const result = { byManager: {}, byDate: {}, byManagerDate: {} };
   try {
     readObjects_(CONFIG.sheets.salesManualDeals)
-      .filter((row) => normalizeMonthKey_(row.monthKey) === config.monthKey)
+      .filter((row) => config.periodMode === 'all' || normalizeMonthKey_(row.monthKey) === config.monthKey)
       .forEach((row) => {
         const manager = salesNormalizeManagerName_(row.manager || '');
         if (!manager) return;
-        result[manager] = (result[manager] || 0) + salesNumber_(row.deals);
+        const dateKey = salesNormalizeDateKey_(row.date || '');
+        if (dateKey && !salesDateInReportPeriod_(dateKey, config)) return;
+        const deals = salesNumber_(row.deals);
+        result.byManager[manager] = (result.byManager[manager] || 0) + deals;
+        if (dateKey) result.byDate[dateKey] = (result.byDate[dateKey] || 0) + deals;
+        if (dateKey) {
+          const managerDateKey = manager + '|' + dateKey;
+          result.byManagerDate[managerDateKey] = (result.byManagerDate[managerDateKey] || 0) + deals;
+        }
       });
   } catch (error) {
     if (warnings) warnings.push('Sales_Manual_Deals: ручные реки не загрузились: ' + salesErrorMessage_(error));
   }
   return result;
+}
+
+function salesReadManualDealsByManager_(config, warnings) {
+  return salesReadManualDeals_(config, warnings).byManager;
+}
+
+function salesApplyManualDealsToDaily_(daily, manualByDate) {
+  const map = manualByDate || {};
+  return (daily || []).map((day) => {
+    const manualRecommendedDeals = salesNumber_(map[day.key]);
+    return Object.assign({}, day, {
+      manualRecommendedDeals: manualRecommendedDeals,
+      planFactDeals: salesNumber_(day.totalDeals) + manualRecommendedDeals,
+    });
+  });
 }
 
 function upsertSalesManualDeals_(payload) {
@@ -2170,10 +2227,11 @@ function upsertSalesManualDeals_(payload) {
     const monthKey = normalizeMonthKey_(record.monthKey);
     const manager = salesNormalizeManagerName_(record.manager || '');
     const city = String(record.city || '').trim();
+    const date = salesNormalizeDateKey_(record.date || payload.date || new Date());
     return {
-      id: record.id || [monthKey, manager || 'team', city || 'all'].join('|'),
+      id: record.id || [monthKey, date || 'month', manager || 'team', city || 'all'].join('|'),
       monthKey: monthKey,
-      date: stringifyDate_(record.date || new Date()),
+      date: date || stringifyDate_(new Date()),
       manager: manager,
       city: city,
       deals: Math.max(0, salesNumber_(record.deals)),
@@ -2334,6 +2392,29 @@ function salesIsDateInMonth_(value, expectedMonthKey) {
   const match = String(value || '').match(/(\d{2})\.(\d{2})\.(\d{4})/);
   if (!match) return false;
   return match[3] + '-' + match[2] === expectedMonthKey;
+}
+
+function salesNormalizeDateKey_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return isoMatch[1] + '-' + isoMatch[2] + '-' + isoMatch[3];
+  const ruMatch = raw.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (ruMatch) return ruMatch[3] + '-' + ruMatch[2].padStart(2, '0') + '-' + ruMatch[1].padStart(2, '0');
+  const parsed = new Date(raw);
+  return isNaN(parsed.getTime()) ? raw.slice(0, 10) : Utilities.formatDate(parsed, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function salesDateInReportPeriod_(value, config) {
+  const dateKey = salesNormalizeDateKey_(value);
+  if (!dateKey) return false;
+  if (config && config.periodMode === 'all') return true;
+  const start = config && config.periodStart ? config.periodStart : (config.monthKey + '-01');
+  const end = config && config.periodEnd ? config.periodEnd : (config.monthKey + '-31');
+  return dateKey >= start && dateKey <= end;
 }
 
 function salesHasContract_(value) {

@@ -1569,6 +1569,73 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   opacity: 0.62;
   cursor: wait;
 }
+.sales-period-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid rgba(154, 180, 234, 0.44);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+  padding: 8px 10px;
+}
+.sales-period-tabs {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid rgba(154, 180, 234, 0.44);
+  border-radius: 14px;
+  background: rgba(237, 244, 255, 0.72);
+  padding: 4px;
+}
+.sales-period-tabs button {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  min-height: 30px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+.sales-period-tabs button.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--blue), #2448ff);
+  box-shadow: 0 8px 18px rgba(28, 70, 245, 0.18);
+}
+.sales-period-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(154, 180, 234, 0.46);
+  border-radius: 14px;
+  background: rgba(247, 249, 255, 0.86);
+  min-height: 38px;
+  padding: 0 8px 0 11px;
+}
+.sales-period-row label span {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+.sales-period-row select,
+.sales-manual-recs select {
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 950;
+  outline: none;
+}
+.sales-period-row > strong {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+}
 .sales-manual-recs {
   display: flex;
   align-items: center;

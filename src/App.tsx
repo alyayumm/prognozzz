@@ -43,6 +43,8 @@ import {
   loadSalesDepartmentSnapshot,
   salesDepartmentRops,
   type SalesDayPoint,
+  type SalesDepartmentPeriodMode,
+  type SalesDepartmentPeriodRequest,
   type SalesDepartmentRop,
   type SalesDepartmentSnapshot,
   type SalesManagerMetrics,
@@ -1641,6 +1643,13 @@ function SalesDepartmentDashboard({
   onSyncAmoCrmLeads: (fromDate: string, toDate: string) => Promise<void>;
   writePassword: string;
 }) {
+  const salesPeriodModes: Array<{ mode: SalesDepartmentPeriodMode; label: string }> = [
+    { mode: "sprint", label: "Спринт" },
+    { mode: "week", label: "Неделя" },
+    { mode: "day", label: "День" },
+    { mode: "month", label: "Месяц" },
+    { mode: "all", label: "Все время" },
+  ];
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
   const [loadState, setLoadState] = useState<"disabled" | "loading" | "refreshing" | "ready" | "error">("disabled");
   const [loadError, setLoadError] = useState("");
@@ -1648,10 +1657,32 @@ function SalesDepartmentDashboard({
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
   const [showManagersList, setShowManagersList] = useState(false);
   const [showNotQualified, setShowNotQualified] = useState(false);
+  const [salesPeriodMode, setSalesPeriodMode] = useState<SalesDepartmentPeriodMode>("month");
+  const [selectedSalesPeriodKey, setSelectedSalesPeriodKey] = useState("");
+  const [manualRecommendedDate, setManualRecommendedDate] = useState(`${selectedMonthConfig.monthKey}-01`);
   const [manualRecommendedDraft, setManualRecommendedDraft] = useState("0");
   const [manualRecommendedState, setManualRecommendedState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [refreshTick, setRefreshTick] = useState(0);
   const integrationsEnabled = true;
+  const salesPeriodOptions = useMemo(
+    () => buildSalesDepartmentPeriodOptions(selectedMonthConfig, salesPeriodMode),
+    [selectedMonthConfig, salesPeriodMode],
+  );
+  const activeSalesPeriod = useMemo(() => {
+    const fallback = salesPeriodOptions[0] ?? buildSalesDepartmentPeriodOptions(selectedMonthConfig, "month")[0];
+    return salesPeriodOptions.find((period) => period.key === selectedSalesPeriodKey) ?? fallback;
+  }, [salesPeriodOptions, selectedMonthConfig, selectedSalesPeriodKey]);
+
+  useEffect(() => {
+    const firstOption = salesPeriodOptions[0];
+    if (!firstOption) return;
+    setSelectedSalesPeriodKey((current) => salesPeriodOptions.some((period) => period.key === current) ? current : firstOption.key);
+  }, [salesPeriodOptions]);
+
+  useEffect(() => {
+    const today = getSalesDepartmentSyncToDate(selectedMonthConfig) ?? `${selectedMonthConfig.monthKey}-01`;
+    setManualRecommendedDate(today);
+  }, [selectedMonthConfig.monthKey]);
 
   useEffect(() => {
     if (!integrationsEnabled) {
@@ -1662,12 +1693,21 @@ function SalesDepartmentDashboard({
     }
 
     let ignore = false;
-    const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey ? snapshot : null;
+    const existingSnapshot = snapshot?.monthKey === selectedMonthConfig.monthKey
+      && snapshot.periodMode === activeSalesPeriod.mode
+      && (snapshot.periodStart ?? "") === (activeSalesPeriod.startDate ?? "")
+      && (snapshot.periodEnd ?? "") === (activeSalesPeriod.endDate ?? "")
+      ? snapshot
+      : null;
     if (!existingSnapshot) setSnapshot(null);
     setLoadState(existingSnapshot ? "refreshing" : "loading");
     setLoadError("");
 
-    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, { forceFresh: true, allowStaleFallback: true })
+    loadSalesDepartmentSnapshot(selectedMonthConfig.monthKey, {
+      forceFresh: true,
+      allowStaleFallback: true,
+      period: activeSalesPeriod,
+    })
       .then((nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
@@ -1683,7 +1723,7 @@ function SalesDepartmentDashboard({
     return () => {
       ignore = true;
     };
-  }, [selectedMonthConfig.monthKey, refreshTick]);
+  }, [activeSalesPeriod, selectedMonthConfig.monthKey, refreshTick]);
 
   const managers = snapshot?.managers ?? [];
   const totals = snapshot?.totals;
@@ -1691,9 +1731,9 @@ function SalesDepartmentDashboard({
     ? null
     : managers.find((manager) => manager.name === selectedManagerName) ?? null;
   const manualTargetName = selectedManager?.name ?? "team";
-  const manualCurrentValue = selectedManager
-    ? selectedManager.manualRecommendedDeals ?? 0
-    : totals?.manualRecommendedDeals ?? 0;
+  const manualCurrentValue = selectedManager && snapshot?.manualRecommendedByDateByManager
+    ? snapshot.manualRecommendedByDateByManager[`${selectedManager.name}|${manualRecommendedDate}`] ?? 0
+    : snapshot?.manualRecommendedByDate?.[manualRecommendedDate] ?? 0;
   const topManagers = [...managers].sort((a, b) => b.factQualified - a.factQualified);
   const maxManagerQualified = Math.max(1, ...managers.map((manager) => manager.factQualified));
   const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
@@ -1713,7 +1753,7 @@ function SalesDepartmentDashboard({
   useEffect(() => {
     setManualRecommendedDraft(String(manualCurrentValue || 0));
     setManualRecommendedState("idle");
-  }, [manualCurrentValue, manualTargetName, selectedMonthConfig.monthKey]);
+  }, [manualCurrentValue, manualTargetName, manualRecommendedDate, selectedMonthConfig.monthKey]);
 
   async function refreshSalesDepartment() {
     if (!integrationsEnabled || isSalesRefreshing) return;
@@ -1745,6 +1785,7 @@ function SalesDepartmentDashboard({
         {
           records: [{
             monthKey: selectedMonthConfig.monthKey,
+            date: manualRecommendedDate,
             manager: selectedManager.name,
             city: "",
             deals: cleanDeals,
@@ -1796,6 +1837,35 @@ function SalesDepartmentDashboard({
         </span>
       </div>
 
+      <section className="sales-period-row" aria-label="Период отчета отдела продаж">
+        <div className="sales-period-tabs">
+          {salesPeriodModes.map((item) => (
+            <button
+              key={item.mode}
+              type="button"
+              className={salesPeriodMode === item.mode ? "active" : ""}
+              onClick={() => setSalesPeriodMode(item.mode)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {salesPeriodMode !== "month" && salesPeriodMode !== "all" && (
+          <label>
+            <span>Период</span>
+            <select
+              value={activeSalesPeriod.key}
+              onChange={(event) => setSelectedSalesPeriodKey(event.target.value)}
+            >
+              {salesPeriodOptions.map((period) => (
+                <option key={period.key} value={period.key}>{period.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <strong>{activeSalesPeriod.label}</strong>
+      </section>
+
       {snapshot && totals && (
         <section className="sales-manual-recs">
           <div>
@@ -1808,6 +1878,20 @@ function SalesDepartmentDashboard({
               <small>Чтобы изменить число, выбери менеджера слева. По команде показана сумма.</small>
             )}
           </div>
+          <label>
+            <span>Дата</span>
+            <select
+              value={manualRecommendedDate}
+              onChange={(event) => {
+                setManualRecommendedDate(event.target.value);
+                setManualRecommendedState("idle");
+              }}
+            >
+              {buildSalesDepartmentPeriodOptions(selectedMonthConfig, "day").map((period) => (
+                <option key={period.key} value={period.startDate}>{period.label}</option>
+              ))}
+            </select>
+          </label>
           <label>
             <span>Кол-во</span>
             <input
@@ -1836,7 +1920,7 @@ function SalesDepartmentDashboard({
                 ? "Сохранено"
                 : manualRecommendedState === "error"
                   ? "Не сохранилось"
-                  : `Сейчас: ${formatNumber(manualCurrentValue || 0)}`}
+                  : `В этот день: ${formatNumber(manualCurrentValue || 0)}`}
           </small>
         </section>
       )}
@@ -9457,6 +9541,77 @@ function getSalesDepartmentSyncToDate(config: MonthConfig): string | null {
     return `${config.monthKey}-${String(config.daysInMonth).padStart(2, "0")}`;
   }
   return null;
+}
+
+type SalesDepartmentPeriodOption = SalesDepartmentPeriodRequest & {
+  key: string;
+  label: string;
+  startDate?: string;
+  endDate?: string;
+};
+
+function buildSalesDepartmentPeriodOptions(
+  config: MonthConfig,
+  mode: SalesDepartmentPeriodMode,
+): SalesDepartmentPeriodOption[] {
+  const dateForDay = (day: number) => `${config.monthKey}-${String(day).padStart(2, "0")}`;
+  if (mode === "all") return [{ key: "all", mode: "all", label: "Все время" }];
+  if (mode === "month") {
+    return [{
+      key: `${config.monthKey}:month`,
+      mode,
+      startDate: dateForDay(1),
+      endDate: dateForDay(config.daysInMonth),
+      label: config.label,
+    }];
+  }
+  if (mode === "day") {
+    return Array.from({ length: config.daysInMonth }, (_, index) => {
+      const day = index + 1;
+      const date = dateForDay(day);
+      return {
+        key: date,
+        mode,
+        startDate: date,
+        endDate: date,
+        label: `${String(day).padStart(2, "0")}.${String(config.monthIndex + 1).padStart(2, "0")}`,
+      };
+    });
+  }
+  if (mode === "sprint") {
+    const result: SalesDepartmentPeriodOption[] = [];
+    for (let startDay = 1; startDay <= config.daysInMonth; startDay += 7) {
+      const endDay = Math.min(config.daysInMonth, startDay + 6);
+      result.push({
+        key: `${config.monthKey}:sprint:${startDay}`,
+        mode,
+        startDate: dateForDay(startDay),
+        endDate: dateForDay(endDay),
+        label: `${Math.floor((startDay - 1) / 7) + 1} спринт · ${startDay}-${endDay}`,
+      });
+    }
+    return result;
+  }
+
+  const result: SalesDepartmentPeriodOption[] = [];
+  let weekIndex = 1;
+  let startDay = 1;
+  while (startDay <= config.daysInMonth) {
+    const startDate = new Date(config.year, config.monthIndex, startDay);
+    const dayOfWeek = startDate.getDay();
+    const daysToSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+    const endDay = Math.min(config.daysInMonth, startDay + Math.max(0, daysToSunday));
+    result.push({
+      key: `${config.monthKey}:week:${weekIndex}`,
+      mode,
+      startDate: dateForDay(startDay),
+      endDate: dateForDay(endDay),
+      label: `${weekIndex} неделя · ${startDay}-${endDay}`,
+    });
+    startDay = endDay + 1;
+    weekIndex += 1;
+  }
+  return result;
 }
 
 function formatSalesNumber(value: number | null | undefined): string {
