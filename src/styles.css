@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: light;
   font-family: var(--font-ui);
   color: #131b2f;
@@ -1569,6 +1569,68 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   opacity: 0.62;
   cursor: wait;
 }
+.sales-manual-recs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid rgba(154, 180, 234, 0.44);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+.sales-manual-recs > div {
+  flex: 1 1 310px;
+  display: grid;
+  gap: 3px;
+}
+.sales-manual-recs strong {
+  color: var(--navy);
+  font-size: 14px;
+  font-weight: 950;
+}
+.sales-manual-recs span,
+.sales-manual-recs small {
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 850;
+}
+.sales-manual-recs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(154, 180, 234, 0.46);
+  border-radius: 14px;
+  background: rgba(247, 249, 255, 0.86);
+  min-height: 38px;
+  padding: 0 8px 0 11px;
+}
+.sales-manual-recs label span {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.sales-manual-recs input {
+  width: 78px;
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 950;
+  outline: none;
+}
+.primary-button.compact {
+  height: 38px;
+  min-height: 38px;
+  padding-inline: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.sales-manual-recs small.saved { color: #15803d; }
+.sales-manual-recs small.error { color: var(--negative); }
 .sales-layout {
   display: grid;
   grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
@@ -1839,97 +1901,96 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 12px;
 }
 .sales-daily-chart {
-  min-height: 270px;
+  min-height: 300px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(42px, 1fr));
-  gap: 9px;
-  align-items: end;
+  gap: 10px;
 }
-.sales-daily-legend {
-  grid-column: 1 / -1;
+.sales-daily-controls {
   display: flex;
   justify-content: flex-end;
-  gap: 14px;
-  color: var(--muted-strong);
-  font-size: 11px;
-  font-weight: 900;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.sales-daily-legend span {
+.sales-daily-controls button {
+  appearance: none;
+  border: 1px solid rgba(154, 180, 234, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted-strong);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, opacity 160ms ease;
 }
-.sales-daily-legend i {
+.sales-daily-controls button:not(.active) {
+  opacity: 0.56;
+}
+.sales-daily-controls button.active {
+  border-color: rgba(28, 70, 245, 0.34);
+  background: rgba(234, 241, 255, 0.86);
+  color: var(--navy);
+}
+.sales-daily-controls i {
   width: 9px;
   height: 9px;
   border-radius: 999px;
+  background: currentColor;
 }
-.sales-daily-legend .traffic {
-  background: var(--blue);
+.sales-daily-controls .traffic i { background: var(--blue); }
+.sales-daily-controls .qualified i { background: #22c55e; }
+.sales-daily-controls .deals i { background: var(--negative); }
+.sales-daily-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
-.sales-daily-legend .qualified {
-  background: #78d915;
-}
-.sales-daily-legend .deals {
-  background: var(--negative);
-}
-.sales-day {
-  min-width: 0;
-  display: grid;
-  gap: 7px;
-  color: var(--muted);
-  text-align: center;
-  font-size: 11px;
-  font-weight: 850;
-}
-.sales-day > div {
-  height: 192px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  gap: 3px;
-  padding: 8px 4px;
-  border-radius: 14px;
-  background: rgba(247, 249, 255, 0.72);
-  border: 1px solid rgba(154, 180, 234, 0.28);
-}
-.sales-day i {
-  position: relative;
-  width: 12px;
-  min-height: 4px;
-  border-radius: 999px 999px 4px 4px;
+.sales-daily-scroll::-webkit-scrollbar { height: 8px; }
+.sales-daily-scroll::-webkit-scrollbar-thumb { background: rgba(127, 167, 255, 0.48); border-radius: 999px; }
+.sales-daily-scroll svg {
+  min-width: 100%;
   display: block;
+  overflow: visible;
 }
-.sales-day i.traffic {
-  background: linear-gradient(180deg, var(--blue), var(--soft-blue));
+.sales-daily-grid line {
+  stroke: rgba(154, 180, 234, 0.34);
+  stroke-width: 1;
 }
-.sales-day i.qualified {
-  background: linear-gradient(180deg, #78d915, #c9ff5f);
-}
-.sales-day i.deals {
-  background: linear-gradient(180deg, var(--negative), #ff9a7a);
-}
-.sales-day i b {
-  position: absolute;
-  left: 50%;
-  top: -20px;
-  transform: translateX(-50%);
-  color: var(--navy);
+.sales-daily-grid text,
+.sales-daily-x text {
+  fill: var(--muted-strong);
   font-size: 10px;
-  font-weight: 950;
-  opacity: 0;
+  font-weight: 850;
+  text-anchor: end;
 }
-.sales-day.active:hover i b {
-  opacity: 1;
+.sales-daily-x line {
+  stroke: rgba(154, 180, 234, 0.14);
+  stroke-width: 1;
 }
-.sales-day span {
-  color: var(--navy);
+.sales-daily-x text {
+  text-anchor: middle;
 }
-.sales-day small {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
+.sales-daily-line {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 8px 12px rgba(28, 70, 245, 0.08));
 }
+.sales-daily-line.traffic { stroke: var(--blue); }
+.sales-daily-line.qualified { stroke: #22c55e; }
+.sales-daily-line.deals { stroke: var(--negative); }
+.sales-daily-point {
+  stroke: #fff;
+  stroke-width: 2;
+}
+.sales-daily-point.traffic { fill: var(--blue); }
+.sales-daily-point.qualified { fill: #22c55e; }
+.sales-daily-point.deals { fill: var(--negative); }
 .sales-chart-empty {
   min-height: 210px;
   display: grid;
@@ -2058,12 +2119,6 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   }
   .sales-detail-head > strong {
     width: fit-content;
-  }
-  .sales-daily-chart {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .sales-day > div {
-    height: 150px;
   }
 }
 .analytics-panel,

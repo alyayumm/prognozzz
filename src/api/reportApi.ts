@@ -20,6 +20,7 @@ type ApiAction =
   | "getBrandBranches"
   | "getBrandAliases"
   | "getSalesDepartmentDashboard"
+  | "upsertSalesManualDeals"
   | "upsertBrandPerformance"
   | "upsertBrandBranches"
   | "getRoistatSyncStatus"

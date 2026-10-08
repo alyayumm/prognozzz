@@ -32,6 +32,7 @@ const CONFIG = {
     metrikaDaily: 'Yandex_Metrika_Daily',
     amoCrmRawLeads: 'AmoCRM_Raw_Leads',
     amoCrmSyncLog: 'AmoCRM_Sync_Log',
+    salesManualDeals: 'Sales_Manual_Deals',
   },
 };
 
@@ -346,6 +347,16 @@ const HEADERS = {
     'rows',
     'updatedAt',
   ],
+  Sales_Manual_Deals: [
+    'id',
+    'monthKey',
+    'date',
+    'manager',
+    'city',
+    'deals',
+    'comment',
+    'updatedAt',
+  ],
 };
 
 const FORECAST_CITIES = ['МСК', 'СПБ', 'сообщения'];
@@ -396,6 +407,7 @@ function doPost(e) {
       getBrandBranches: getBrandBranches_,
       getBrandAliases: getBrandAliases_,
       getSalesDepartmentDashboard: getSalesDepartmentDashboard_,
+      upsertSalesManualDeals: upsertSalesManualDeals_,
       upsertBrandPerformance: upsertBrandPerformance_,
       upsertBrandBranches: upsertBrandBranches_,
       getRoistatSyncStatus: getRoistatSyncStatus_,
@@ -416,7 +428,7 @@ function doPost(e) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -757,6 +769,7 @@ function getSalesDepartmentDashboard_(payload) {
     managers: authoritativeManagerNames,
     restrictManagers: true,
   }), warnings);
+  const manualDealsByManager = salesReadManualDealsByManager_(config, warnings);
   const managerNames = authoritativeManagerNames;
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesLatestActualDate_(amo.daily) || salesCurrentMonthDateKey_(config);
@@ -772,10 +785,12 @@ function getSalesDepartmentDashboard_(payload) {
     const plan = salesGetManagerValue_(planByManager, name) || salesEmptyPlan_();
     const fact = salesGetManagerValue_(amo.byManager, name) || salesEmptyAmoManagerStats_(name);
     const factDeals = fact.factDeals;
+    const manualRecommendedDeals = manualDealsByManager[name] || 0;
+    const planFactDeals = factDeals + manualRecommendedDeals;
     const factQualified = fact.factQualified;
     const totalTraffic = fact.totalTraffic;
-    const forecastDeals = salesLinearForecast_(factDeals, workingDaysPassed, workingDaysInMonth);
-    const forecastQualified = salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth);
+    const forecastDeals = salesCoefficientForecast_(planFactDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
+    const forecastQualified = salesCoefficientForecast_(factQualified, config, latestActualDate, 'РљРІР°Р»С‹');
     const revenue = fact.revenue;
     const orderCount = fact.orderCount;
 
@@ -795,10 +810,12 @@ function getSalesDepartmentDashboard_(payload) {
       quizRequests: 0,
       applications: fact.applications,
       factDeals: factDeals,
+      manualRecommendedDeals: manualRecommendedDeals,
+      planFactDeals: planFactDeals,
       forecastDeals: forecastDeals,
-      lagDeals: Math.max(0, plan.planDeals - factDeals),
+      lagDeals: Math.max(0, plan.planDeals - planFactDeals),
       abDeals: fact.abDeals,
-      sheetFactCompletion: salesPercent_(factDeals, plan.planDeals),
+      sheetFactCompletion: salesPercent_(planFactDeals, plan.planDeals),
       sheetForecastCompletion: salesPercent_(forecastDeals, plan.planDeals),
       planConversion: salesPercent_(plan.planDeals, plan.planQualified),
       factConversion: salesPercent_(factDeals, factQualified),
@@ -818,7 +835,7 @@ function getSalesDepartmentDashboard_(payload) {
       orderCount: orderCount,
       avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
       revenue: revenue,
-      linearDealsForecast: salesLinearForecast_(factDeals, workingDaysPassed, workingDaysInMonth),
+      linearDealsForecast: salesLinearForecast_(planFactDeals, workingDaysPassed, workingDaysInMonth),
       linearQualifiedForecast: salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth),
       refusalLeads: fact.refusalLeads,
       notQualifiedLeads: fact.notQualifiedLeads,
@@ -1378,7 +1395,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     cached.createdInMonth = Boolean(cached.createdDate && cached.createdDate.indexOf(config.monthKey) === 0);
     cached.closedInMonth = Boolean(cached.closedDate && cached.closedDate.indexOf(config.monthKey) === 0);
     cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
-    cached.isQualified = Boolean(cached.isQualified) || salesAmoIsQualified_(cached.stage, lead);
+    cached.isQualified = !salesAmoIsTargetDuplicate_(cached.stage, lead) && (Boolean(cached.isQualified) || salesAmoIsQualified_(cached.stage, lead));
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
   }
@@ -1506,6 +1523,7 @@ function salesAmoIsWon_(stageName, statusId) {
 }
 
 function salesAmoIsQualified_(stageName, lead) {
+  if (salesAmoIsTargetDuplicate_(stageName, lead)) return false;
   const stage = salesNormalizeLabel_(stageName);
   const pipelineId = String((lead && (lead.pipeline_id || lead.pipelineId)) || '').trim();
   const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
@@ -1546,6 +1564,23 @@ function salesAmoIsQualified_(stageName, lead) {
     return salesAmoQualifiedLossReasons_().some((reason) => salesNormalizeText_(lossText).indexOf(salesNormalizeText_(reason)) >= 0);
   }
   return false;
+}
+
+function salesAmoIsTargetDuplicate_(stageName, lead) {
+  const embeddedLoss = lead && lead._embedded && lead._embedded.loss_reason ? lead._embedded.loss_reason.name : '';
+  const lossReason = lead && lead.loss_reason && lead.loss_reason.name ? lead.loss_reason.name : '';
+  const text = [
+    stageName,
+    lead && lead.stageName,
+    lead && lead.statusName,
+    lead && lead.lossReasonName,
+    lossReason,
+    embeddedLoss,
+    lead && lead.name,
+  ].join(' ');
+  const normalized = salesNormalizeText_(text);
+  return normalized.indexOf(salesNormalizeText_('\u0434\u0443\u0431\u043b\u044c \u0446\u0435\u043b\u0435\u0432')) >= 0
+    || normalized.indexOf(salesNormalizeText_('РґСѓР±Р»СЊ С†РµР»РµРІ')) >= 0;
 }
 
 function salesAmoQualifiedStatusKeys_() {
@@ -2080,6 +2115,8 @@ function salesBuildTotals_(managers) {
   const orderCount = salesSumNullable_(managers, (manager) => manager.orderCount);
   const revenue = salesSumNullable_(managers, (manager) => manager.revenue);
   const factDeals = salesSum_(managers, (manager) => manager.factDeals);
+  const manualRecommendedDeals = salesSum_(managers, (manager) => manager.manualRecommendedDeals || 0);
+  const planFactDeals = salesSum_(managers, (manager) => manager.planFactDeals || manager.factDeals);
   const totalTraffic = salesSum_(managers, (manager) => manager.totalTraffic);
   const factQualified = salesSum_(managers, (manager) => manager.factQualified);
   const planDeals = salesSum_(managers, (manager) => manager.planDeals);
@@ -2094,6 +2131,8 @@ function salesBuildTotals_(managers) {
     factQualified: factQualified,
     forecastQualified: salesSum_(managers, (manager) => manager.forecastQualified),
     factDeals: factDeals,
+    manualRecommendedDeals: manualRecommendedDeals,
+    planFactDeals: planFactDeals,
     forecastDeals: salesSum_(managers, (manager) => manager.forecastDeals),
     abDeals: salesSum_(managers, (manager) => manager.abDeals),
     vipDeals: vipDeals,
@@ -2104,9 +2143,52 @@ function salesBuildTotals_(managers) {
     avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
     conversionToQualified: salesPercent_(factQualified, totalTraffic),
     conversionToDeals: salesPercent_(factDeals, factQualified),
-    dealPlanCompletion: Math.round(salesPercent_(factDeals, planDeals) || 0),
+    dealPlanCompletion: Math.round(salesPercent_(planFactDeals, planDeals) || 0),
     linearDealsForecast: salesSum_(managers, (manager) => manager.linearDealsForecast),
   };
+}
+
+function salesReadManualDealsByManager_(config, warnings) {
+  const result = {};
+  try {
+    readObjects_(CONFIG.sheets.salesManualDeals)
+      .filter((row) => normalizeMonthKey_(row.monthKey) === config.monthKey)
+      .forEach((row) => {
+        const manager = salesNormalizeManagerName_(row.manager || '');
+        if (!manager) return;
+        result[manager] = (result[manager] || 0) + salesNumber_(row.deals);
+      });
+  } catch (error) {
+    if (warnings) warnings.push('Sales_Manual_Deals: ручные реки не загрузились: ' + salesErrorMessage_(error));
+  }
+  return result;
+}
+
+function upsertSalesManualDeals_(payload) {
+  ensureServiceSheets_();
+  const records = (payload.records || []).map((record) => {
+    const monthKey = normalizeMonthKey_(record.monthKey);
+    const manager = salesNormalizeManagerName_(record.manager || '');
+    const city = String(record.city || '').trim();
+    return {
+      id: record.id || [monthKey, manager || 'team', city || 'all'].join('|'),
+      monthKey: monthKey,
+      date: stringifyDate_(record.date || new Date()),
+      manager: manager,
+      city: city,
+      deals: Math.max(0, salesNumber_(record.deals)),
+      comment: record.comment || '',
+      updatedAt: new Date(),
+    };
+  }).filter((record) => record.monthKey && record.manager);
+
+  return records.length
+    ? upsertRowsById_(CONFIG.sheets.salesManualDeals, HEADERS.Sales_Manual_Deals, records, salesManualDealRow_)
+    : { updated: 0 };
+}
+
+function salesManualDealRow_(record) {
+  return HEADERS.Sales_Manual_Deals.map((header) => record[header] || '');
 }
 
 function salesFindRow_(rows, label) {
@@ -2139,6 +2221,30 @@ function salesPercent_(numerator, denominator) {
 function salesLinearForecast_(fact, passedDays, totalDays) {
   if (!passedDays || !totalDays) return fact;
   return Math.round((fact / passedDays) * totalDays);
+}
+
+function salesCoefficientForecast_(fact, config, latestActualDate, metric) {
+  const daysInMonth = new Date(config.monthYear, config.monthIndex + 1, 0).getDate();
+  const latestKey = String(latestActualDate || '').slice(0, 10);
+  let passedWeight = 0;
+  let totalWeight = 0;
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateIso = Utilities.formatDate(new Date(config.monthYear, config.monthIndex, day), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const weight = salesAverageCoefficientForMetric_(metric, dateIso);
+    totalWeight += weight;
+    if (!latestKey || dateIso <= latestKey) {
+      passedWeight += weight;
+    }
+  }
+  if (!passedWeight || !totalWeight) return fact;
+  return Math.round((fact / passedWeight) * totalWeight);
+}
+
+function salesAverageCoefficientForMetric_(metric, dateIso) {
+  const coefficients = defaultForecastCoefficients_();
+  const msk = coefficientForCityMetric_('РњРЎРљ', metric, dateIso, coefficients);
+  const spb = coefficientForCityMetric_('РЎРџР‘', metric, dateIso, coefficients);
+  return (Number(msk || 0) + Number(spb || 0)) / 2 || 1;
 }
 
 function salesSum_(items, getValue) {
@@ -2238,6 +2344,11 @@ function salesIsVipTariff_(value) {
 function salesIsDistantDeal_(value) {
   const normalized = salesNormalizeText_(value);
   return salesIsTruthy_(value) || normalized.indexOf('дист') >= 0 || normalized.indexOf('онлайн') >= 0 || normalized.indexOf('online') >= 0;
+}
+
+function salesNormalizeManagerName_(value) {
+  const raw = String(value || '').trim();
+  return salesCanonicalManagerName_(raw, SALES_DEPARTMENT_CONFIG.managers) || raw;
 }
 
 function salesManagerMatches_(candidate, manager) {

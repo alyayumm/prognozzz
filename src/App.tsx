@@ -1,4 +1,4 @@
-import {
+﻿import {
   BarChart3,
   CalendarDays,
   CheckCircle2,
@@ -990,6 +990,7 @@ export default function App() {
               <SalesDepartmentDashboard
                 selectedMonthConfig={selectedMonthConfig}
                 onSyncAmoCrmLeads={syncAmoCrmLeads}
+                writePassword={writePassword}
               />
             )}
             {mode === "week" && activeWeek && (
@@ -1634,9 +1635,11 @@ function MonthDailyDashboard({
 function SalesDepartmentDashboard({
   selectedMonthConfig,
   onSyncAmoCrmLeads,
+  writePassword,
 }: {
   selectedMonthConfig: MonthConfig;
   onSyncAmoCrmLeads: (fromDate: string, toDate: string) => Promise<void>;
+  writePassword: string;
 }) {
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
   const [loadState, setLoadState] = useState<"disabled" | "loading" | "refreshing" | "ready" | "error">("disabled");
@@ -1645,6 +1648,8 @@ function SalesDepartmentDashboard({
   const [selectedManagerName, setSelectedManagerName] = useState<string>("team");
   const [showManagersList, setShowManagersList] = useState(false);
   const [showNotQualified, setShowNotQualified] = useState(false);
+  const [manualRecommendedDraft, setManualRecommendedDraft] = useState("0");
+  const [manualRecommendedState, setManualRecommendedState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [refreshTick, setRefreshTick] = useState(0);
   const integrationsEnabled = true;
 
@@ -1685,6 +1690,10 @@ function SalesDepartmentDashboard({
   const selectedManager = selectedManagerName === "team"
     ? null
     : managers.find((manager) => manager.name === selectedManagerName) ?? null;
+  const manualTargetName = selectedManager?.name ?? "team";
+  const manualCurrentValue = selectedManager
+    ? selectedManager.manualRecommendedDeals ?? 0
+    : totals?.manualRecommendedDeals ?? 0;
   const topManagers = [...managers].sort((a, b) => b.factQualified - a.factQualified);
   const maxManagerQualified = Math.max(1, ...managers.map((manager) => manager.factQualified));
   const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
@@ -1701,6 +1710,11 @@ function SalesDepartmentDashboard({
   const salesSyncToDate = getSalesDepartmentSyncToDate(selectedMonthConfig);
   const salesSyncFromDate = `${selectedMonthConfig.monthKey}-01`;
 
+  useEffect(() => {
+    setManualRecommendedDraft(String(manualCurrentValue || 0));
+    setManualRecommendedState("idle");
+  }, [manualCurrentValue, manualTargetName, selectedMonthConfig.monthKey]);
+
   async function refreshSalesDepartment() {
     if (!integrationsEnabled || isSalesRefreshing) return;
     setLoadState(snapshot ? "refreshing" : "loading");
@@ -1713,6 +1727,37 @@ function SalesDepartmentDashboard({
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "amoCRM не обновилась.");
       setLoadState(snapshot ? "ready" : "error");
+    }
+  }
+
+  async function saveManualRecommendedDeals() {
+    if (!writePassword || manualRecommendedState === "saving") return;
+    if (!selectedManager) {
+      setManualRecommendedState("error");
+      setLoadError("Выбери менеджера слева, чтобы сохранить реки вручную.");
+      return;
+    }
+    const cleanDeals = Math.max(0, Math.round(Number(manualRecommendedDraft.replace(",", ".")) || 0));
+    setManualRecommendedState("saving");
+    try {
+      await callReportApi(
+        "upsertSalesManualDeals",
+        {
+          records: [{
+            monthKey: selectedMonthConfig.monthKey,
+            manager: selectedManager.name,
+            city: "",
+            deals: cleanDeals,
+            comment: "manual recommended deals",
+          }],
+        },
+        writePassword,
+      );
+      setManualRecommendedState("saved");
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setManualRecommendedState("error");
+      setLoadError(error instanceof Error ? error.message : "Реки не сохранились.");
     }
   }
 
@@ -1750,6 +1795,51 @@ function SalesDepartmentDashboard({
             : "Внешние интеграции отдела продаж временно отключены, чтобы не замедлять сайт."}
         </span>
       </div>
+
+      {snapshot && totals && (
+        <section className="sales-manual-recs">
+          <div>
+            <strong>Реки вручную</strong>
+            <span>
+              {selectedManager ? shortManagerName(selectedManager.name) : "Команда Дакоро"}:
+              {" "}прибавляются к выполнению договоров и прогнозу, но не входят в конверсию.
+            </span>
+            {!selectedManager && (
+              <small>Чтобы изменить число, выбери менеджера слева. По команде показана сумма.</small>
+            )}
+          </div>
+          <label>
+            <span>Кол-во</span>
+            <input
+              type="number"
+              min="0"
+              value={manualRecommendedDraft}
+              onChange={(event) => {
+                setManualRecommendedDraft(event.target.value);
+                setManualRecommendedState("idle");
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="primary-button compact"
+            disabled={!writePassword || !selectedManager || manualRecommendedState === "saving"}
+            onClick={saveManualRecommendedDeals}
+          >
+            <Save size={16} />
+            {manualRecommendedState === "saving" ? "Сохраняю" : "Сохранить"}
+          </button>
+          <small className={manualRecommendedState}>
+            {!writePassword
+              ? "Нужен пароль админки"
+              : manualRecommendedState === "saved"
+                ? "Сохранено"
+                : manualRecommendedState === "error"
+                  ? "Не сохранилось"
+                  : `Сейчас: ${formatNumber(manualCurrentValue || 0)}`}
+          </small>
+        </section>
+      )}
 
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
         {salesDepartmentRops.map((rop) => (
@@ -1822,8 +1912,8 @@ function SalesDepartmentDashboard({
             <SalesKpiCard
               icon={<Target />}
               label="Договоры"
-              value={formatNumber(totals.factDeals)}
-              helper={`Динамический ${formatNumber(totals.forecastDeals)} · линейный ${formatNumber(totals.linearDealsForecast)}`}
+              value={formatNumber(totals.planFactDeals ?? totals.factDeals)}
+              helper={`amo ${formatNumber(totals.factDeals)} · реки ${formatNumber(totals.manualRecommendedDeals ?? 0)} · прогноз ${formatNumber(totals.forecastDeals)}`}
               plan={`План ${formatNumber(totals.planDeals)}`}
               progress={totals.dealPlanCompletion}
               tone="red"
@@ -1865,7 +1955,7 @@ function SalesDepartmentDashboard({
                   <span>Команда Дакоро</span>
                   <strong>{formatNumber(totals.factQualified)}</strong>
                   <i style={{ width: "100%" }} />
-                  <small>{formatNumber(totals.factDeals)} договоров · {formatNullablePercent(totals.conversionToDeals)} квал → договор</small>
+                  <small>{formatNumber(totals.planFactDeals ?? totals.factDeals)} договоров · amo {formatNumber(totals.factDeals)} · реки {formatNumber(totals.manualRecommendedDeals ?? 0)}</small>
                 </button>
                 <button
                   type="button"
@@ -1887,7 +1977,7 @@ function SalesDepartmentDashboard({
                     <span>{shortManagerName(manager.name)}</span>
                     <strong>{formatNumber(manager.factQualified)}</strong>
                     <i style={{ width: `${Math.max(4, (manager.factQualified / maxManagerQualified) * 100)}%` }} />
-                    <small>{formatNumber(manager.factDeals)} договоров · {formatNullablePercent(percentValueForUi(manager.factQualified, totals.factQualified))} квалов</small>
+                    <small>{formatNumber(manager.planFactDeals ?? manager.factDeals)} договоров · amo {formatNumber(manager.factDeals)} · реки {formatNumber(manager.manualRecommendedDeals ?? 0)}</small>
                   </button>
                 ))}
               </div>
@@ -1958,7 +2048,7 @@ function SalesDepartmentDashboard({
                       <td>{shortManagerName(manager.name)}</td>
                       <td>{formatNumber(manager.totalTraffic)} / {formatNumber(manager.planTraffic)}</td>
                       <td>{formatNumber(manager.factQualified)} / {formatNumber(manager.planQualified)}</td>
-                      <td>{formatNumber(manager.factDeals)} / {formatNumber(manager.planDeals)}</td>
+                      <td>{formatNumber(manager.planFactDeals ?? manager.factDeals)} / {formatNumber(manager.planDeals)}</td>
                       <td>{formatSalesNumber(manager.vipDeals)} / {formatNumber(manager.planVip)}</td>
                       <td>{formatNumber(manager.abDeals)}</td>
                       <td>{formatSalesNumber(manager.distantDeals)} / {formatNumber(manager.planDistant)}</td>
@@ -2097,6 +2187,8 @@ function SalesManagerDetail({
   const qualified = manager?.factQualified ?? totals.factQualified;
   const planQualified = manager?.planQualified ?? totals.planQualified;
   const deals = manager?.factDeals ?? totals.factDeals;
+  const manualRecommendedDeals = manager?.manualRecommendedDeals ?? totals.manualRecommendedDeals ?? 0;
+  const planFactDeals = manager?.planFactDeals ?? totals.planFactDeals ?? deals;
   const planDeals = manager?.planDeals ?? totals.planDeals;
   const forecastDeals = manager?.forecastDeals ?? totals.forecastDeals;
   const linearForecastValue = manager?.linearDealsForecast ?? totals.linearDealsForecast;
@@ -2116,13 +2208,13 @@ function SalesManagerDetail({
           <span>{manager ? "Вкладка менеджера" : "Общая вкладка"}</span>
           <h3>{title}</h3>
         </div>
-        <strong>{formatNullablePercent(percentValueForUi(deals, planDeals))} плана договоров</strong>
+        <strong>{formatNullablePercent(percentValueForUi(planFactDeals, planDeals))} плана договоров</strong>
       </div>
 
       <div className="sales-mini-grid">
         <SalesMiniMetric label="Лиды" value={formatNumber(traffic)} caption={`план ${formatNumber(manager?.planTraffic ?? totals.planTraffic)}`} />
         <SalesMiniMetric label="Квалы" value={formatNumber(qualified)} caption={`план ${formatNumber(planQualified)}`} />
-        <SalesMiniMetric label="Договоры" value={formatNumber(deals)} caption={`план ${formatNumber(planDeals)}`} />
+        <SalesMiniMetric label="Договоры" value={formatNumber(planFactDeals)} caption={`amo ${formatNumber(deals)} · реки ${formatNumber(manualRecommendedDeals)}`} />
         <SalesMiniMetric label="VIP" value={formatSalesNumber(vipDeals)} caption={`A+B ${formatNumber(abDeals)}`} />
         <SalesMiniMetric label="Дистант" value={formatSalesNumber(distantDeals)} caption="категория PS" />
         <SalesMiniMetric label="Средний чек" value={formatNullableCurrency(avgCheck)} caption="по PS без персональных данных" />
@@ -2222,8 +2314,39 @@ function SalesForecastBar({
   );
 }
 
+type SalesDailyMetricKey = "traffic" | "qualified" | "deals";
+
+const salesDailySeries: Array<{
+  key: SalesDailyMetricKey;
+  label: string;
+  className: string;
+  value: (day: SalesDayPoint) => number;
+}> = [
+  { key: "traffic", label: "Лиды", className: "traffic", value: (day) => day.totalTraffic },
+  { key: "qualified", label: "КВАЛ", className: "qualified", value: (day) => day.totalQualified || 0 },
+  { key: "deals", label: "Продажи", className: "deals", value: (day) => day.totalDeals },
+];
+
 function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
-  const maxValue = Math.max(1, ...days.map((day) => Math.max(day.totalTraffic, day.totalQualified || 0, day.totalDeals)));
+  const [visibleMetrics, setVisibleMetrics] = useState<Record<SalesDailyMetricKey, boolean>>({
+    traffic: true,
+    qualified: true,
+    deals: true,
+  });
+  const activeSeries = salesDailySeries.filter((series) => visibleMetrics[series.key]);
+  const maxValue = Math.max(1, ...activeSeries.flatMap((series) => days.map((day) => series.value(day))));
+  const chartWidth = Math.max(720, days.length * 42);
+  const chartHeight = 260;
+  const padding = { top: 24, right: 18, bottom: 48, left: 46 };
+  const plotWidth = chartWidth - padding.left - padding.right;
+  const plotHeight = chartHeight - padding.top - padding.bottom;
+  const yTicks = [1, 0.75, 0.5, 0.25, 0].map((ratio) => Math.round(maxValue * ratio));
+  const xForIndex = (index: number) => padding.left + (days.length <= 1 ? 0 : (index / (days.length - 1)) * plotWidth);
+  const yForValue = (value: number) => padding.top + (1 - value / maxValue) * plotHeight;
+  const linePath = (series: (typeof salesDailySeries)[number]) => days
+    .map((day, index) => `${index === 0 ? "M" : "L"} ${xForIndex(index).toFixed(1)} ${yForValue(series.value(day)).toFixed(1)}`)
+    .join(" ");
+
   if (!days.length) {
     return (
       <div className="sales-chart-empty">
@@ -2235,28 +2358,61 @@ function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
 
   return (
     <div className="sales-daily-chart" aria-label="Динамика лидов, квалов и продаж по дням">
-      <div className="sales-daily-legend" aria-hidden="true">
-        <span><i className="traffic" />Лиды</span>
-        <span><i className="qualified" />Квалы</span>
-        <span><i className="deals" />Продажи</span>
+      <div className="sales-daily-controls" aria-label="Показатели графика">
+        {salesDailySeries.map((series) => (
+          <button
+            key={series.key}
+            type="button"
+            className={`${series.className} ${visibleMetrics[series.key] ? "active" : ""}`}
+            aria-pressed={visibleMetrics[series.key]}
+            onClick={() => setVisibleMetrics((current) => ({
+              ...current,
+              [series.key]: activeSeries.length === 1 && current[series.key] ? true : !current[series.key],
+            }))}
+          >
+            <i />
+            {series.label}
+          </button>
+        ))}
       </div>
-      {days.map((day) => (
-        <div key={day.key} className={(day.totalTraffic > 0 || day.totalQualified > 0 || day.totalDeals > 0) ? "sales-day active" : "sales-day"}>
-          <div>
-            <i className="traffic" style={{ height: `${Math.max(4, (day.totalTraffic / maxValue) * 100)}%` }}>
-              <b>{formatNumber(day.totalTraffic)}</b>
-            </i>
-            <i className="qualified" style={{ height: `${Math.max(4, ((day.totalQualified || 0) / maxValue) * 100)}%` }}>
-              <b>{formatNumber(day.totalQualified || 0)}</b>
-            </i>
-            <i className="deals" style={{ height: `${Math.max(4, (day.totalDeals / maxValue) * 100)}%` }}>
-              <b>{formatNumber(day.totalDeals)}</b>
-            </i>
-          </div>
-          <span>{day.label}</span>
-          <small>{day.weekday}</small>
-        </div>
-      ))}
+      <div className="sales-daily-scroll">
+        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} width={chartWidth} height={chartHeight} role="img">
+          <title>Динамика по дням: лиды, КВАЛ и продажи</title>
+          {yTicks.map((tick) => {
+            const y = yForValue(tick);
+            return (
+              <g key={tick} className="sales-daily-grid">
+                <line x1={padding.left} x2={chartWidth - padding.right} y1={y} y2={y} />
+                <text x={padding.left - 10} y={y + 4}>{formatNumber(tick)}</text>
+              </g>
+            );
+          })}
+          {days.map((day, index) => {
+            const x = xForIndex(index);
+            return (
+              <g key={day.key} className="sales-daily-x">
+                <line x1={x} x2={x} y1={padding.top} y2={chartHeight - padding.bottom} />
+                <text x={x} y={chartHeight - 22}>{day.label}</text>
+                <text x={x} y={chartHeight - 8}>{day.weekday}</text>
+              </g>
+            );
+          })}
+          {activeSeries.map((series) => (
+            <path key={series.key} className={`sales-daily-line ${series.className}`} d={linePath(series)} />
+          ))}
+          {activeSeries.map((series) => days.map((day, index) => (
+            <circle
+              key={`${series.key}-${day.key}`}
+              className={`sales-daily-point ${series.className}`}
+              cx={xForIndex(index)}
+              cy={yForValue(series.value(day))}
+              r="4"
+            >
+              <title>{`${series.label}: ${formatNumber(series.value(day))} · ${day.label}, ${day.weekday}`}</title>
+            </circle>
+          )))}
+        </svg>
+      </div>
     </div>
   );
 }

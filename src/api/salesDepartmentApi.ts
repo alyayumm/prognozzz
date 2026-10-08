@@ -73,6 +73,8 @@ export type SalesManagerMetrics = {
   quizRequests: number;
   applications: number;
   factDeals: number;
+  manualRecommendedDeals?: number;
+  planFactDeals?: number;
   forecastDeals: number;
   lagDeals: number;
   abDeals: number;
@@ -113,6 +115,8 @@ export type SalesDepartmentTotals = {
   factQualified: number;
   forecastQualified: number;
   factDeals: number;
+  manualRecommendedDeals?: number;
+  planFactDeals?: number;
   forecastDeals: number;
   abDeals: number;
   vipDeals: number | null;
@@ -492,6 +496,8 @@ function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | nu
     ...snapshot,
     managers: managers.map((manager) => ({
       ...manager,
+      manualRecommendedDeals: Number(manager.manualRecommendedDeals ?? 0),
+      planFactDeals: Number(manager.planFactDeals ?? manager.factDeals ?? 0),
       refusalLeads: Number(manager.refusalLeads ?? 0),
       notQualifiedLeads: Number(manager.notQualifiedLeads ?? 0),
       notQualifiedDetails: Array.isArray(manager.notQualifiedDetails) ? manager.notQualifiedDetails : [],
@@ -502,6 +508,8 @@ function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | nu
       totalTraffic: Number(totals.totalTraffic ?? 0),
       factQualified: Number(totals.factQualified ?? 0),
       factDeals: Number(totals.factDeals ?? 0),
+      manualRecommendedDeals: Number(totals.manualRecommendedDeals ?? 0),
+      planFactDeals: Number(totals.planFactDeals ?? totals.factDeals ?? 0),
       refusalLeads: Number(totals.refusalLeads ?? 0),
       notQualifiedLeads: Number(totals.notQualifiedLeads ?? 0),
       notQualifiedDetails: Array.isArray(totals.notQualifiedDetails) ? totals.notQualifiedDetails : [],
@@ -917,6 +925,8 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
   const orderCount = sumNullable(managers, (manager) => manager.orderCount);
   const revenue = sumNullable(managers, (manager) => manager.revenue);
   const factDeals = sum(managers, (manager) => manager.factDeals);
+  const manualRecommendedDeals = sum(managers, (manager) => manager.manualRecommendedDeals ?? 0);
+  const planFactDeals = sum(managers, (manager) => manager.planFactDeals ?? manager.factDeals);
   const totalTraffic = sum(managers, (manager) => manager.totalTraffic);
   const factQualified = sum(managers, (manager) => manager.factQualified);
   const planDeals = sum(managers, (manager) => manager.planDeals);
@@ -931,6 +941,8 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
     factQualified,
     forecastQualified: sum(managers, (manager) => manager.forecastQualified),
     factDeals,
+    manualRecommendedDeals,
+    planFactDeals,
     forecastDeals: sum(managers, (manager) => manager.forecastDeals),
     abDeals: sum(managers, (manager) => manager.abDeals),
     vipDeals,
@@ -941,7 +953,7 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
     avgCheck: revenue !== null && orderCount && orderCount > 0 ? revenue / orderCount : null,
     conversionToQualified: percentValue(factQualified, totalTraffic),
     conversionToDeals: percentValue(factDeals, factQualified),
-    dealPlanCompletion: Math.round(percentValue(factDeals, planDeals) ?? 0),
+    dealPlanCompletion: Math.round(percentValue(planFactDeals, planDeals) ?? 0),
     linearDealsForecast: sum(managers, (manager) => manager.linearDealsForecast),
   };
 }
