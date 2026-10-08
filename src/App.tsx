@@ -987,7 +987,10 @@ export default function App() {
               />
             )}
             {mode === "leadDaily" && (
-              <SalesDepartmentDashboard selectedMonthConfig={selectedMonthConfig} />
+              <SalesDepartmentDashboard
+                selectedMonthConfig={selectedMonthConfig}
+                onSyncAmoCrmLeads={syncAmoCrmLeads}
+              />
             )}
             {mode === "week" && activeWeek && (
               <WeekDashboard
@@ -1630,8 +1633,10 @@ function MonthDailyDashboard({
 
 function SalesDepartmentDashboard({
   selectedMonthConfig,
+  onSyncAmoCrmLeads,
 }: {
   selectedMonthConfig: MonthConfig;
+  onSyncAmoCrmLeads: (fromDate: string, toDate: string) => Promise<void>;
 }) {
   const [snapshot, setSnapshot] = useState<SalesDepartmentSnapshot | null>(null);
   const [loadState, setLoadState] = useState<"disabled" | "loading" | "refreshing" | "ready" | "error">("disabled");
@@ -1693,6 +1698,23 @@ function SalesDepartmentDashboard({
       ? { label: "не загрузилось", tone: "danger" }
       : { label: "загрузка", tone: "neutral" };
   const isSalesRefreshing = loadState === "loading" || loadState === "refreshing";
+  const salesSyncToDate = getSalesDepartmentSyncToDate(selectedMonthConfig);
+  const salesSyncFromDate = `${selectedMonthConfig.monthKey}-01`;
+
+  async function refreshSalesDepartment() {
+    if (!integrationsEnabled || isSalesRefreshing) return;
+    setLoadState(snapshot ? "refreshing" : "loading");
+    setLoadError("");
+    try {
+      if (salesSyncToDate) {
+        await onSyncAmoCrmLeads(salesSyncFromDate, salesSyncToDate);
+      }
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "amoCRM не обновилась.");
+      setLoadState(snapshot ? "ready" : "error");
+    }
+  }
 
   return (
     <div className="page-stack sales-department-dashboard">
@@ -1717,7 +1739,7 @@ function SalesDepartmentDashboard({
           className="secondary-button sales-refresh-button"
           type="button"
           disabled={!integrationsEnabled || isSalesRefreshing}
-          onClick={() => setRefreshTick((value) => value + 1)}
+          onClick={refreshSalesDepartment}
         >
           <RefreshCw size={17} />
           {!integrationsEnabled ? "Отключено" : isSalesRefreshing ? "Обновляю" : "Обновить"}
@@ -9269,6 +9291,16 @@ function getTodayIso(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function getSalesDepartmentSyncToDate(config: MonthConfig): string | null {
+  const todayIso = getTodayIso();
+  const todayMonthKey = todayIso.slice(0, 7);
+  if (todayMonthKey === config.monthKey) return todayIso;
+  if (todayMonthKey > config.monthKey) {
+    return `${config.monthKey}-${String(config.daysInMonth).padStart(2, "0")}`;
+  }
+  return null;
 }
 
 function formatSalesNumber(value: number | null | undefined): string {
