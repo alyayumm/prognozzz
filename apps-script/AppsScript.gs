@@ -789,8 +789,8 @@ function getSalesDepartmentDashboard_(payload) {
     const planFactDeals = factDeals + manualRecommendedDeals;
     const factQualified = fact.factQualified;
     const totalTraffic = fact.totalTraffic;
-    const forecastDeals = salesCoefficientForecast_(planFactDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
-    const forecastQualified = salesCoefficientForecast_(factQualified, config, latestActualDate, 'РљРІР°Р»С‹');
+    const forecastDeals = salesCoefficientForecast_(planFactDeals, config, latestActualDate, 'Продажи');
+    const forecastQualified = salesCoefficientForecast_(factQualified, config, latestActualDate, 'Квалы');
     const revenue = fact.revenue;
     const orderCount = fact.orderCount;
 
@@ -2242,9 +2242,19 @@ function salesCoefficientForecast_(fact, config, latestActualDate, metric) {
 
 function salesAverageCoefficientForMetric_(metric, dateIso) {
   const coefficients = defaultForecastCoefficients_();
-  const msk = coefficientForCityMetric_('РњРЎРљ', metric, dateIso, coefficients);
-  const spb = coefficientForCityMetric_('РЎРџР‘', metric, dateIso, coefficients);
+  const normalizedMetric = salesNormalizeForecastMetric_(metric);
+  const msk = coefficientForCityMetric_('МСК', normalizedMetric, dateIso, coefficients);
+  const spb = coefficientForCityMetric_('СПБ', normalizedMetric, dateIso, coefficients);
   return (Number(msk || 0) + Number(spb || 0)) / 2 || 1;
+}
+
+function salesNormalizeForecastMetric_(metric) {
+  const text = String(metric || '').toLowerCase();
+  if (text === 'продажи' || text.indexOf('прод') >= 0) return 'Продажи';
+  if (text === 'квалы' || text.indexOf('квал') >= 0) return 'Квалы';
+  if (text === 'лиды' || text.indexOf('лид') >= 0) return 'Лиды';
+  if (FORECAST_METRICS.indexOf(metric) >= 0) return metric;
+  return 'Лиды';
 }
 
 function salesSum_(items, getValue) {
@@ -4754,13 +4764,16 @@ function hasAnyPlanValue_(plansByCity) {
 
 function coefficientForCityMetric_(city, metric, dateIso, coefficients) {
   const weekday = weekdayCoefficientKey_(dateIso);
+  const defaults = defaultForecastCoefficients_();
   return Number(
     coefficients &&
     coefficients[city] &&
     coefficients[city][metric] &&
     coefficients[city][metric][weekday] !== undefined
       ? coefficients[city][metric][weekday]
-      : defaultForecastCoefficients_()[city][metric][weekday],
+      : defaults[city] && defaults[city][metric] && defaults[city][metric][weekday] !== undefined
+        ? defaults[city][metric][weekday]
+        : 1,
   );
 }
 
