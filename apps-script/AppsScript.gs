@@ -3160,11 +3160,180 @@ function refreshRoistatFields_() {
 }
 
 function syncRoistatSources_(payload) {
-  return syncRoistatRange_(payload, 'sources');
+  return syncRoistatSourcesFromSheet_(payload);
 }
 
 function syncRoistatBrands_(payload) {
   return syncRoistatRange_(payload, 'brands');
+}
+
+function syncRoistatSourcesFromSheet_(payload) {
+  const range = normalizeRoistatDateRange_(payload);
+  const warnings = [];
+
+  try {
+    const rawRows = readRoistatSourceSheetRows_(range, warnings);
+    const result = writeRoistatSourceSheetRows_(rawRows, range, warnings);
+    logRoistatSync_(result);
+    return result;
+  } catch (error) {
+    const result = {
+      kind: 'sources',
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      status: 'error',
+      message: 'Roistat-таблица источников не загрузилась: ' + salesErrorMessage_(error),
+      sourceRows: 0,
+      brandRows: 0,
+      skippedRows: 0,
+      updatedAt: new Date(),
+    };
+    logRoistatSync_(result);
+    throw new Error(result.message);
+  }
+}
+
+function readRoistatSourceSheetRows_(range, warnings) {
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.salesManagerSourcesSpreadsheetId);
+  const settingsSheet = spreadsheet.getSheetByName('RS_Настройки') || spreadsheet.getSheetByName('RS_\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438');
+  if (settingsSheet) {
+    settingsSheet.getRange('B11').setValue(range.fromDate);
+    settingsSheet.getRange('B12').setValue(range.toDate);
+    SpreadsheetApp.flush();
+  } else {
+    warnings.push('Roistat-таблица: не найден лист RS_Настройки, период не удалось проставить автоматически.');
+  }
+
+  const reportSheet = spreadsheet.getSheetByName('\u043e\u0442\u0447\u0435\u0442') || spreadsheet.getSheetByName('report');
+  if (!reportSheet || reportSheet.getLastRow() < 2) return [];
+  const values = reportSheet.getDataRange().getDisplayValues();
+  const headerIndex = values.findIndex((row) => row.some((cell) => roistatSourceSheetHeaderKind_(cell)));
+  if (headerIndex < 0) {
+    warnings.push('Roistat-таблица: в листе "отчет" не найдена строка заголовков.');
+    return [];
+  }
+
+  const headers = values[headerIndex].map((cell) => roistatSourceSheetHeaderKind_(cell));
+  const sourceIndex = headers.indexOf('source');
+  if (sourceIndex < 0) {
+    warnings.push('Roistat-таблица: в отчете нет колонки "Источник".');
+    return [];
+  }
+
+  const dateIndex = headers.indexOf('date');
+  const cityIndex = headers.indexOf('city');
+  const leadsIndex = headers.indexOf('leads');
+  const qualifiedIndex = headers.indexOf('qualified');
+  const salesIndex = headers.indexOf('sales');
+  const revenueIndex = headers.indexOf('revenue');
+  const budgetIndex = headers.indexOf('budget');
+
+  return values.slice(headerIndex + 1).map((row) => {
+    const rowText = row.join(' ');
+    const sourceText = String(row[sourceIndex] || '').trim();
+    const source = canonicalRoistatSource_(sourceText + ' ' + rowText, sourceText);
+    const cityText = cityIndex >= 0 ? row[cityIndex] : rowText;
+    const city = normalizeRoistatCity_(cityText || rowText) || 'Все';
+    const date = dateIndex >= 0 ? normalizeRoistatDate_(row[dateIndex]) || range.toDate : range.toDate;
+    return {
+      date: date,
+      city: city,
+      source: isRoistatMessageLead_(sourceText + ' ' + rowText) ? ROISTAT_SOURCE_OTHER : source,
+      leads: leadsIndex >= 0 ? salesNumber_(row[leadsIndex]) : 0,
+      qualified: qualifiedIndex >= 0 ? salesNumber_(row[qualifiedIndex]) : 0,
+      sales: salesIndex >= 0 ? salesNumber_(row[salesIndex]) : 0,
+      revenue: revenueIndex >= 0 ? salesNumber_(row[revenueIndex]) : 0,
+      budget: budgetIndex >= 0 ? salesNumber_(row[budgetIndex]) : 0,
+    };
+  }).filter((row) => row.source && roistatHasAnyMetric_(row));
+}
+
+function roistatSourceSheetHeaderKind_(value) {
+  const text = salesNormalizeText_(value);
+  if (!text) return '';
+  if (text.indexOf('\u0434\u0430\u0442') >= 0 || text === 'date') return 'date';
+  if (text.indexOf('\u0433\u043e\u0440\u043e\u0434') >= 0 || text.indexOf('\u0432\u043e\u0440\u043e\u043d') >= 0 || text.indexOf('city') >= 0 || text.indexOf('pipeline') >= 0) return 'city';
+  if (text.indexOf('\u0438\u0441\u0442\u043e\u0447') >= 0 || text.indexOf('source') >= 0) return 'source';
+  if (text.indexOf('\u043b\u0438\u0434') >= 0 || text.indexOf('\u0437\u0430\u044f\u0432') >= 0 || text === 'leads') return 'leads';
+  if (text.indexOf('\u043a\u0432\u0430\u043b') >= 0 || text.indexOf('ql') >= 0 || text.indexOf('qualified') >= 0) return 'qualified';
+  if (text.indexOf('\u043f\u0440\u043e\u0434\u0430\u0436') >= 0 || text.indexOf('sales') >= 0) return 'sales';
+  if (text.indexOf('\u0432\u044b\u0440\u0443\u0447') >= 0 || text.indexOf('revenue') >= 0) return 'revenue';
+  if (text.indexOf('\u0440\u0430\u0441\u0445') >= 0 || text.indexOf('\u0437\u0430\u0442\u0440') >= 0 || text.indexOf('\u0431\u044e\u0434\u0436') >= 0 || text.indexOf('cost') >= 0 || text.indexOf('budget') >= 0) return 'budget';
+  return salesSourceHeaderKind_(value);
+}
+
+function writeRoistatSourceSheetRows_(rawRows, range, warnings) {
+  const aggregated = {};
+  let skippedRows = 0;
+
+  rawRows.forEach((row) => {
+    const city = normalizeRoistatCity_(row.city) || 'Все';
+    const source = canonicalRoistatSource_(row.source, row.source);
+    const date = stringifyDate_(row.date || range.toDate);
+    if (!source) {
+      skippedRows += 1;
+      return;
+    }
+    const target = ensureRoistatSourceAggregate_(aggregated, date, city, source);
+    ROISTAT_METRIC_KEYS.forEach((metric) => {
+      target[metric] += Number(row[metric] || 0);
+    });
+  });
+
+  const directMonthly = readRoistatDirectMonthlyMetrics_(warnings);
+  redistributeRoistatSourceOther_(aggregated, directMonthly, warnings);
+
+  const records = Object.keys(aggregated).flatMap((key) => {
+    const item = aggregated[key];
+    if (item.source === ROISTAT_SOURCE_OTHER || !roistatHasAnyMetric_(item)) return [];
+    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat spreadsheet';
+    return [
+      roistatSourceDailyRecord_(item, 'Лиды', item.leads, baseComment),
+      roistatSourceDailyRecord_(item, 'Квалы', item.qualified, baseComment),
+      roistatSourceDailyRecord_(item, 'Продажи', item.sales, baseComment + '; выручка: ' + Math.round(item.revenue) + '; расход: ' + Math.round(item.budget)),
+    ];
+  });
+
+  deleteRoistatSourceRowsInRange_(range.fromDate, range.toDate);
+  const upsertResult = records.length
+    ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, records, dailyRow_)
+    : { updated: 0 };
+  unique_(records.map((record) => record.month)).forEach(rebuildWeeklySummary_);
+
+  return {
+    kind: 'sources',
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    status: warnings.length || skippedRows ? 'warning' : 'success',
+    message: roistatResultMessage_('источники из Roistat-таблицы', upsertResult.updated, skippedRows, warnings),
+    sourceRows: upsertResult.updated,
+    brandRows: 0,
+    skippedRows: skippedRows,
+    updatedAt: new Date(),
+  };
+}
+
+function deleteRoistatSourceRowsInRange_(fromDate, toDate) {
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.daily);
+  if (!sheet || sheet.getLastRow() < 2) return;
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), HEADERS.Data_Daily.length)).getValues();
+  const headers = values[0].map((header) => String(header || '').trim());
+  const dateIndex = headers.indexOf('date');
+  const cityIndex = headers.indexOf('city');
+  const commentIndex = headers.indexOf('comment');
+  if (dateIndex < 0 || cityIndex < 0 || commentIndex < 0) return;
+
+  const rowsToDelete = [];
+  values.slice(1).forEach((row, index) => {
+    const date = stringifyDate_(row[dateIndex]);
+    const city = String(row[cityIndex] || '');
+    const comment = String(row[commentIndex] || '');
+    if (city === 'источники' && date >= fromDate && date <= toDate && (comment.indexOf('Roistat API') >= 0 || comment.indexOf('Roistat spreadsheet') >= 0)) {
+      rowsToDelete.push(index + 2);
+    }
+  });
+
+  rowsToDelete.sort((a, b) => b - a).forEach((rowNumber) => sheet.deleteRow(rowNumber));
 }
 
 function syncRoistatRange_(payload, kind) {

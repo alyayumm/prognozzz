@@ -702,7 +702,7 @@ export default function App() {
     }
 
     setIsSavingDaily(true);
-    setSavedMessage(kind === "sources" ? "Загружаю Roistat: отчет тест6.04 за выбранный период..." : "Загружаю Roistat: отчет по домену за выбранный период...");
+    setSavedMessage(kind === "sources" ? "Загружаю Roistat-таблицу источников за выбранный период..." : "Загружаю Roistat: отчет по домену за выбранный период...");
     try {
       const action = kind === "sources" ? "syncRoistatSources" : "syncRoistatBrands";
       const result = await callReportApi<RoistatSyncResult>(action, { fromDate, toDate }, writePassword);
@@ -5357,8 +5357,8 @@ function SourceAdminPanel({
       />
       <div className="roistat-sync-panel">
         <div>
-          <strong>Roistat API</strong>
-          <span>Отчет тест6.04 пишется в Источники. Отчет по домену пишется в Бренды.</span>
+          <strong>Roistat</strong>
+          <span>Источники берутся из таблицы Roistat-источников: даты ставятся в RS_Настройки, результат сохраняется в Data_Daily. Отчет по домену пишется в Бренды.</span>
         </div>
         <label>
           С
@@ -5370,7 +5370,7 @@ function SourceAdminPanel({
         </label>
         <div className="roistat-sync-actions">
           <button className="select-button" type="button" onClick={() => syncRoistat("sources")} disabled={isSavingDaily}>
-            тест6.04: источники
+            таблица: источники
           </button>
           <button className="select-button" type="button" onClick={() => syncRoistat("brands")} disabled={isSavingDaily}>
             по домену: бренды
