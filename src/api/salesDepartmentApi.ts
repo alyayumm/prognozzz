@@ -349,11 +349,31 @@ export async function loadSalesDepartmentSnapshot(
     serviceError = getSalesDepartmentErrorMessage(error);
   }
 
-  if (serviceSnapshot && isUsableSalesDepartmentSnapshot(serviceSnapshot) && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)) {
+  if (
+    serviceSnapshot
+    && serviceSnapshot.departmentTotals
+    && isUsableSalesDepartmentSnapshot(serviceSnapshot)
+    && !isStaleSalesDepartmentSnapshot(serviceSnapshot, context)
+  ) {
     const liveSnapshot = cacheSalesDepartmentSnapshot(withSalesDepartmentFactDate(serviceSnapshot, context), period);
     return isCompleteSalesDepartmentSnapshot(liveSnapshot)
       ? liveSnapshot
       : withSalesDepartmentWarning(liveSnapshot, "Apps Script вернул снимок отдела продаж с предупреждениями.");
+  }
+
+  try {
+    const gvizSnapshot = normalizeSalesDepartmentSnapshot(await loadSalesDepartmentGvizSnapshot(context));
+    if (gvizSnapshot && isUsableSalesDepartmentSnapshot(gvizSnapshot)) {
+      const reason = serviceSnapshot && !serviceSnapshot.departmentTotals
+        ? "Apps Script пока вернул старый снимок без общих KPI отдела. Верхний блок собран напрямую из Google Sheets."
+        : "Apps Script не вернул полный снимок, данные собраны напрямую из Google Sheets.";
+      return cacheSalesDepartmentSnapshot(
+        withSalesDepartmentWarning(withSalesDepartmentFactDate(gvizSnapshot, context), reason),
+        period,
+      );
+    }
+  } catch (error) {
+    serviceError = serviceError || getSalesDepartmentErrorMessage(error);
   }
 
   if (allowStaleFallback && cachedSnapshot) {
@@ -416,7 +436,11 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   const dynamicsParsed = dynamicsResult.ok
     ? parseRopDynamicsSheet(dynamicsResult.value, "Дакоро")
     : { managers: [] as string[], metrics: new Map<string, Map<string, string>>() };
+  const allDynamicsParsed = dynamicsResult.ok
+    ? parseAllDynamicsSheet(dynamicsResult.value)
+    : dynamicsParsed;
   const dynamicsByManager = dynamicsParsed.metrics;
+  const allDynamicsByManager = allDynamicsParsed.metrics;
   if (!dynamicsResult.ok) warnings.push("Динамика отдела продаж не загрузилась из живого листа.");
 
   const baseManagerNames = planManagerNames.length
@@ -426,7 +450,9 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   const daily = dailyResult.ok ? parseDailySheet(dailyResult.value, context) : [];
   if (!dailyResult.ok) warnings.push("Дневная динамика не загрузилась, линейный прогноз посчитан по текущему факту.");
 
+  const departmentManagerNames = uniqueManagers(allDynamicsParsed.managers.length ? allDynamicsParsed.managers : baseManagerNames);
   const psByManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey, baseManagerNames) : new Map<string, ManagerPsMetrics>();
+  const psByDepartmentManager = psResult.ok ? parsePsSheet(psResult.value, context.monthKey, departmentManagerNames) : new Map<string, ManagerPsMetrics>();
   if (!psResult.ok) warnings.push("Выгрузка PS не успела загрузиться: VIP, дистант и средний чек показаны только там, где есть данные динамики.");
   const specialByManager = dynamicsResult.ok && specialResult.ok
     ? parseSpecialManagerTables(dynamicsResult.value, specialResult.value, baseManagerNames)
@@ -447,11 +473,16 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
   const workingDaysPassed = Math.max(1, latestActualDate ? countWorkingDaysUntil(context.monthYear, context.monthIndex, latestActualDate) : daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length || 1);
   const activeCalendarDays = daily.filter((day) => day.totalTraffic > 0 || day.totalDeals > 0).length;
 
-  const managers = managerNames.map((name) => {
-    const plan = getManagerValue(planByManager, name) ?? emptyPlan();
-    const dynamic = getManagerValue(dynamicsByManager, name) ?? new Map<string, string>();
-    const ps = getManagerValue(psByManager, name);
-    const special = getManagerValue(specialByManager, name);
+  const buildManager = (
+    name: string,
+    dynamicSource: Map<string, Map<string, string>>,
+    psSource: Map<string, ManagerPsMetrics>,
+    withPlan: boolean,
+  ): SalesManagerMetrics => {
+    const plan = withPlan ? getManagerValue(planByManager, name) ?? emptyPlan() : emptyPlan();
+    const dynamic = getManagerValue(dynamicSource, name) ?? new Map<string, string>();
+    const ps = getManagerValue(psSource, name);
+    const special = withPlan ? getManagerValue(specialByManager, name) : undefined;
     const factDeals = numberFromMap(dynamic, "Факт Договоры");
     const factQualified = numberFromMap(dynamic, "Факт обращения") || numberFromMap(dynamic, "Обращения целевые");
     const totalTraffic = numberFromMap(dynamic, "Обращения всего");
@@ -502,7 +533,10 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
       linearDealsForecast: linearForecast(factDeals, workingDaysPassed, workingDaysInMonth),
       linearQualifiedForecast: linearForecast(factQualified, workingDaysPassed, workingDaysInMonth),
     };
-  });
+  };
+
+  const managers = managerNames.map((name) => buildManager(name, dynamicsByManager, psByManager, true));
+  const departmentManagers = departmentManagerNames.map((name) => buildManager(name, allDynamicsByManager, psByDepartmentManager, false));
 
   const dailyWithQualified = ensureDailyQualified(
     daily,
@@ -522,6 +556,7 @@ async function loadSalesDepartmentGvizSnapshot(context: SalesMonthContext): Prom
     activeCalendarDays,
     managers,
     daily: dailyWithQualified,
+    departmentTotals: buildTotals(departmentManagers),
     totals: buildTotals(managers),
     warnings,
     sourceLinks: {
@@ -881,6 +916,31 @@ function parseRopDynamicsSheet(table: GvizTable, ropName: string): { managers: s
 
   const managers: string[] = [];
   for (let columnIndex = startColumn; columnIndex < endColumn; columnIndex += 1) {
+    const managerName = managerRow[columnIndex]?.trim();
+    if (!managerName || normalizeLabel(managerName).includes(normalizeLabel("Итого"))) continue;
+
+    const managerMetrics = new Map<string, string>();
+    dynamicsRowLabels.forEach((label) => {
+      if (!label) return;
+      const row = findMatrixRow(rows, label);
+      managerMetrics.set(label, row[columnIndex] ?? "");
+    });
+    managerMetrics.set("Менеджеры", managerName);
+    metrics.set(managerName, managerMetrics);
+    managers.push(managerName);
+  }
+
+  return { managers: uniqueManagers(managers), metrics };
+}
+
+function parseAllDynamicsSheet(table: GvizTable): { managers: string[]; metrics: Map<string, Map<string, string>> } {
+  const rows = rowsToMatrix(table);
+  const managerRow = findMatrixRow(rows, "Менеджеры");
+  const metrics = new Map<string, Map<string, string>>();
+  const managers: string[] = [];
+  if (!managerRow.length) return { managers, metrics };
+
+  for (let columnIndex = 1; columnIndex < managerRow.length; columnIndex += 1) {
     const managerName = managerRow[columnIndex]?.trim();
     if (!managerName || normalizeLabel(managerName).includes(normalizeLabel("Итого"))) continue;
 

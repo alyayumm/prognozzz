@@ -2149,6 +2149,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .sales-daily-controls .deals i { background: var(--negative); }
 .sales-daily-scroll {
   overflow-x: auto;
+  overflow-y: visible;
   padding-bottom: 4px;
   position: relative;
 }
@@ -2209,7 +2210,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 10px);
+  top: 8px;
   transform: translateX(-50%) translateY(4px);
   min-width: 170px;
   max-width: 220px;
@@ -2235,12 +2236,14 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 }
 .sales-daily-hit.tooltip-left-edge::after {
   left: 0;
+  top: 8px;
   transform: translateX(0) translateY(4px);
 }
 .sales-daily-hit.tooltip-left-edge:hover::after {
   transform: translateX(0) translateY(0);
 }
 .sales-daily-hit.tooltip-right-edge::after {
+  top: 8px;
   left: auto;
   right: 0;
   transform: translateX(0) translateY(4px);
