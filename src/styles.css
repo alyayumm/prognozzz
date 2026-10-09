@@ -1646,6 +1646,14 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   background: linear-gradient(135deg, rgba(244, 248, 255, 0.92), rgba(255, 255, 255, 0.74));
   padding: 10px 12px;
 }
+.sales-manual-adjustments {
+  display: grid;
+  gap: 8px;
+}
+.sales-manager-recs.actual {
+  border-color: rgba(251, 98, 88, 0.28);
+  background: linear-gradient(135deg, rgba(255, 247, 247, 0.9), rgba(255, 255, 255, 0.78));
+}
 .sales-manager-recs > div {
   display: grid;
   gap: 2px;
@@ -1962,8 +1970,11 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
+.sales-forecast-grid.extended {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .sales-forecast-bar {
-  min-height: 74px;
+  min-height: 70px;
   border: 1px solid rgba(154, 180, 234, 0.38);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.68);
@@ -2034,6 +2045,58 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   line-height: 1.25;
   font-weight: 800;
 }
+.sales-manager-sources {
+  border: 1px solid rgba(154, 180, 234, 0.38);
+  border-radius: 15px;
+  background: rgba(247, 249, 255, 0.68);
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+.sales-manager-sources-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+.sales-manager-sources-head strong {
+  color: var(--navy);
+  font-size: 14px;
+  font-weight: 950;
+}
+.sales-manager-sources-head span,
+.sales-source-empty {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 850;
+}
+.sales-source-mini-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(154, 180, 234, 0.34);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.sales-source-mini-table > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.5fr) repeat(4, minmax(70px, 1fr));
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(154, 180, 234, 0.26);
+  color: var(--navy);
+  font-size: 11px;
+  font-weight: 900;
+}
+.sales-source-mini-table > div:last-child {
+  border-bottom: 0;
+}
+.sales-source-mini-table b {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.sales-source-mini-table span:not(:first-child) {
+  text-align: right;
+}
 .sales-two-column {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.65fr);
@@ -2087,6 +2150,7 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .sales-daily-scroll {
   overflow-x: auto;
   padding-bottom: 4px;
+  position: relative;
 }
 .sales-daily-scroll::-webkit-scrollbar { height: 8px; }
 .sales-daily-scroll::-webkit-scrollbar-thumb { background: rgba(127, 167, 255, 0.48); border-radius: 999px; }
@@ -2130,6 +2194,60 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .sales-daily-point.traffic { fill: var(--blue); }
 .sales-daily-point.qualified { fill: #22c55e; }
 .sales-daily-point.deals { fill: var(--negative); }
+.sales-daily-hit-layer {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+}
+.sales-daily-hit {
+  position: absolute;
+  display: block;
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.sales-daily-hit::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%) translateY(4px);
+  min-width: 170px;
+  max-width: 220px;
+  white-space: pre-line;
+  border: 1px solid rgba(127, 167, 255, 0.34);
+  border-radius: 12px;
+  background: rgba(10, 14, 23, 0.94);
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(19, 27, 47, 0.2);
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 850;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 8;
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+}
+.sales-daily-hit:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+.sales-daily-hit.tooltip-left-edge::after {
+  left: 0;
+  transform: translateX(0) translateY(4px);
+}
+.sales-daily-hit.tooltip-left-edge:hover::after {
+  transform: translateX(0) translateY(0);
+}
+.sales-daily-hit.tooltip-right-edge::after {
+  left: auto;
+  right: 0;
+  transform: translateX(0) translateY(4px);
+}
+.sales-daily-hit.tooltip-right-edge:hover::after {
+  transform: translateX(0) translateY(0);
+}
 .sales-chart-empty {
   min-height: 210px;
   display: grid;

@@ -1662,6 +1662,9 @@ function SalesDepartmentDashboard({
   const [manualRecommendedDate, setManualRecommendedDate] = useState(`${selectedMonthConfig.monthKey}-01`);
   const [manualRecommendedDraft, setManualRecommendedDraft] = useState("0");
   const [manualRecommendedState, setManualRecommendedState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [manualActualDate, setManualActualDate] = useState(`${selectedMonthConfig.monthKey}-01`);
+  const [manualActualDraft, setManualActualDraft] = useState("0");
+  const [manualActualState, setManualActualState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [refreshTick, setRefreshTick] = useState(0);
   const integrationsEnabled = true;
   const salesPeriodOptions = useMemo(
@@ -1686,6 +1689,7 @@ function SalesDepartmentDashboard({
   useEffect(() => {
     const today = getSalesDepartmentSyncToDate(selectedMonthConfig) ?? `${selectedMonthConfig.monthKey}-01`;
     setManualRecommendedDate(today);
+    setManualActualDate(today);
   }, [selectedMonthConfig.monthKey]);
 
   useEffect(() => {
@@ -1730,7 +1734,8 @@ function SalesDepartmentDashboard({
   }, [activeSalesPeriod, selectedMonthConfig.monthKey, refreshTick]);
 
   const managers = snapshot?.managers ?? [];
-  const totals = snapshot?.totals;
+  const teamTotals = snapshot?.totals;
+  const departmentTotals = snapshot?.departmentTotals ?? teamTotals;
   const selectedManager = selectedManagerName === "team"
     ? null
     : managers.find((manager) => manager.name === selectedManagerName) ?? null;
@@ -1738,6 +1743,9 @@ function SalesDepartmentDashboard({
   const manualCurrentValue = selectedManager && snapshot?.manualRecommendedByDateByManager
     ? snapshot.manualRecommendedByDateByManager[`${selectedManager.name}|${manualRecommendedDate}`] ?? 0
     : snapshot?.manualRecommendedByDate?.[manualRecommendedDate] ?? 0;
+  const manualActualCurrentValue = selectedManager && snapshot?.manualActualByDateByManager
+    ? snapshot.manualActualByDateByManager[`${selectedManager.name}|${manualActualDate}`] ?? 0
+    : snapshot?.manualActualByDate?.[manualActualDate] ?? 0;
   const topManagers = [...managers].sort((a, b) => b.factQualified - a.factQualified);
   const maxManagerQualified = Math.max(1, ...managers.map((manager) => manager.factQualified));
   const monthLabel = snapshot?.monthLabel ?? selectedMonthConfig.label;
@@ -1758,6 +1766,11 @@ function SalesDepartmentDashboard({
     setManualRecommendedDraft(String(manualCurrentValue || 0));
     setManualRecommendedState("idle");
   }, [manualCurrentValue, manualTargetName, manualRecommendedDate, selectedMonthConfig.monthKey]);
+
+  useEffect(() => {
+    setManualActualDraft(String(manualActualCurrentValue || 0));
+    setManualActualState("idle");
+  }, [manualActualCurrentValue, manualTargetName, manualActualDate, selectedMonthConfig.monthKey]);
 
   async function refreshSalesDepartment() {
     if (!integrationsEnabled || isSalesRefreshing) return;
@@ -1806,6 +1819,39 @@ function SalesDepartmentDashboard({
     }
   }
 
+  async function saveManualActualDeals() {
+    if (!writePassword || manualActualState === "saving") return;
+    if (!selectedManager) {
+      setManualActualState("error");
+      setLoadError("Выбери менеджера слева, чтобы добавить или убрать продажу.");
+      return;
+    }
+    const cleanDeals = Math.round(Number(manualActualDraft.replace(",", ".")) || 0);
+    setManualActualState("saving");
+    try {
+      await callReportApi(
+        "upsertSalesManualDeals",
+        {
+          records: [{
+            monthKey: selectedMonthConfig.monthKey,
+            date: manualActualDate,
+            manager: selectedManager.name,
+            city: "",
+            kind: "actual",
+            deals: cleanDeals,
+            comment: "manual actual sales adjustment",
+          }],
+        },
+        writePassword,
+      );
+      setManualActualState("saved");
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setManualActualState("error");
+      setLoadError(error instanceof Error ? error.message : "Ручная продажа не сохранилась.");
+    }
+  }
+
   return (
     <div className="page-stack sales-department-dashboard">
       <ExecutiveSummary
@@ -1814,7 +1860,8 @@ function SalesDepartmentDashboard({
         title="Отдел продаж"
         subtitle="Дакоро: планы менеджеров, факт из общей динамики, категории продаж из PS и два прогноза по месяцу."
         facts={[
-          `РОП: ${activeRop}`,
+          "Срез: весь отдел продаж",
+          `Команда ниже: ${activeRop}`,
           `Менеджеров: ${managers.length || dakoroManagers.length}`,
           integrationsEnabled
             ? snapshot ? `Рабочих дней: ${snapshot.workingDaysPassed} из ${snapshot.workingDaysInMonth}` : "Рабочие дни: расчет после загрузки"
@@ -1900,73 +1947,73 @@ function SalesDepartmentDashboard({
         </section>
       )}
 
-      {snapshot && totals && (
+      {snapshot && teamTotals && departmentTotals && (
         <>
           <section className="sales-kpi-grid" aria-label="Ключевые показатели отдела продаж">
             <SalesKpiCard
               icon={<TrendingUp />}
               label="Лиды"
-              value={formatNumber(totals.totalTraffic)}
+              value={formatNumber(departmentTotals.totalTraffic)}
               helper="Всего входящего трафика отдела"
-              plan={`План ${formatNumber(totals.planTraffic)}`}
-              progress={percent(totals.totalTraffic, totals.planTraffic)}
+              plan={`План ${formatNumber(departmentTotals.planTraffic)}`}
+              progress={percent(departmentTotals.totalTraffic, departmentTotals.planTraffic)}
             />
             <SalesKpiCard
               icon={<CheckCircle2 />}
               label="Квалы"
-              value={formatNumber(totals.factQualified)}
-              helper={`${formatNullablePercent(totals.conversionToQualified)} из лидов`}
-              plan={`План ${formatNumber(totals.planQualified)}`}
-              progress={percent(totals.factQualified, totals.planQualified)}
+              value={formatNumber(departmentTotals.factQualified)}
+              helper={`${formatNullablePercent(departmentTotals.conversionToQualified)} из лидов`}
+              plan={`План ${formatNumber(departmentTotals.planQualified)}`}
+              progress={percent(departmentTotals.factQualified, departmentTotals.planQualified)}
             />
             <SalesKpiCard
               icon={<Info />}
               label="Еще не квалифицирован"
-              value={formatNumber(totals.notQualifiedLeads ?? 0)}
+              value={formatNumber(departmentTotals.notQualifiedLeads ?? 0)}
               helper="На проверке, звонки, неразобранное, отложенный спрос, в работе и недозвон"
               plan={showNotQualified ? "Список раскрыт" : "Можно раскрыть"}
-              progress={totals.totalTraffic ? ((totals.notQualifiedLeads ?? 0) / totals.totalTraffic) * 100 : 0}
+              progress={departmentTotals.totalTraffic ? ((departmentTotals.notQualifiedLeads ?? 0) / departmentTotals.totalTraffic) * 100 : 0}
               actionLabel={showNotQualified ? "Скрыть" : "Раскрыть"}
               onAction={() => setShowNotQualified((current) => !current)}
             />
             <SalesKpiCard
               icon={<TriangleAlert />}
               label="Отказ / нецелевой"
-              value={formatNumber(totals.refusalLeads ?? 0)}
+              value={formatNumber(departmentTotals.refusalLeads ?? 0)}
               helper="Все остальные этапы, которые не входят в КВАЛ и ранние этапы"
               plan="Не идет в КВАЛ"
-              progress={totals.totalTraffic ? ((totals.refusalLeads ?? 0) / totals.totalTraffic) * 100 : 0}
+              progress={departmentTotals.totalTraffic ? ((departmentTotals.refusalLeads ?? 0) / departmentTotals.totalTraffic) * 100 : 0}
               tone="red"
             />
             <SalesKpiCard
               icon={<Target />}
               label="Договоры"
-              value={formatNumber(totals.planFactDeals ?? totals.factDeals)}
-              helper={`amo ${formatNumber(totals.factDeals)} · реки ${formatNumber(totals.manualRecommendedDeals ?? 0)} · прогноз ${formatNumber(totals.forecastDeals)}`}
-              plan={`План ${formatNumber(totals.planDeals)}`}
-              progress={totals.dealPlanCompletion}
+              value={formatNumber(departmentTotals.planFactDeals ?? departmentTotals.factDeals)}
+              helper={`amo ${formatNumber(departmentTotals.factDeals - (departmentTotals.manualActualDeals ?? 0))} · ручн. ${formatNumber(departmentTotals.manualActualDeals ?? 0)} · реки ${formatNumber(departmentTotals.manualRecommendedDeals ?? 0)}`}
+              plan={`План ${formatNumber(departmentTotals.planDeals)}`}
+              progress={departmentTotals.dealPlanCompletion}
               tone="red"
             />
             <SalesKpiCard
               icon={<CheckCircle2 />}
               label="VIP"
-              value={formatSalesNumber(totals.vipDeals)}
-              helper={totals.vipDeals === null ? "ждем выгрузку PS" : `План VIP ${formatNumber(totals.planVip)}`}
-              plan={`A+B ${formatNumber(totals.abDeals)}`}
-              progress={totals.vipDeals === null ? 0 : percent(totals.vipDeals, totals.planVip)}
+              value={formatSalesNumber(departmentTotals.vipDeals)}
+              helper={departmentTotals.vipDeals === null ? "ждем выгрузку PS" : `План VIP ${formatNumber(departmentTotals.planVip)}`}
+              plan={`A+B ${formatNumber(departmentTotals.abDeals)}`}
+              progress={departmentTotals.vipDeals === null ? 0 : percent(departmentTotals.vipDeals, departmentTotals.planVip)}
             />
             <SalesKpiCard
               icon={<BarChart3 />}
               label="Средний чек"
-              value={formatNullableCurrency(totals.avgCheck)}
-              helper={totals.revenue === null ? "PS пока не загрузилась" : `Выручка PS ${formatNullableCurrency(totals.revenue)}`}
-              plan={`Дистант ${formatSalesNumber(totals.distantDeals)} / ${formatNumber(totals.planDistant)}`}
-              progress={totals.distantDeals === null ? 0 : percent(totals.distantDeals, totals.planDistant)}
+              value={formatNullableCurrency(departmentTotals.avgCheck)}
+              helper={departmentTotals.revenue === null ? "PS пока не загрузилась" : `Выручка PS ${formatNullableCurrency(departmentTotals.revenue)}`}
+              plan={`Дистант ${formatSalesNumber(departmentTotals.distantDeals)} / ${formatNumber(departmentTotals.planDistant)}`}
+              progress={departmentTotals.distantDeals === null ? 0 : percent(departmentTotals.distantDeals, departmentTotals.planDistant)}
             />
           </section>
 
           {showNotQualified && (
-            <SalesNotQualifiedPanel details={totals.notQualifiedDetails ?? []} />
+            <SalesNotQualifiedPanel details={departmentTotals.notQualifiedDetails ?? []} />
           )}
 
           <section className="sales-layout">
@@ -1982,9 +2029,9 @@ function SalesDepartmentDashboard({
                   onClick={() => setSelectedManagerName("team")}
                 >
                   <span>Команда Дакоро</span>
-                  <strong>{formatNumber(totals.factQualified)}</strong>
+                  <strong>{formatNumber(teamTotals.factQualified)}</strong>
                   <i style={{ width: "100%" }} />
-                  <small>{formatNumber(totals.planFactDeals ?? totals.factDeals)} договоров · amo {formatNumber(totals.factDeals)} · реки {formatNumber(totals.manualRecommendedDeals ?? 0)}</small>
+                  <small>{formatNumber(teamTotals.planFactDeals ?? teamTotals.factDeals)} договоров · amo {formatNumber(teamTotals.factDeals - (teamTotals.manualActualDeals ?? 0))} · ручн. {formatNumber(teamTotals.manualActualDeals ?? 0)} · реки {formatNumber(teamTotals.manualRecommendedDeals ?? 0)}</small>
                 </button>
                 <button
                   type="button"
@@ -2021,6 +2068,10 @@ function SalesDepartmentDashboard({
               manualRecommendedState={manualRecommendedState}
               manualCurrentValue={manualCurrentValue}
               manualRecommendedDayOptions={manualRecommendedDayOptions}
+              manualActualDate={manualActualDate}
+              manualActualDraft={manualActualDraft}
+              manualActualState={manualActualState}
+              manualActualCurrentValue={manualActualCurrentValue}
               onManualRecommendedDateChange={(date) => {
                 setManualRecommendedDate(date);
                 setManualRecommendedState("idle");
@@ -2030,6 +2081,15 @@ function SalesDepartmentDashboard({
                 setManualRecommendedState("idle");
               }}
               onSaveManualRecommendedDeals={saveManualRecommendedDeals}
+              onManualActualDateChange={(date) => {
+                setManualActualDate(date);
+                setManualActualState("idle");
+              }}
+              onManualActualDraftChange={(value) => {
+                setManualActualDraft(value);
+                setManualActualState("idle");
+              }}
+              onSaveManualActualDeals={saveManualActualDeals}
             />
           </section>
 
@@ -2230,9 +2290,16 @@ function SalesManagerDetail({
   manualRecommendedState,
   manualCurrentValue,
   manualRecommendedDayOptions,
+  manualActualDate,
+  manualActualDraft,
+  manualActualState,
+  manualActualCurrentValue,
   onManualRecommendedDateChange,
   onManualRecommendedDraftChange,
   onSaveManualRecommendedDeals,
+  onManualActualDateChange,
+  onManualActualDraftChange,
+  onSaveManualActualDeals,
 }: {
   manager: SalesManagerMetrics | null;
   snapshot: SalesDepartmentSnapshot;
@@ -2242,9 +2309,16 @@ function SalesManagerDetail({
   manualRecommendedState: "idle" | "saving" | "saved" | "error";
   manualCurrentValue: number;
   manualRecommendedDayOptions: SalesDepartmentPeriodOption[];
+  manualActualDate: string;
+  manualActualDraft: string;
+  manualActualState: "idle" | "saving" | "saved" | "error";
+  manualActualCurrentValue: number;
   onManualRecommendedDateChange: (date: string) => void;
   onManualRecommendedDraftChange: (value: string) => void;
   onSaveManualRecommendedDeals: () => void;
+  onManualActualDateChange: (date: string) => void;
+  onManualActualDraftChange: (value: string) => void;
+  onSaveManualActualDeals: () => void;
 }) {
   const totals = snapshot.totals;
   const title = manager ? shortManagerName(manager.name) : "Команда Дакоро";
@@ -2252,19 +2326,26 @@ function SalesManagerDetail({
   const qualified = manager?.factQualified ?? totals.factQualified;
   const planQualified = manager?.planQualified ?? totals.planQualified;
   const deals = manager?.factDeals ?? totals.factDeals;
+  const manualActualDeals = manager?.manualActualDeals ?? totals.manualActualDeals ?? 0;
   const manualRecommendedDeals = manager?.manualRecommendedDeals ?? totals.manualRecommendedDeals ?? 0;
   const planFactDeals = manager?.planFactDeals ?? totals.planFactDeals ?? deals;
   const planDeals = manager?.planDeals ?? totals.planDeals;
   const forecastDeals = manager?.forecastDeals ?? totals.forecastDeals;
+  const forecastQualified = manager?.forecastQualified ?? totals.forecastQualified;
   const linearForecastValue = manager?.linearDealsForecast ?? totals.linearDealsForecast;
   const vipDeals = manager?.vipDeals ?? totals.vipDeals;
   const distantDeals = manager?.distantDeals ?? totals.distantDeals;
   const avgCheck = manager?.avgCheck ?? totals.avgCheck;
   const abDeals = manager?.abDeals ?? totals.abDeals;
+  const forecastAbDeals = manager?.forecastAbDeals ?? totals.forecastAbDeals ?? abDeals;
+  const forecastVipDeals = manager?.forecastVipDeals ?? totals.forecastVipDeals ?? vipDeals ?? 0;
+  const forecastDistantDeals = manager?.forecastDistantDeals ?? totals.forecastDistantDeals ?? distantDeals ?? 0;
+  const forecastConversionToDeals = manager?.forecastConversionToDeals ?? totals.forecastConversionToDeals ?? percentValueForUi(forecastDeals, forecastQualified);
   const mskQualified = managersSum(snapshot.managers, (item) => item.mskQualified);
   const spbQualified = managersSum(snapshot.managers, (item) => item.spbQualified);
   const mskDeals = managersSum(snapshot.managers, (item) => item.mskDeals);
   const spbDeals = managersSum(snapshot.managers, (item) => item.spbDeals);
+  const managerSourceRows = manager ? (snapshot.managerSources?.[manager.name] ?? []) : [];
 
   return (
     <article className="sales-panel sales-detail-panel">
@@ -2279,56 +2360,102 @@ function SalesManagerDetail({
       <div className="sales-mini-grid">
         <SalesMiniMetric label="Лиды" value={formatNumber(traffic)} caption={`план ${formatNumber(manager?.planTraffic ?? totals.planTraffic)}`} />
         <SalesMiniMetric label="Квалы" value={formatNumber(qualified)} caption={`план ${formatNumber(planQualified)}`} />
-        <SalesMiniMetric label="Договоры" value={formatNumber(planFactDeals)} caption={`amo ${formatNumber(deals)} · реки ${formatNumber(manualRecommendedDeals)}`} />
+        <SalesMiniMetric label="Договоры" value={formatNumber(planFactDeals)} caption={`amo ${formatNumber(deals - manualActualDeals)} · ручн. ${formatNumber(manualActualDeals)} · реки ${formatNumber(manualRecommendedDeals)}`} />
         <SalesMiniMetric label="VIP" value={formatSalesNumber(vipDeals)} caption={`A+B ${formatNumber(abDeals)}`} />
         <SalesMiniMetric label="Дистант" value={formatSalesNumber(distantDeals)} caption="категория PS" />
         <SalesMiniMetric label="Средний чек" value={formatNullableCurrency(avgCheck)} caption="по PS без персональных данных" />
       </div>
 
       {manager && (
-        <div className="sales-manager-recs">
-          <div>
-            <strong>Добавить реки</strong>
-            <span>Прибавляются к выполнению договоров и прогнозу, но не входят в конверсию.</span>
-          </div>
-          <label>
-            <span>Дата</span>
-            <select
-              value={manualRecommendedDate}
-              onChange={(event) => onManualRecommendedDateChange(event.target.value)}
+        <div className="sales-manual-adjustments">
+          <div className="sales-manager-recs">
+            <div>
+              <strong>Добавить реки</strong>
+              <span>Прибавляются к выполнению договоров и прогнозу, но не входят в конверсию.</span>
+            </div>
+            <label>
+              <span>Дата</span>
+              <select
+                value={manualRecommendedDate}
+                onChange={(event) => onManualRecommendedDateChange(event.target.value)}
+              >
+                {manualRecommendedDayOptions.map((period) => (
+                  <option key={period.key} value={period.startDate}>{period.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Кол-во</span>
+              <input
+                type="number"
+                min="0"
+                value={manualRecommendedDraft}
+                onChange={(event) => onManualRecommendedDraftChange(event.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="primary-button compact"
+              disabled={!writePassword || manualRecommendedState === "saving"}
+              onClick={onSaveManualRecommendedDeals}
             >
-              {manualRecommendedDayOptions.map((period) => (
-                <option key={period.key} value={period.startDate}>{period.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Кол-во</span>
-            <input
-              type="number"
-              min="0"
-              value={manualRecommendedDraft}
-              onChange={(event) => onManualRecommendedDraftChange(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="primary-button compact"
-            disabled={!writePassword || manualRecommendedState === "saving"}
-            onClick={onSaveManualRecommendedDeals}
-          >
-            <Save size={16} />
-            {manualRecommendedState === "saving" ? "Сохраняю" : "Сохранить"}
-          </button>
-          <small className={manualRecommendedState}>
-            {!writePassword
-              ? "Нужен пароль админки"
-              : manualRecommendedState === "saved"
-                ? "Сохранено"
-                : manualRecommendedState === "error"
-                  ? "Не сохранилось"
-                  : `В этот день: ${formatNumber(manualCurrentValue || 0)}`}
-          </small>
+              <Save size={16} />
+              {manualRecommendedState === "saving" ? "Сохраняю" : "Сохранить"}
+            </button>
+            <small className={manualRecommendedState}>
+              {!writePassword
+                ? "Нужен пароль админки"
+                : manualRecommendedState === "saved"
+                  ? "Сохранено"
+                  : manualRecommendedState === "error"
+                    ? "Не сохранилось"
+                    : `В этот день: ${formatNumber(manualCurrentValue || 0)}`}
+            </small>
+          </div>
+
+          <div className="sales-manager-recs actual">
+            <div>
+              <strong>Добавить / убрать продажу</strong>
+              <span>Влияет на договоры, конверсию и прогноз. Можно поставить -1, чтобы убрать продажу.</span>
+            </div>
+            <label>
+              <span>Дата</span>
+              <select
+                value={manualActualDate}
+                onChange={(event) => onManualActualDateChange(event.target.value)}
+              >
+                {manualRecommendedDayOptions.map((period) => (
+                  <option key={period.key} value={period.startDate}>{period.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Кол-во</span>
+              <input
+                type="number"
+                value={manualActualDraft}
+                onChange={(event) => onManualActualDraftChange(event.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="primary-button compact"
+              disabled={!writePassword || manualActualState === "saving"}
+              onClick={onSaveManualActualDeals}
+            >
+              <Save size={16} />
+              {manualActualState === "saving" ? "Сохраняю" : "Сохранить"}
+            </button>
+            <small className={manualActualState}>
+              {!writePassword
+                ? "Нужен пароль админки"
+                : manualActualState === "saved"
+                  ? "Сохранено"
+                  : manualActualState === "error"
+                    ? "Не сохранилось"
+                    : `В этот день: ${formatNumber(manualActualCurrentValue || 0)}`}
+            </small>
+          </div>
         </div>
       )}
 
@@ -2352,9 +2479,18 @@ function SalesManagerDetail({
         </div>
       )}
 
-      <div className="sales-forecast-grid">
-        <SalesForecastBar label="Динамический" value={forecastDeals} plan={planDeals} />
-        <SalesForecastBar label="Линейный" value={linearForecastValue} plan={planDeals} />
+      <div className="sales-forecast-grid extended">
+        <SalesForecastBar label="Договоры динамика" value={forecastDeals} plan={planDeals} />
+        <SalesForecastBar label="Договоры линейно" value={linearForecastValue} plan={planDeals} />
+        <SalesForecastBar label="VIP динамика" value={forecastVipDeals} plan={manager?.planVip ?? totals.planVip} />
+        <SalesForecastBar label="Дистант динамика" value={forecastDistantDeals} plan={manager?.planDistant ?? totals.planDistant} />
+        <SalesForecastBar label="A+B динамика" value={forecastAbDeals} plan={null} />
+        <SalesForecastBar
+          label="КВАЛ → продажа"
+          value={forecastConversionToDeals ?? 0}
+          plan={manager?.planConversion ?? percentValueForUi(totals.planDeals, totals.planQualified)}
+          percentMode
+        />
       </div>
 
       {manager && (
@@ -2374,6 +2510,39 @@ function SalesManagerDetail({
             <strong>{formatNumber(manager.calls)} звонков</strong>
             <small>сайт {formatNumber(manager.siteRequests)} · квизы {formatNumber(manager.quizRequests)}</small>
           </div>
+        </div>
+      )}
+
+      {manager && (
+        <div className="sales-manager-sources">
+          <div className="sales-manager-sources-head">
+            <strong>Источники менеджера</strong>
+            <span>Берется из листа «отчет» таблицы Roistat-источников за выбранный период.</span>
+          </div>
+          {managerSourceRows.length ? (
+            <div className="sales-source-mini-table">
+              <div>
+                <b>Источник</b>
+                <b>Лиды</b>
+                <b>КВАЛ</b>
+                <b>Продажи</b>
+                <b>Выручка</b>
+              </div>
+              {managerSourceRows.slice(0, 12).map((row) => (
+                <div key={row.source}>
+                  <span>{row.source}</span>
+                  <span>{formatNumber(row.leads)}</span>
+                  <span>{formatNumber(row.qualified)}</span>
+                  <span>{formatNumber(row.sales)}</span>
+                  <span>{formatNullableCurrency(row.revenue)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <small className="sales-source-empty">
+              Источники пока не загрузились. В таблице Roistat-источников выставь период и обнови лист «отчет».
+            </small>
+          )}
         </div>
       )}
     </article>
@@ -2406,22 +2575,25 @@ function SalesForecastBar({
   label,
   value,
   plan,
+  percentMode = false,
 }: {
   label: string;
   value: number;
-  plan: number;
+  plan: number | null | undefined;
+  percentMode?: boolean;
 }) {
-  const completion = percentValueForUi(value, plan) ?? 0;
+  const hasPlan = typeof plan === "number" && plan > 0;
+  const completion = hasPlan ? percentValueForUi(value, plan) ?? 0 : null;
   return (
     <div className="sales-forecast-bar">
       <div>
         <span>{label}</span>
-        <strong>{formatNumber(value)}</strong>
+        <strong>{percentMode ? formatNullablePercent(value) : formatNumber(value)}</strong>
       </div>
       <i>
-        <b style={{ width: `${clampPercent(completion)}%` }} />
+        <b style={{ width: `${clampPercent(completion ?? 100)}%` }} />
       </i>
-      <small>{formatNullablePercent(completion)} от плана</small>
+      <small>{hasPlan ? `${formatNullablePercent(completion)} от плана` : "план не задан"}</small>
     </div>
   );
 }
@@ -2458,6 +2630,13 @@ function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
   const linePath = (series: (typeof salesDailySeries)[number]) => days
     .map((day, index) => `${index === 0 ? "M" : "L"} ${xForIndex(index).toFixed(1)} ${yForValue(series.value(day)).toFixed(1)}`)
     .join(" ");
+  const hitWidth = days.length <= 1 ? plotWidth : plotWidth / Math.max(1, days.length - 1);
+  const dayTooltip = (day: SalesDayPoint) => [
+    `${day.label}, ${day.weekday}`,
+    `Лиды: ${formatNumber(day.totalTraffic)}`,
+    `КВАЛ: ${formatNumber(day.totalQualified || 0)}`,
+    `Продажи: ${formatNumber(day.totalDeals)}`,
+  ].join("\n");
 
   if (!days.length) {
     return (
@@ -2519,11 +2698,34 @@ function SalesDailyChart({ days }: { days: SalesDayPoint[] }) {
               cx={xForIndex(index)}
               cy={yForValue(series.value(day))}
               r="4"
-            >
-              <title>{`${series.label}: ${formatNumber(series.value(day))} · ${day.label}, ${day.weekday}`}</title>
-            </circle>
+            />
           )))}
         </svg>
+        <div
+          className="sales-daily-hit-layer"
+          style={{ width: `${chartWidth}px`, height: `${chartHeight}px` }}
+          aria-hidden="true"
+        >
+          {days.map((day, index) => {
+            const x = xForIndex(index);
+            const left = Math.max(padding.left, x - hitWidth / 2);
+            const rightLimit = chartWidth - padding.right;
+            const width = Math.max(24, Math.min(hitWidth, rightLimit - left));
+            return (
+              <span
+                key={day.key}
+                className={`sales-daily-hit ${tooltipEdgeClass(index, days.length)}`}
+                style={{
+                  left: `${left}px`,
+                  top: `${padding.top}px`,
+                  width: `${width}px`,
+                  height: `${plotHeight}px`,
+                }}
+                data-tooltip={dayTooltip(day)}
+              />
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ const CONFIG = {
   mainSpreadsheetId: '1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s',
   roistatDirectSpreadsheetId: '1A5xnKf5bdaiJzLT35xIFmEnSpvPSrS3nZ5eeVFIizdc',
   roistatDirectMonthlySheet: 'помесячно',
+  salesManagerSourcesSpreadsheetId: '1uoF2iipy3128Wuy8MTjZvrivGw2Em7zAxpxZDr_M3Ns',
   receivablesSpreadsheetId: '1ptVO-e34DEMKxwriTFFg1hzZLjFhwuWvBqq8Gn5WemI',
   receivablesPsSheet: 'Выгрузка PS',
   yandexMetrikaCounterIdProperty: 'YANDEX_METRIKA_COUNTER_ID',
@@ -356,6 +357,7 @@ const HEADERS = {
     'deals',
     'comment',
     'updatedAt',
+    'kind',
   ],
 };
 
@@ -769,8 +771,13 @@ function getSalesDepartmentDashboard_(payload) {
     managers: authoritativeManagerNames,
     restrictManagers: true,
   }), warnings);
+  const departmentAmo = salesReadAmoDepartmentData_(Object.assign({}, config, {
+    managers: authoritativeManagerNames,
+    restrictManagers: false,
+  }), []);
   const manualDeals = salesReadManualDeals_(config, warnings);
   const manualDealsByManager = manualDeals.byManager;
+  const manualActualDealsByManager = manualDeals.actualByManager;
   const managerNames = authoritativeManagerNames;
   const workingDaysInMonth = salesCountWorkingDaysInMonth_(config.monthYear, config.monthIndex);
   const latestActualDate = salesLatestActualDate_(amo.daily) || salesCurrentMonthDateKey_(config);
@@ -785,13 +792,17 @@ function getSalesDepartmentDashboard_(payload) {
   const managers = managerNames.map((name) => {
     const plan = salesScalePlanForPeriod_(salesGetManagerValue_(planByManager, name) || salesEmptyPlan_(), config);
     const fact = salesGetManagerValue_(amo.byManager, name) || salesEmptyAmoManagerStats_(name);
-    const factDeals = fact.factDeals;
+    const manualActualDeals = manualActualDealsByManager[name] || 0;
+    const factDeals = fact.factDeals + manualActualDeals;
     const manualRecommendedDeals = manualDealsByManager[name] || 0;
     const planFactDeals = factDeals + manualRecommendedDeals;
     const factQualified = fact.factQualified;
     const totalTraffic = fact.totalTraffic;
     const forecastDeals = salesCoefficientForecast_(planFactDeals, config, latestActualDate, 'Продажи');
     const forecastQualified = salesCoefficientForecast_(factQualified, config, latestActualDate, 'Квалы');
+    const forecastAbDeals = salesCoefficientForecast_(fact.abDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
+    const forecastVipDeals = salesCoefficientForecast_(fact.vipDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
+    const forecastDistantDeals = salesCoefficientForecast_(fact.distantDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
     const revenue = fact.revenue;
     const orderCount = fact.orderCount;
 
@@ -811,9 +822,14 @@ function getSalesDepartmentDashboard_(payload) {
       quizRequests: 0,
       applications: fact.applications,
       factDeals: factDeals,
+      manualActualDeals: manualActualDeals,
       manualRecommendedDeals: manualRecommendedDeals,
       planFactDeals: planFactDeals,
       forecastDeals: forecastDeals,
+      forecastAbDeals: forecastAbDeals,
+      forecastVipDeals: forecastVipDeals,
+      forecastDistantDeals: forecastDistantDeals,
+      forecastConversionToDeals: salesPercent_(forecastDeals, forecastQualified),
       lagDeals: Math.max(0, plan.planDeals - planFactDeals),
       abDeals: fact.abDeals,
       sheetFactCompletion: salesPercent_(planFactDeals, plan.planDeals),
@@ -849,6 +865,20 @@ function getSalesDepartmentDashboard_(payload) {
   totals.notQualifiedLeads = salesSum_(managers, (manager) => manager.notQualifiedLeads || 0);
   totals.notQualifiedDetails = managers.reduce((items, manager) => items.concat(manager.notQualifiedDetails || []), []);
 
+  const departmentManagers = salesBuildDepartmentManagers_(
+    departmentAmo.byManager,
+    planByManager,
+    manualDeals,
+    config,
+    latestActualDate,
+    workingDaysPassed,
+    workingDaysInMonth,
+  );
+  const departmentTotals = salesBuildTotals_(departmentManagers);
+  departmentTotals.refusalLeads = salesSum_(departmentManagers, (manager) => manager.refusalLeads || 0);
+  departmentTotals.notQualifiedLeads = salesSum_(departmentManagers, (manager) => manager.notQualifiedLeads || 0);
+  departmentTotals.notQualifiedDetails = departmentManagers.reduce((items, manager) => items.concat(manager.notQualifiedDetails || []), []);
+
   return {
     rop: config.rop,
     monthKey: config.monthKey,
@@ -863,16 +893,93 @@ function getSalesDepartmentDashboard_(payload) {
     workingDaysInMonth: workingDaysInMonth,
     activeCalendarDays: activeCalendarDays,
     managers: managers,
-    daily: salesApplyManualDealsToDaily_(amo.daily, manualDeals.byDate),
+    daily: salesApplyManualDealsToDaily_(departmentAmo.daily, manualDeals.byDate, manualDeals.actualByDate),
     manualRecommendedByDate: manualDeals.byDate,
     manualRecommendedByDateByManager: manualDeals.byManagerDate,
+    manualActualByDate: manualDeals.actualByDate,
+    manualActualByDateByManager: manualDeals.actualByManagerDate,
     totals: totals,
+    departmentTotals: departmentTotals,
+    managerSources: salesReadManagerSources_(config, warnings),
     warnings: warnings,
     sourceLinks: {
       dynamics: getAmoCrmStatus_().apiDomain,
       plans: 'https://docs.google.com/spreadsheets/d/' + config.planSpreadsheetId + '/edit',
     },
   };
+}
+
+function salesBuildDepartmentManagers_(amoByManager, planByManager, manualDeals, config, latestActualDate, workingDaysPassed, workingDaysInMonth) {
+  const names = salesUniqueManagers_(
+    Object.keys(amoByManager || {}).concat(Object.keys(planByManager || {})).concat(Object.keys((manualDeals && manualDeals.actualByManager) || {})),
+  );
+  return names.map((name) => {
+    const plan = salesScalePlanForPeriod_(salesGetManagerValue_(planByManager, name) || salesEmptyPlan_(), config);
+    const fact = salesGetManagerValue_(amoByManager, name) || salesEmptyAmoManagerStats_(name);
+    const manualActualDeals = (manualDeals && manualDeals.actualByManager && manualDeals.actualByManager[name]) || 0;
+    const manualRecommendedDeals = (manualDeals && manualDeals.byManager && manualDeals.byManager[name]) || 0;
+    const factDeals = fact.factDeals + manualActualDeals;
+    const planFactDeals = factDeals + manualRecommendedDeals;
+    const factQualified = fact.factQualified;
+    const totalTraffic = fact.totalTraffic;
+    const forecastDeals = salesCoefficientForecast_(planFactDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё');
+    const forecastQualified = salesCoefficientForecast_(factQualified, config, latestActualDate, 'РљРІР°Р»С‹');
+    const revenue = fact.revenue;
+    const orderCount = fact.orderCount;
+
+    return {
+      name: name,
+      displayName: name,
+      planTraffic: plan.planTraffic,
+      planQualified: plan.planQualified,
+      planDeals: plan.planDeals,
+      planVip: plan.planVip,
+      planDistant: plan.planDistant,
+      totalTraffic: totalTraffic,
+      factQualified: factQualified,
+      forecastQualified: forecastQualified,
+      siteRequests: fact.applications,
+      calls: fact.calls,
+      quizRequests: 0,
+      applications: fact.applications,
+      factDeals: factDeals,
+      manualActualDeals: manualActualDeals,
+      manualRecommendedDeals: manualRecommendedDeals,
+      planFactDeals: planFactDeals,
+      forecastDeals: forecastDeals,
+      forecastAbDeals: salesCoefficientForecast_(fact.abDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё'),
+      forecastVipDeals: salesCoefficientForecast_(fact.vipDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё'),
+      forecastDistantDeals: salesCoefficientForecast_(fact.distantDeals, config, latestActualDate, 'РџСЂРѕРґР°Р¶Рё'),
+      forecastConversionToDeals: salesPercent_(forecastDeals, forecastQualified),
+      lagDeals: Math.max(0, plan.planDeals - planFactDeals),
+      abDeals: fact.abDeals,
+      sheetFactCompletion: salesPercent_(planFactDeals, plan.planDeals),
+      sheetForecastCompletion: salesPercent_(forecastDeals, plan.planDeals),
+      planConversion: salesPercent_(plan.planDeals, plan.planQualified),
+      factConversion: salesPercent_(factDeals, factQualified),
+      totalConversion: salesPercent_(factDeals, totalTraffic),
+      applicationsToDeals: salesPercent_(factDeals, fact.applications),
+      mskTraffic: fact.mskTraffic,
+      spbTraffic: fact.spbTraffic,
+      mskQualified: fact.mskQualified,
+      spbQualified: fact.spbQualified,
+      mskDeals: fact.mskDeals,
+      spbDeals: fact.spbDeals,
+      mskConversion: salesPercent_(fact.mskDeals, fact.mskQualified),
+      spbConversion: salesPercent_(fact.spbDeals, fact.spbQualified),
+      vipDeals: fact.vipDeals,
+      distantDeals: fact.distantDeals,
+      paidDeals: fact.paidDeals,
+      orderCount: orderCount,
+      avgCheck: revenue !== null && orderCount ? revenue / orderCount : null,
+      revenue: revenue,
+      linearDealsForecast: salesLinearForecast_(planFactDeals, workingDaysPassed, workingDaysInMonth),
+      linearQualifiedForecast: salesLinearForecast_(factQualified, workingDaysPassed, workingDaysInMonth),
+      refusalLeads: fact.refusalLeads,
+      notQualifiedLeads: fact.notQualifiedLeads,
+      notQualifiedDetails: fact.notQualifiedDetails,
+    };
+  });
 }
 
 function salesDepartmentConfigForRequest_(payload) {
@@ -2149,11 +2256,14 @@ function salesBuildTotals_(managers) {
   const orderCount = salesSumNullable_(managers, (manager) => manager.orderCount);
   const revenue = salesSumNullable_(managers, (manager) => manager.revenue);
   const factDeals = salesSum_(managers, (manager) => manager.factDeals);
+  const manualActualDeals = salesSum_(managers, (manager) => manager.manualActualDeals || 0);
   const manualRecommendedDeals = salesSum_(managers, (manager) => manager.manualRecommendedDeals || 0);
   const planFactDeals = salesSum_(managers, (manager) => manager.planFactDeals || manager.factDeals);
   const totalTraffic = salesSum_(managers, (manager) => manager.totalTraffic);
   const factQualified = salesSum_(managers, (manager) => manager.factQualified);
   const planDeals = salesSum_(managers, (manager) => manager.planDeals);
+  const forecastDeals = salesSum_(managers, (manager) => manager.forecastDeals);
+  const forecastQualified = salesSum_(managers, (manager) => manager.forecastQualified);
 
   return {
     planTraffic: salesSum_(managers, (manager) => manager.planTraffic),
@@ -2163,11 +2273,16 @@ function salesBuildTotals_(managers) {
     planDistant: salesSum_(managers, (manager) => manager.planDistant),
     totalTraffic: totalTraffic,
     factQualified: factQualified,
-    forecastQualified: salesSum_(managers, (manager) => manager.forecastQualified),
+    forecastQualified: forecastQualified,
     factDeals: factDeals,
+    manualActualDeals: manualActualDeals,
     manualRecommendedDeals: manualRecommendedDeals,
     planFactDeals: planFactDeals,
-    forecastDeals: salesSum_(managers, (manager) => manager.forecastDeals),
+    forecastDeals: forecastDeals,
+    forecastAbDeals: salesSum_(managers, (manager) => manager.forecastAbDeals || 0),
+    forecastVipDeals: salesSum_(managers, (manager) => manager.forecastVipDeals || 0),
+    forecastDistantDeals: salesSum_(managers, (manager) => manager.forecastDistantDeals || 0),
+    forecastConversionToDeals: salesPercent_(forecastDeals, forecastQualified),
     abDeals: salesSum_(managers, (manager) => manager.abDeals),
     vipDeals: vipDeals,
     distantDeals: distantDeals,
@@ -2183,7 +2298,14 @@ function salesBuildTotals_(managers) {
 }
 
 function salesReadManualDeals_(config, warnings) {
-  const result = { byManager: {}, byDate: {}, byManagerDate: {} };
+  const result = {
+    byManager: {},
+    byDate: {},
+    byManagerDate: {},
+    actualByManager: {},
+    actualByDate: {},
+    actualByManagerDate: {},
+  };
   try {
     readObjects_(CONFIG.sheets.salesManualDeals)
       .filter((row) => config.periodMode === 'all' || normalizeMonthKey_(row.monthKey) === config.monthKey)
@@ -2193,11 +2315,16 @@ function salesReadManualDeals_(config, warnings) {
         const dateKey = salesNormalizeDateKey_(row.date || '');
         if (dateKey && !salesDateInReportPeriod_(dateKey, config)) return;
         const deals = salesNumber_(row.deals);
-        result.byManager[manager] = (result.byManager[manager] || 0) + deals;
-        if (dateKey) result.byDate[dateKey] = (result.byDate[dateKey] || 0) + deals;
+        const kind = String(row.kind || row.type || '').trim().toLowerCase();
+        const isActual = kind === 'actual' || kind === 'fact' || kind === 'sale' || kind === 'sales';
+        const managerMap = isActual ? result.actualByManager : result.byManager;
+        const dateMap = isActual ? result.actualByDate : result.byDate;
+        const managerDateMap = isActual ? result.actualByManagerDate : result.byManagerDate;
+        managerMap[manager] = (managerMap[manager] || 0) + deals;
+        if (dateKey) dateMap[dateKey] = (dateMap[dateKey] || 0) + deals;
         if (dateKey) {
           const managerDateKey = manager + '|' + dateKey;
-          result.byManagerDate[managerDateKey] = (result.byManagerDate[managerDateKey] || 0) + deals;
+          managerDateMap[managerDateKey] = (managerDateMap[managerDateKey] || 0) + deals;
         }
       });
   } catch (error) {
@@ -2210,13 +2337,88 @@ function salesReadManualDealsByManager_(config, warnings) {
   return salesReadManualDeals_(config, warnings).byManager;
 }
 
-function salesApplyManualDealsToDaily_(daily, manualByDate) {
+function salesReadManagerSources_(config, warnings) {
+  const result = {};
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.salesManagerSourcesSpreadsheetId);
+    const settingsSheet = ss.getSheetByName('RS_Настройки') || ss.getSheetByName('RS_\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438');
+    if (settingsSheet && config.periodStart && config.periodEnd) {
+      settingsSheet.getRange('B11').setValue(config.periodStart);
+      settingsSheet.getRange('B12').setValue(config.periodEnd);
+      SpreadsheetApp.flush();
+    }
+
+    const reportSheet = ss.getSheetByName('\u043e\u0442\u0447\u0435\u0442') || ss.getSheetByName('report');
+    if (!reportSheet || reportSheet.getLastRow() < 2) return result;
+    const values = reportSheet.getDataRange().getDisplayValues();
+    const headerIndex = values.findIndex((row) => row.some((cell) => salesSourceHeaderKind_(cell)));
+    if (headerIndex < 0) return result;
+    const headers = values[headerIndex].map((cell) => salesSourceHeaderKind_(cell));
+    const managerIndex = headers.indexOf('manager');
+    const sourceIndex = headers.indexOf('source');
+    if (managerIndex < 0 || sourceIndex < 0) return result;
+    const leadsIndex = headers.indexOf('leads');
+    const qualifiedIndex = headers.indexOf('qualified');
+    const salesIndex = headers.indexOf('sales');
+    const revenueIndex = headers.indexOf('revenue');
+
+    values.slice(headerIndex + 1).forEach((row) => {
+      const rawManager = salesNormalizeManagerName_(row[managerIndex] || '');
+      const manager = salesCanonicalManagerName_(rawManager, config.managers || []) || rawManager;
+      const source = String(row[sourceIndex] || '').trim();
+      if (!manager || !source) return;
+      const items = result[manager] || [];
+      const current = items.find((item) => salesNormalizeText_(item.source) === salesNormalizeText_(source));
+      const target = current || {
+        source: source,
+        leads: 0,
+        qualified: 0,
+        sales: 0,
+        revenue: 0,
+      };
+      if (leadsIndex >= 0) target.leads += salesNumber_(row[leadsIndex]);
+      if (qualifiedIndex >= 0) target.qualified += salesNumber_(row[qualifiedIndex]);
+      if (salesIndex >= 0) target.sales += salesNumber_(row[salesIndex]);
+      if (revenueIndex >= 0) target.revenue += salesNumber_(row[revenueIndex]);
+      if (!current) items.push(target);
+      result[manager] = items;
+    });
+
+    Object.keys(result).forEach((manager) => {
+      result[manager] = result[manager]
+        .filter((item) => item.leads || item.qualified || item.sales || item.revenue)
+        .sort((a, b) => (b.qualified + b.sales * 3 + b.leads * 0.1) - (a.qualified + a.sales * 3 + a.leads * 0.1));
+    });
+  } catch (error) {
+    if (warnings) warnings.push('Источники менеджеров не загрузились: ' + salesErrorMessage_(error));
+  }
+  return result;
+}
+
+function salesSourceHeaderKind_(value) {
+  const text = salesNormalizeText_(value);
+  if (!text) return '';
+  if (text.indexOf('\u043c\u0435\u043d\u0435\u0434\u0436') >= 0 || text.indexOf('manager') >= 0) return 'manager';
+  if (text.indexOf('\u0438\u0441\u0442\u043e\u0447') >= 0 || text.indexOf('source') >= 0) return 'source';
+  if (text.indexOf('\u043b\u0438\u0434') >= 0 || text.indexOf('\u0437\u0430\u044f\u0432') >= 0 || text === 'leads') return 'leads';
+  if (text.indexOf('\u043a\u0432\u0430\u043b') >= 0 || text.indexOf('ql') >= 0 || text.indexOf('qualified') >= 0) return 'qualified';
+  if (text.indexOf('\u043f\u0440\u043e\u0434\u0430\u0436') >= 0 || text.indexOf('sales') >= 0) return 'sales';
+  if (text.indexOf('\u0432\u044b\u0440\u0443\u0447') >= 0 || text.indexOf('revenue') >= 0) return 'revenue';
+  return '';
+}
+
+function salesApplyManualDealsToDaily_(daily, manualByDate, manualActualByDate) {
   const map = manualByDate || {};
+  const actualMap = manualActualByDate || {};
   return (daily || []).map((day) => {
     const manualRecommendedDeals = salesNumber_(map[day.key]);
+    const manualActualDeals = salesNumber_(actualMap[day.key]);
+    const totalDeals = salesNumber_(day.totalDeals) + manualActualDeals;
     return Object.assign({}, day, {
+      totalDeals: totalDeals,
+      manualActualDeals: manualActualDeals,
       manualRecommendedDeals: manualRecommendedDeals,
-      planFactDeals: salesNumber_(day.totalDeals) + manualRecommendedDeals,
+      planFactDeals: totalDeals + manualRecommendedDeals,
     });
   });
 }
@@ -2228,13 +2430,21 @@ function upsertSalesManualDeals_(payload) {
     const manager = salesNormalizeManagerName_(record.manager || '');
     const city = String(record.city || '').trim();
     const date = salesNormalizeDateKey_(record.date || payload.date || new Date());
+    const rawKind = String(record.kind || record.type || '').trim().toLowerCase();
+    const kind = rawKind === 'actual' || rawKind === 'fact' || rawKind === 'sale' || rawKind === 'sales'
+      ? 'actual'
+      : 'recommended';
+    const deals = kind === 'actual'
+      ? Math.round(salesNumber_(record.deals))
+      : Math.max(0, Math.round(salesNumber_(record.deals)));
     return {
-      id: record.id || [monthKey, date || 'month', manager || 'team', city || 'all'].join('|'),
+      id: record.id || [monthKey, date || 'month', manager || 'team', city || 'all', kind].join('|'),
       monthKey: monthKey,
       date: date || stringifyDate_(new Date()),
       manager: manager,
       city: city,
-      deals: Math.max(0, salesNumber_(record.deals)),
+      kind: kind,
+      deals: deals,
       comment: record.comment || '',
       updatedAt: new Date(),
     };

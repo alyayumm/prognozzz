@@ -42,6 +42,7 @@ export type SalesDayPoint = {
   totalDeals: number;
   mskDeals: number;
   spbDeals: number;
+  manualActualDeals?: number;
   manualRecommendedDeals?: number;
   planFactDeals?: number;
 };
@@ -68,6 +69,14 @@ export type SalesNotQualifiedDetail = {
   url?: string;
 };
 
+export type SalesManagerSourceBreakdown = {
+  source: string;
+  leads: number;
+  qualified: number;
+  sales: number;
+  revenue: number;
+};
+
 export type SalesManagerMetrics = {
   name: string;
   displayName: string;
@@ -84,9 +93,14 @@ export type SalesManagerMetrics = {
   quizRequests: number;
   applications: number;
   factDeals: number;
+  manualActualDeals?: number;
   manualRecommendedDeals?: number;
   planFactDeals?: number;
   forecastDeals: number;
+  forecastAbDeals?: number;
+  forecastVipDeals?: number;
+  forecastDistantDeals?: number;
+  forecastConversionToDeals?: number | null;
   lagDeals: number;
   abDeals: number;
   sheetFactCompletion: number | null;
@@ -126,9 +140,14 @@ export type SalesDepartmentTotals = {
   factQualified: number;
   forecastQualified: number;
   factDeals: number;
+  manualActualDeals?: number;
   manualRecommendedDeals?: number;
   planFactDeals?: number;
   forecastDeals: number;
+  forecastAbDeals?: number;
+  forecastVipDeals?: number;
+  forecastDistantDeals?: number;
+  forecastConversionToDeals?: number | null;
   abDeals: number;
   vipDeals: number | null;
   distantDeals: number | null;
@@ -160,8 +179,12 @@ export type SalesDepartmentSnapshot = {
   activeCalendarDays: number;
   managers: SalesManagerMetrics[];
   daily: SalesDayPoint[];
+  departmentTotals?: SalesDepartmentTotals;
   manualRecommendedByDate?: Record<string, number>;
   manualRecommendedByDateByManager?: Record<string, number>;
+  manualActualByDate?: Record<string, number>;
+  manualActualByDateByManager?: Record<string, number>;
+  managerSources?: Record<string, SalesManagerSourceBreakdown[]>;
   totals: SalesDepartmentTotals;
   warnings: string[];
   sourceLinks: {
@@ -539,33 +562,74 @@ function normalizeSalesDepartmentSnapshot(snapshot: SalesDepartmentSnapshot | nu
     ...snapshot,
     managers: managers.map((manager) => ({
       ...manager,
+      manualActualDeals: Number(manager.manualActualDeals ?? 0),
       manualRecommendedDeals: Number(manager.manualRecommendedDeals ?? 0),
       planFactDeals: Number(manager.planFactDeals ?? manager.factDeals ?? 0),
+      forecastAbDeals: Number(manager.forecastAbDeals ?? manager.abDeals ?? 0),
+      forecastVipDeals: Number(manager.forecastVipDeals ?? manager.vipDeals ?? 0),
+      forecastDistantDeals: Number(manager.forecastDistantDeals ?? manager.distantDeals ?? 0),
+      forecastConversionToDeals: manager.forecastConversionToDeals ?? percentValue(Number(manager.forecastDeals ?? 0), Number(manager.forecastQualified ?? 0)),
       refusalLeads: Number(manager.refusalLeads ?? 0),
       notQualifiedLeads: Number(manager.notQualifiedLeads ?? 0),
       notQualifiedDetails: Array.isArray(manager.notQualifiedDetails) ? manager.notQualifiedDetails : [],
     })),
     daily: daily.map((day) => ({
       ...day,
+      manualActualDeals: Number(day.manualActualDeals ?? 0),
       manualRecommendedDeals: Number(day.manualRecommendedDeals ?? 0),
       planFactDeals: Number(day.planFactDeals ?? day.totalDeals ?? 0),
     })),
     manualRecommendedByDate: normalizeNumberRecord(snapshot.manualRecommendedByDate),
     manualRecommendedByDateByManager: normalizeNumberRecord(snapshot.manualRecommendedByDateByManager),
-    totals: {
-      ...totals,
-      totalTraffic: Number(totals.totalTraffic ?? 0),
-      factQualified: Number(totals.factQualified ?? 0),
-      factDeals: Number(totals.factDeals ?? 0),
-      manualRecommendedDeals: Number(totals.manualRecommendedDeals ?? 0),
-      planFactDeals: Number(totals.planFactDeals ?? totals.factDeals ?? 0),
-      refusalLeads: Number(totals.refusalLeads ?? 0),
-      notQualifiedLeads: Number(totals.notQualifiedLeads ?? 0),
-      notQualifiedDetails: Array.isArray(totals.notQualifiedDetails) ? totals.notQualifiedDetails : [],
-    },
+    manualActualByDate: normalizeNumberRecord(snapshot.manualActualByDate),
+    manualActualByDateByManager: normalizeNumberRecord(snapshot.manualActualByDateByManager),
+    managerSources: normalizeSalesManagerSources(snapshot.managerSources),
+    departmentTotals: snapshot.departmentTotals
+      ? normalizeSalesDepartmentTotals(snapshot.departmentTotals)
+      : undefined,
+    totals: normalizeSalesDepartmentTotals(totals),
     warnings: Array.isArray(snapshot.warnings) ? snapshot.warnings : [],
     sourceLinks: snapshot.sourceLinks ?? { dynamics: "", plans: "" },
   };
+}
+
+function normalizeSalesDepartmentTotals(totals: SalesDepartmentTotals): SalesDepartmentTotals {
+  return {
+    ...totals,
+    totalTraffic: Number(totals.totalTraffic ?? 0),
+    factQualified: Number(totals.factQualified ?? 0),
+    forecastQualified: Number(totals.forecastQualified ?? 0),
+    factDeals: Number(totals.factDeals ?? 0),
+    manualActualDeals: Number(totals.manualActualDeals ?? 0),
+    manualRecommendedDeals: Number(totals.manualRecommendedDeals ?? 0),
+    planFactDeals: Number(totals.planFactDeals ?? totals.factDeals ?? 0),
+    forecastDeals: Number(totals.forecastDeals ?? 0),
+    forecastAbDeals: Number(totals.forecastAbDeals ?? totals.abDeals ?? 0),
+    forecastVipDeals: Number(totals.forecastVipDeals ?? totals.vipDeals ?? 0),
+    forecastDistantDeals: Number(totals.forecastDistantDeals ?? totals.distantDeals ?? 0),
+    forecastConversionToDeals: totals.forecastConversionToDeals ?? percentValue(Number(totals.forecastDeals ?? 0), Number(totals.forecastQualified ?? 0)),
+    refusalLeads: Number(totals.refusalLeads ?? 0),
+    notQualifiedLeads: Number(totals.notQualifiedLeads ?? 0),
+    notQualifiedDetails: Array.isArray(totals.notQualifiedDetails) ? totals.notQualifiedDetails : [],
+  };
+}
+
+function normalizeSalesManagerSources(record: Record<string, SalesManagerSourceBreakdown[]> | undefined): Record<string, SalesManagerSourceBreakdown[]> {
+  if (!record || typeof record !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(record).map(([manager, rows]) => [
+      manager,
+      Array.isArray(rows)
+        ? rows.map((row) => ({
+          source: String(row.source || "Источник"),
+          leads: Number(row.leads ?? 0),
+          qualified: Number(row.qualified ?? 0),
+          sales: Number(row.sales ?? 0),
+          revenue: Number(row.revenue ?? 0),
+        }))
+        : [],
+    ]),
+  );
 }
 
 function normalizeNumberRecord(record: Record<string, number> | undefined): Record<string, number> {
@@ -981,11 +1045,14 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
   const orderCount = sumNullable(managers, (manager) => manager.orderCount);
   const revenue = sumNullable(managers, (manager) => manager.revenue);
   const factDeals = sum(managers, (manager) => manager.factDeals);
+  const manualActualDeals = sum(managers, (manager) => manager.manualActualDeals ?? 0);
   const manualRecommendedDeals = sum(managers, (manager) => manager.manualRecommendedDeals ?? 0);
   const planFactDeals = sum(managers, (manager) => manager.planFactDeals ?? manager.factDeals);
   const totalTraffic = sum(managers, (manager) => manager.totalTraffic);
   const factQualified = sum(managers, (manager) => manager.factQualified);
   const planDeals = sum(managers, (manager) => manager.planDeals);
+  const forecastDeals = sum(managers, (manager) => manager.forecastDeals);
+  const forecastQualified = sum(managers, (manager) => manager.forecastQualified);
 
   return {
     planTraffic: sum(managers, (manager) => manager.planTraffic),
@@ -995,11 +1062,16 @@ function buildTotals(managers: SalesManagerMetrics[]): SalesDepartmentTotals {
     planDistant: sum(managers, (manager) => manager.planDistant),
     totalTraffic,
     factQualified,
-    forecastQualified: sum(managers, (manager) => manager.forecastQualified),
+    forecastQualified,
     factDeals,
+    manualActualDeals,
     manualRecommendedDeals,
     planFactDeals,
-    forecastDeals: sum(managers, (manager) => manager.forecastDeals),
+    forecastDeals,
+    forecastAbDeals: sum(managers, (manager) => manager.forecastAbDeals ?? 0),
+    forecastVipDeals: sum(managers, (manager) => manager.forecastVipDeals ?? 0),
+    forecastDistantDeals: sum(managers, (manager) => manager.forecastDistantDeals ?? 0),
+    forecastConversionToDeals: percentValue(forecastDeals, forecastQualified),
     abDeals: sum(managers, (manager) => manager.abDeals),
     vipDeals,
     distantDeals,
