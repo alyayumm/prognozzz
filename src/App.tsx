@@ -1668,6 +1668,10 @@ function SalesDepartmentDashboard({
     () => buildSalesDepartmentPeriodOptions(selectedMonthConfig, salesPeriodMode),
     [selectedMonthConfig, salesPeriodMode],
   );
+  const manualRecommendedDayOptions = useMemo(
+    () => buildSalesDepartmentPeriodOptions(selectedMonthConfig, "day"),
+    [selectedMonthConfig],
+  );
   const activeSalesPeriod = useMemo(() => {
     const fallback = salesPeriodOptions[0] ?? buildSalesDepartmentPeriodOptions(selectedMonthConfig, "month")[0];
     return salesPeriodOptions.find((period) => period.key === selectedSalesPeriodKey) ?? fallback;
@@ -1866,65 +1870,6 @@ function SalesDepartmentDashboard({
         <strong>{activeSalesPeriod.label}</strong>
       </section>
 
-      {snapshot && totals && (
-        <section className="sales-manual-recs">
-          <div>
-            <strong>Реки вручную</strong>
-            <span>
-              {selectedManager ? shortManagerName(selectedManager.name) : "Команда Дакоро"}:
-              {" "}прибавляются к выполнению договоров и прогнозу, но не входят в конверсию.
-            </span>
-            {!selectedManager && (
-              <small>Чтобы изменить число, выбери менеджера слева. По команде показана сумма.</small>
-            )}
-          </div>
-          <label>
-            <span>Дата</span>
-            <select
-              value={manualRecommendedDate}
-              onChange={(event) => {
-                setManualRecommendedDate(event.target.value);
-                setManualRecommendedState("idle");
-              }}
-            >
-              {buildSalesDepartmentPeriodOptions(selectedMonthConfig, "day").map((period) => (
-                <option key={period.key} value={period.startDate}>{period.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Кол-во</span>
-            <input
-              type="number"
-              min="0"
-              value={manualRecommendedDraft}
-              onChange={(event) => {
-                setManualRecommendedDraft(event.target.value);
-                setManualRecommendedState("idle");
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="primary-button compact"
-            disabled={!writePassword || !selectedManager || manualRecommendedState === "saving"}
-            onClick={saveManualRecommendedDeals}
-          >
-            <Save size={16} />
-            {manualRecommendedState === "saving" ? "Сохраняю" : "Сохранить"}
-          </button>
-          <small className={manualRecommendedState}>
-            {!writePassword
-              ? "Нужен пароль админки"
-              : manualRecommendedState === "saved"
-                ? "Сохранено"
-                : manualRecommendedState === "error"
-                  ? "Не сохранилось"
-                  : `В этот день: ${formatNumber(manualCurrentValue || 0)}`}
-          </small>
-        </section>
-      )}
-
       <section className="sales-rop-tabs" aria-label="РОПы отдела продаж">
         {salesDepartmentRops.map((rop) => (
           <button
@@ -2067,7 +2012,25 @@ function SalesDepartmentDashboard({
               </div>
             </article>
 
-            <SalesManagerDetail manager={selectedManager} snapshot={snapshot} />
+            <SalesManagerDetail
+              manager={selectedManager}
+              snapshot={snapshot}
+              writePassword={writePassword}
+              manualRecommendedDate={manualRecommendedDate}
+              manualRecommendedDraft={manualRecommendedDraft}
+              manualRecommendedState={manualRecommendedState}
+              manualCurrentValue={manualCurrentValue}
+              manualRecommendedDayOptions={manualRecommendedDayOptions}
+              onManualRecommendedDateChange={(date) => {
+                setManualRecommendedDate(date);
+                setManualRecommendedState("idle");
+              }}
+              onManualRecommendedDraftChange={(value) => {
+                setManualRecommendedDraft(value);
+                setManualRecommendedState("idle");
+              }}
+              onSaveManualRecommendedDeals={saveManualRecommendedDeals}
+            />
           </section>
 
           <section className="sales-two-column">
@@ -2261,9 +2224,27 @@ function SalesNotQualifiedPanel({
 function SalesManagerDetail({
   manager,
   snapshot,
+  writePassword,
+  manualRecommendedDate,
+  manualRecommendedDraft,
+  manualRecommendedState,
+  manualCurrentValue,
+  manualRecommendedDayOptions,
+  onManualRecommendedDateChange,
+  onManualRecommendedDraftChange,
+  onSaveManualRecommendedDeals,
 }: {
   manager: SalesManagerMetrics | null;
   snapshot: SalesDepartmentSnapshot;
+  writePassword: string;
+  manualRecommendedDate: string;
+  manualRecommendedDraft: string;
+  manualRecommendedState: "idle" | "saving" | "saved" | "error";
+  manualCurrentValue: number;
+  manualRecommendedDayOptions: SalesDepartmentPeriodOption[];
+  onManualRecommendedDateChange: (date: string) => void;
+  onManualRecommendedDraftChange: (value: string) => void;
+  onSaveManualRecommendedDeals: () => void;
 }) {
   const totals = snapshot.totals;
   const title = manager ? shortManagerName(manager.name) : "Команда Дакоро";
@@ -2303,6 +2284,53 @@ function SalesManagerDetail({
         <SalesMiniMetric label="Дистант" value={formatSalesNumber(distantDeals)} caption="категория PS" />
         <SalesMiniMetric label="Средний чек" value={formatNullableCurrency(avgCheck)} caption="по PS без персональных данных" />
       </div>
+
+      {manager && (
+        <div className="sales-manager-recs">
+          <div>
+            <strong>Добавить реки</strong>
+            <span>Прибавляются к выполнению договоров и прогнозу, но не входят в конверсию.</span>
+          </div>
+          <label>
+            <span>Дата</span>
+            <select
+              value={manualRecommendedDate}
+              onChange={(event) => onManualRecommendedDateChange(event.target.value)}
+            >
+              {manualRecommendedDayOptions.map((period) => (
+                <option key={period.key} value={period.startDate}>{period.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Кол-во</span>
+            <input
+              type="number"
+              min="0"
+              value={manualRecommendedDraft}
+              onChange={(event) => onManualRecommendedDraftChange(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="primary-button compact"
+            disabled={!writePassword || manualRecommendedState === "saving"}
+            onClick={onSaveManualRecommendedDeals}
+          >
+            <Save size={16} />
+            {manualRecommendedState === "saving" ? "Сохраняю" : "Сохранить"}
+          </button>
+          <small className={manualRecommendedState}>
+            {!writePassword
+              ? "Нужен пароль админки"
+              : manualRecommendedState === "saved"
+                ? "Сохранено"
+                : manualRecommendedState === "error"
+                  ? "Не сохранилось"
+                  : `В этот день: ${formatNumber(manualCurrentValue || 0)}`}
+          </small>
+        </div>
+      )}
 
       {!manager && (
         <div className="sales-conversion-strip">
