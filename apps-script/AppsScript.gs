@@ -3958,18 +3958,100 @@ function syncAmoCrmLeads_(payload) {
   const upsertResult = records.length
     ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
     : { updated: 0 };
+  const mainReportResult = syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings);
   const result = {
     kind: 'leads',
     fromDate: fromDate,
     toDate: toDate,
     status: 'success',
-    message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads.',
+    message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads. Основной отчет обновлен: ' + mainReportResult.updated + ' строк.',
     rows: upsertResult.updated,
+    mainReportRows: mainReportResult.updated,
+    monthsRebuilt: mainReportResult.months,
     warnings: warnings,
     updatedAt: new Date(),
   };
   logAmoCrmSync_(result);
   return result;
+}
+
+function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
+  const dates = eachDateInRange_(fromDate, toDate);
+  const cities = ['МСК', 'СПБ'];
+  const metrics = ['Лиды', 'Квалы', 'Продажи'];
+  const aggregated = {};
+
+  dates.forEach((date) => {
+    cities.forEach((city) => {
+      metrics.forEach((metric) => {
+        aggregated[date + '|' + city + '|' + metric] = 0;
+      });
+    });
+  });
+
+  const reportConfig = {
+    monthKey: String(fromDate || '').slice(0, 7),
+    periodMode: 'custom',
+    periodStart: fromDate,
+    periodEnd: toDate,
+  };
+
+  (records || []).forEach((record) => {
+    const lead = salesAmoLeadFromCachedRecord_(record);
+    const normalized = salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, reportConfig);
+    if (!normalized || normalized.exclude || (cities.indexOf(normalized.city) < 0)) return;
+
+    if (normalized.createdDate >= fromDate && normalized.createdDate <= toDate) {
+      aggregated[normalized.createdDate + '|' + normalized.city + '|Лиды'] = (aggregated[normalized.createdDate + '|' + normalized.city + '|Лиды'] || 0) + 1;
+      if (normalized.isQualified) {
+        aggregated[normalized.createdDate + '|' + normalized.city + '|Квалы'] = (aggregated[normalized.createdDate + '|' + normalized.city + '|Квалы'] || 0) + 1;
+      }
+    }
+
+    if (normalized.closedDate >= fromDate && normalized.closedDate <= toDate && normalized.isWon) {
+      aggregated[normalized.closedDate + '|' + normalized.city + '|Продажи'] = (aggregated[normalized.closedDate + '|' + normalized.city + '|Продажи'] || 0) + salesAmoDealCount_(normalized);
+    }
+  });
+
+  const currentById = {};
+  readObjects_(CONFIG.sheets.daily).forEach((row) => {
+    currentById[String(row.id || '')] = row;
+  });
+
+  const rows = [];
+  dates.forEach((date) => {
+    cities.forEach((city) => {
+      metrics.forEach((metric) => {
+        const id = dailyRecordId_(date, city, metric, 'Город');
+        const current = currentById[id] || {};
+        rows.push({
+          id: id,
+          date: date,
+          month: String(date).slice(0, 7),
+          week: weekOfMonth_(date),
+          city: city,
+          channel: 'Город',
+          metric: metric,
+          plan: Number(current.plan || 0),
+          fact: Math.round(Number(aggregated[date + '|' + city + '|' + metric] || 0)),
+          forecast: current.forecast !== undefined && current.forecast !== '' ? Number(current.forecast || 0) : Number(current.plan || 0),
+          comment: current.comment || 'amoCRM',
+          recommendations: Number(current.recommendations || 0),
+          omQualified: metric === 'Квалы' ? Number(current.omQualified || 0) : 0,
+        });
+      });
+    });
+  });
+
+  const upsertResult = rows.length
+    ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, rows, dailyRow_)
+    : { updated: 0 };
+  const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
+  rebuiltMonths.forEach(rebuildWeeklySummary_);
+  if (warnings) {
+    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания, продажи по дате завершения.');
+  }
+  return { updated: upsertResult.updated, months: rebuiltMonths };
 }
 
 function ensureAmoCrmRawLeadSheet_() {
