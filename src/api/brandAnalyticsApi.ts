@@ -73,8 +73,8 @@ const drrBudgetSheets: Array<{ sheet: string; city: BrandCity; monthKey: string 
   { sheet: "СПБ ИЮЛЬ 26", city: "СПБ", monthKey: "2026-07" },
   { sheet: "МСК АВГУСТ 26", city: "МСК", monthKey: "2026-08" },
   { sheet: "СПБ АВГУСТ 26", city: "СПБ", monthKey: "2026-08" },
-  { sheet: "МСК СЕНТЯБРЬ", city: "МСК", monthKey: "2026-09" },
-  { sheet: "СПБ СЕНТЯБРЬ", city: "СПБ", monthKey: "2026-09" },
+  { sheet: "МСК СЕНТЯБРЬ 26", city: "МСК", monthKey: "2026-09" },
+  { sheet: "СПБ СЕНТЯБРЬ 26", city: "СПБ", monthKey: "2026-09" },
 ];
 const monthLabels = ["Апрель", "Май", "Июнь", "Июль"];
 const monthKeysByLabel: Record<string, string> = {
@@ -125,6 +125,7 @@ export type RevenueReceivableMonthly = {
 };
 
 export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle> {
+  const drrBudgetsPromise = loadSourceBudgetSnapshot().catch(() => []);
   const appsScriptSnapshot = await loadBrandServiceFromAppsScript();
   const [legacyRecords, servicePerformance, publicPerformance, serviceBranches, serviceAliases, drrBudgets, publicBudgets, receivables, directMonthlyPerformance] = await Promise.all([
     loadLegacyBrandRecords(),
@@ -132,7 +133,7 @@ export async function loadBrandAnalyticsSnapshot(): Promise<BrandAnalyticsBundle
     loadPublicBrandPerformanceCsv().catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.branches).then(parseBrandBranchesSheet).catch(() => []),
     loadOptionalBrandGvizSheet(brandServiceSheets.aliases).then(parseBrandAliasesSheet).catch(() => []),
-    loadDrrBudgetRows().catch(() => []),
+    drrBudgetsPromise,
     loadPublicBrandBudgetCsv().catch(() => []),
     loadReceivableRows().catch(() => []),
     loadDirectMonthlyPerformanceRows().catch(() => []),
@@ -215,6 +216,15 @@ async function loadPublicBrandBudgetCsv(): Promise<BrandBudgetMonthly[]> {
   if (!response.ok) return [];
   const csv = await response.text();
   return normalizeBrandBudgetObjects(parseCsvObjects(csv));
+}
+
+let sourceBudgetRequest: Promise<BrandBudgetMonthly[]> | null = null;
+
+export function loadSourceBudgetSnapshot(): Promise<BrandBudgetMonthly[]> {
+  if (!sourceBudgetRequest) {
+    sourceBudgetRequest = loadDrrBudgetRows().finally(() => { sourceBudgetRequest = null; });
+  }
+  return sourceBudgetRequest;
 }
 
 async function loadDrrBudgetRows(): Promise<BrandBudgetMonthly[]> {
@@ -486,7 +496,7 @@ function parseDrrBudgetSheet(
     const hasNamedBrand = Boolean(rawBrand);
     if (hasNamedBrand) activeBrand = isDrrHeaderOrTotal(rawBrand) ? "" : rawBrand;
 
-    const brand = hasNamedBrand ? activeBrand : activeBrand;
+    const brand = activeBrand;
     if (!brand || isDrrHeaderOrTotal(brand)) return;
 
     const yandexBudget = toNumber(readCell(row, 1));
@@ -517,7 +527,7 @@ function parseDrrBudgetSheet(
 
     const sourceBudgetTotal = budgetRows.reduce((sum, item) => sum + item.budget, 0);
     if (totalBudget > sourceBudgetTotal + 1) {
-      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Другие", budget: totalBudget - sourceBudgetTotal });
+      budgetRows.push({ monthKey: config.monthKey, city: config.city, brand, source: "Прочие расходы", budget: totalBudget - sourceBudgetTotal });
     }
 
     output.push(...budgetRows);
@@ -1233,7 +1243,10 @@ function canonicalDrrOtherSource(value: string): string {
   const lower = stringValue(value).toLowerCase();
   if (lower.includes("директ")) return "Директ";
   if (lower.includes("кеш") || lower.includes("cashback")) return "Рек/кешбэк";
-  return "Другие";
+  if (lower.includes("авито") || lower.includes("avito")) return "Авито";
+  if (lower.includes("метро")) return "Реклама в метро";
+  const source = canonicalSourceName(value);
+  return !lower || source === "Другие" ? "Прочие расходы" : source;
 }
 
 function applyBrandBudgets(

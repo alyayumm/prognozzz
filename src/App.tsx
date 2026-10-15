@@ -32,6 +32,7 @@ import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import {
   legacyBrandRecordsToPerformance,
   loadBrandAnalyticsSnapshot,
+  loadSourceBudgetSnapshot,
   type BrandAnalyticsBundle,
   type BrandAnalyticsRecord,
   type BrandBudgetMonthly,
@@ -131,6 +132,7 @@ type SourceMoneyTotals = {
   source: string;
   totals: Record<Metric, number>;
   budget: number;
+  budgetKnown?: boolean;
   revenue: number;
   actualRevenue: number;
   cpl: number;
@@ -505,6 +507,18 @@ export default function App() {
   useEffect(() => {
     latestRecordDateRef.current = getLatestActualRecordDate(records);
   }, [records]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadSourceBudgetSnapshot()
+      .then((budgets) => {
+        if (!cancelled && budgets.length) setBrandData((current) => ({ ...current, budgets }));
+      })
+      .catch(() => { /* The full brand loader still provides its existing fallback sources. */ });
+
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -3223,7 +3237,7 @@ function SourcesAnalyticsDashboard({
   const visibleSources = activeSources.filter((source) => !hiddenSourceKeys.includes(sourceKey(source)));
   const sourceTotals = useMemo(
     () => isBrandSourceMode
-      ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources)
+      ? getSourceMoneyTotalsFromBrandPerformance(scopedBrandRows, visibleSources, scopedBrandBudgets)
       : getSourceMoneyTotalsFromDaily(scopedRecords, visibleSources, scopedBrandBudgets, scopedBrandRows),
     [isBrandSourceMode, scopedBrandRows, visibleSources, scopedRecords, scopedBrandBudgets],
   );
@@ -3262,6 +3276,8 @@ function SourcesAnalyticsDashboard({
           `Бренд: ${selectedSourceBrand?.label ?? "Все бренды"}`,
           `Период: ${activePeriodLabel.toLowerCase()}`,
           `Включено: ${visibleSources.length} из ${activeSources.length}`,
+          scopedBrandBudgets.length ? "Расходы: месячные бюджеты из ДРР" : "Месячные бюджеты ДРР: нет данных за выбранный период",
+          ...(sourceTotals.some((item) => item.budgetKnown === false) ? ["Расходы заполнены не за весь период; * — известная часть"] : []),
           ...(!isBrandSourceMode && scopedRecords.some(hasRoistatSourceAttribution) ? ["Нераспознанное и мессенджеры распределены расчетно"] : []),
           strongestSource?.value ? `Лидер: ${strongestSource.source}` : "FACT по источникам пока пустой",
         ]}
@@ -3595,7 +3611,7 @@ function SourceEfficiencyTable({
           <span>{formatNumber(totalRow.sales)}</span>
           <span>{formatBrandCurrency(totalRow.revenue, { allowZero: true })}</span>
           <span>{formatBrandCurrency(totalRow.actualRevenue, { allowZero: true })}</span>
-          <span>{formatBrandCurrency(totalRow.budget, { allowZero: true })}</span>
+          <span>{formatSourceBudget(totalRow)}</span>
           <span>{totalRow.leadToQualified}%</span>
           <span>{totalRow.qualifiedToSales}%</span>
           <span>{formatBrandCurrency(totalRow.cpl)}</span>
@@ -3616,7 +3632,7 @@ function SourceEfficiencyTable({
             <span>{formatNumber(item.sales)}</span>
             <span>{formatBrandCurrency(item.revenue, { allowZero: true })}</span>
             <span>{formatBrandCurrency(item.actualRevenue, { allowZero: true })}</span>
-            <span>{formatBrandCurrency(item.budget, { allowZero: true })}</span>
+            <span>{formatSourceBudget(item)}</span>
             <span>{item.leadToQualified}%</span>
             <span>{item.qualifiedToSales}%</span>
             <span>{formatBrandCurrency(item.cpl)}</span>
@@ -3641,23 +3657,26 @@ function buildSourceEfficiencyTotalRow(rows: SourceEfficiencyDisplayRow[], total
   const budget = rows.reduce((sum, row) => sum + row.budget, 0);
 
   return {
-    source: "Итого",
-    totals: { Лиды: leads, Квалы: qualified, Продажи: sales },
+    ...recalculateSourceMoneyTotals({
+      source: "Итого",
+      totals: { Лиды: leads, Квалы: qualified, Продажи: sales },
+      budget,
+      budgetKnown: rows.every((row) => row.budgetKnown !== false),
+      revenue,
+      actualRevenue,
+    }),
     leads,
     qualified,
     sales,
     share: percent(leads, totalLeadsBase),
     leadToQualified: percent(qualified, leads),
     qualifiedToSales: percent(sales, qualified),
-    budget,
-    revenue,
-    actualRevenue,
-    cpl: leads > 0 && budget > 0 ? budget / leads : 0,
-    cpql: qualified > 0 && budget > 0 ? budget / qualified : 0,
-    saleCost: sales > 0 && budget > 0 ? budget / sales : 0,
-    roas: budget > 0 ? revenue / budget : null,
-    roasFact: budget > 0 ? actualRevenue / budget : null,
   };
+}
+
+function formatSourceBudget(item: SourceMoneyTotals): string {
+  if (item.budgetKnown === false && !item.budget) return "—";
+  return `${formatBrandCurrency(item.budget, { allowZero: true })}${item.budgetKnown === false ? "*" : ""}`;
 }
 
 function MetrikaAttributionPanel({
@@ -8964,12 +8983,10 @@ function getSourceMoneyTotalsFromDaily(
   budgetRows: BrandBudgetMonthly[] = [],
   performanceRows: BrandPerformanceWeekly[] = [],
 ): SourceMoneyTotals[] {
-  const periodMonthCount = countSourcePeriodMonths(records, budgetRows, performanceRows);
   const rawTotals = sources.map((source) => {
     const sourceRecords = records.filter((record) => isSourceValueRecord(record) && sourceNameEquals(record.channel, source));
     const moneyRecords = sourceRecords.filter((record) => record.metric === "Продажи");
     const commentRevenue = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["выручка"]), 0);
-    const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
     const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
     const performanceTotals = getSourceMetricTotalsFromPerformance(performanceSourceRows);
     const totals = sourceNameEquals(source, "Директ") && !sourceRecords.some(hasRoistatSourceAttribution) && hasAnySourceMetric(performanceTotals)
@@ -8977,28 +8994,16 @@ function getSourceMoneyTotalsFromDaily(
       : getSourceMetricTotals(records, source);
     const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);
     const performanceActualRevenue = performanceSourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
-    const performanceBudget = performanceSourceRows.reduce((sum, row) => sum + row.budget, 0);
-    const drrBudget = budgetRows
-      .filter((row) => sourceNameEquals(row.source, source))
-      .reduce((sum, row) => sum + row.budget, 0);
     const revenue = commentRevenue > 0 ? commentRevenue : performanceRevenue;
     const actualRevenue = performanceActualRevenue > 0
       ? performanceActualRevenue
       : revenue;
-    const sourceHasActivity = Object.values(totals).some((value) => value > 0) || revenue > 0 || actualRevenue > 0 || sourceRecords.length > 0;
-    const sourceBudgetFallback = sourceHasActivity ? fallbackMonthlySourceBudget(source) * periodMonthCount : 0;
-    const budget = commentBudget > 0
-      ? commentBudget
-      : drrBudget > 0
-      ? drrBudget
-      : performanceBudget > 0
-      ? performanceBudget
-      : sourceBudgetFallback;
+    const expense = resolveSourceBudget(source, records, budgetRows, performanceRows);
 
     return recalculateSourceMoneyTotals({
       source,
       totals,
-      budget,
+      ...expense,
       revenue,
       actualRevenue,
     });
@@ -9029,17 +9034,12 @@ function getSourceMoneyTotalsFromDaily(
   });
 }
 
-function fallbackMonthlySourceBudget(source: string): number {
-  if (sourceNameEquals(source, "SEO")) return 50000;
-  if (sourceNameEquals(source, "Гугл Карты")) return 50000;
-  return 0;
-}
-
-function countSourcePeriodMonths(
+function resolveSourceBudget(
+  source: string,
   records: DailyRecord[],
-  budgetRows: BrandBudgetMonthly[],
-  performanceRows: BrandPerformanceWeekly[],
-): number {
+  budgetRows: BrandBudgetMonthly[] = [],
+  performanceRows: BrandPerformanceWeekly[] = [],
+): { budget: number; budgetKnown: boolean } {
   const monthKeys = new Set<string>();
 
   records
@@ -9048,25 +9048,46 @@ function countSourcePeriodMonths(
   budgetRows.forEach((row) => row.monthKey && monthKeys.add(row.monthKey));
   performanceRows.forEach((row) => row.monthKey && monthKeys.add(row.monthKey));
 
-  return Math.max(1, monthKeys.size);
+  let budget = 0;
+  let budgetKnown = monthKeys.size > 0;
+  monthKeys.forEach((monthKey) => {
+    const monthlyBudgets = budgetRows.filter((row) => row.monthKey === monthKey);
+    // A loaded DRR month is authoritative, including sources with no allocated budget.
+    if (monthlyBudgets.length) {
+      budget += monthlyBudgets.filter((row) => sourceNameEquals(row.source, source))
+        .reduce((sum, row) => sum + row.budget, 0);
+      return;
+    }
+    const commentBudget = records.filter((record) => isSourceValueRecord(record)
+      && record.date.startsWith(`${monthKey}-`) && record.metric === "Продажи" && sourceNameEquals(record.channel, source))
+      .reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
+    const performanceBudget = performanceRows.filter((row) => row.monthKey === monthKey && sourceNameEquals(row.source, source))
+      .reduce((sum, row) => sum + row.budget, 0);
+    const monthlyExpense = commentBudget > 0 ? commentBudget : performanceBudget;
+    if (monthlyExpense > 0) budget += monthlyExpense;
+    else budgetKnown = false;
+  });
+  return { budget: Math.round(budget * 100) / 100, budgetKnown };
 }
 
-function recalculateSourceMoneyTotals(item: Pick<SourceMoneyTotals, "source" | "totals" | "budget" | "revenue" | "actualRevenue">): SourceMoneyTotals {
+function recalculateSourceMoneyTotals(item: Pick<SourceMoneyTotals, "source" | "totals" | "budget" | "budgetKnown" | "revenue" | "actualRevenue">): SourceMoneyTotals {
   const budget = Math.max(0, Number(item.budget || 0));
   const revenue = Math.max(0, Number(item.revenue || 0));
   const actualRevenue = Math.max(0, Number(item.actualRevenue || 0));
+  const canCalculateCosts = item.budgetKnown !== false && budget > 0;
 
   return {
     source: item.source,
     totals: item.totals,
     budget,
+    budgetKnown: item.budgetKnown,
     revenue,
     actualRevenue,
-    cpl: item.totals["Лиды"] > 0 && budget > 0 ? budget / item.totals["Лиды"] : 0,
-    cpql: item.totals["Квалы"] > 0 && budget > 0 ? budget / item.totals["Квалы"] : 0,
-    saleCost: item.totals["Продажи"] > 0 && budget > 0 ? budget / item.totals["Продажи"] : 0,
-    roas: budget > 0 ? revenue / budget : null,
-    roasFact: budget > 0 ? actualRevenue / budget : null,
+    cpl: item.totals["Лиды"] > 0 && canCalculateCosts ? budget / item.totals["Лиды"] : 0,
+    cpql: item.totals["Квалы"] > 0 && canCalculateCosts ? budget / item.totals["Квалы"] : 0,
+    saleCost: item.totals["Продажи"] > 0 && canCalculateCosts ? budget / item.totals["Продажи"] : 0,
+    roas: canCalculateCosts ? revenue / budget : null,
+    roasFact: canCalculateCosts ? actualRevenue / budget : null,
   };
 }
 
@@ -9136,7 +9157,11 @@ function getActiveSourcesFromBrandPerformance(rows: BrandPerformanceWeekly[]): s
   });
 }
 
-function getSourceMoneyTotalsFromBrandPerformance(rows: BrandPerformanceWeekly[], sources: string[]): SourceMoneyTotals[] {
+function getSourceMoneyTotalsFromBrandPerformance(
+  rows: BrandPerformanceWeekly[],
+  sources: string[],
+  budgetRows: BrandBudgetMonthly[] = [],
+): SourceMoneyTotals[] {
   return sources.map((source) => {
     const sourceRows = rows.filter((row) => sourceNameEquals(row.source, source));
     const totals = metrics.reduce<Record<Metric, number>>((acc, metric) => {
@@ -9147,23 +9172,15 @@ function getSourceMoneyTotalsFromBrandPerformance(rows: BrandPerformanceWeekly[]
       }, 0);
       return acc;
     }, {} as Record<Metric, number>);
-    const budget = sourceRows.reduce((sum, row) => sum + row.budget, 0);
     const revenue = sourceRows.reduce((sum, row) => sum + row.revenue, 0);
     const actualRevenue = sourceRows.reduce((sum, row) => sum + row.actualRevenue, 0);
-    const roas = budget > 0 ? revenue / budget : null;
-    const roasFact = budget > 0 ? actualRevenue / budget : null;
-    return {
+    return recalculateSourceMoneyTotals({
       source,
       totals,
-      budget,
+      ...resolveSourceBudget(source, [], budgetRows, rows),
       revenue,
       actualRevenue,
-      cpl: totals["Лиды"] > 0 ? budget / totals["Лиды"] : 0,
-      cpql: totals["Квалы"] > 0 ? budget / totals["Квалы"] : 0,
-      saleCost: totals["Продажи"] > 0 ? budget / totals["Продажи"] : 0,
-      roas,
-      roasFact,
-    };
+    });
   });
 }
 
