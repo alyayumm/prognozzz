@@ -702,7 +702,7 @@ export default function App() {
     }
 
     setIsSavingDaily(true);
-    setSavedMessage(kind === "sources" ? "Загружаю Roistat-таблицу источников за выбранный период..." : "Загружаю Roistat: отчет по домену за выбранный период...");
+    setSavedMessage(kind === "sources" ? "Загружаю источники из Roistat и распределяю нераспознанное и мессенджеры..." : "Загружаю Roistat: отчет по домену за выбранный период...");
     try {
       const action = kind === "sources" ? "syncRoistatSources" : "syncRoistatBrands";
       const result = await callReportApi<RoistatSyncResult>(action, { fromDate, toDate }, writePassword);
@@ -5358,7 +5358,7 @@ function SourceAdminPanel({
       <div className="roistat-sync-panel">
         <div>
           <strong>Roistat</strong>
-          <span>Источники берутся из таблицы Roistat-источников: даты ставятся в RS_Настройки, результат сохраняется в Data_Daily. Отчет по домену пишется в Бренды.</span>
+          <span>Источники загружаются из Roistat за выбранный период. Нераспознанное и мессенджеры распределяются расчетно по долям остальных источников, отдельно для лидов, КВАЛ и продаж. Итоги сохраняются в общей таблице.</span>
         </div>
         <label>
           С
@@ -5370,7 +5370,7 @@ function SourceAdminPanel({
         </label>
         <div className="roistat-sync-actions">
           <button className="select-button" type="button" onClick={() => syncRoistat("sources")} disabled={isSavingDaily}>
-            таблица: источники
+            Roistat: источники
           </button>
           <button className="select-button" type="button" onClick={() => syncRoistat("brands")} disabled={isSavingDaily}>
             по домену: бренды
@@ -8615,6 +8615,7 @@ function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRec
   const targetByKey = new Map<string, number>();
   const sourceByKey = new Map<string, number>();
   const recipientsByKey = new Map<string, Array<{ index: number; weight: number }>>();
+  const attributedGroups = new Set<string>();
 
   adjusted.forEach((record, index) => {
     if (isDistributedSourceRecord(record)) return;
@@ -8634,6 +8635,7 @@ function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRec
     if (!source || sourceNameEquals(source, "Неизвестно")) return;
 
     const key = sourceResidualGroupKey(record.date, sourceCity, record.metric);
+    if (hasRoistatSourceAttribution(record)) attributedGroups.add(key);
     sourceByKey.set(key, (sourceByKey.get(key) ?? 0) + Math.max(0, Number(record.fact || 0)));
 
     if (!canReceiveSourceResidual(source)) return;
@@ -8644,6 +8646,7 @@ function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRec
   });
 
   targetByKey.forEach((target, key) => {
+    if (attributedGroups.has(key)) return;
     const residual = Math.round(target) - Math.round(sourceByKey.get(key) ?? 0);
     const recipients = recipientsByKey.get(key) ?? [];
     if (residual <= 0 || recipients.length === 0) return;
@@ -8657,6 +8660,10 @@ function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRec
   });
 
   return adjusted;
+}
+
+function hasRoistatSourceAttribution(record: DailyRecord): boolean {
+  return (record.comment ?? "").includes("[SOURCE_ATTRIBUTION=proportional-v1]");
 }
 
 function isEditableSourceCity(value: unknown): value is EditableSourceCity {
@@ -8763,7 +8770,7 @@ function buildSourceChartBuckets(
     bucket.values[source][record.metric] += Math.max(0, Number(record.fact || 0));
   });
 
-  applyDirectMonthlyRowsToSourceBuckets(buckets, periodMode, sources, performanceRows);
+  applyDirectMonthlyRowsToSourceBuckets(buckets, periodMode, sources, performanceRows, records);
 
   return buckets;
 }
@@ -8773,17 +8780,20 @@ function applyDirectMonthlyRowsToSourceBuckets(
   periodMode: SourcePeriodMode,
   sources: string[],
   performanceRows: BrandPerformanceWeekly[],
+  records: DailyRecord[] = [],
 ) {
   if (periodMode !== "month" && periodMode !== "monthToMonth") return;
   const directSource = findSourceLabel("Директ", sources);
   if (!directSource) return;
 
-  buckets.forEach((bucket) => {
+  const importedMonths = new Set(records.filter(hasRoistatSourceAttribution).map((record) => record.date.slice(0, 7)));
+  buckets.filter((bucket) => !importedMonths.has(bucket.key)).forEach((bucket) => {
     bucket.values[directSource] = { Лиды: 0, Квалы: 0, Продажи: 0 };
   });
 
   performanceRows
     .filter((row) => sourceNameEquals(row.source, directSource))
+    .filter((row) => !importedMonths.has(row.monthKey))
     .forEach((row) => {
       const bucket = buckets.find((item) => item.key === row.monthKey);
       if (!bucket || !bucket.values[directSource]) return;
@@ -8857,6 +8867,7 @@ function sourceNameFromMeta(record: DailyRecord): string {
 
 function isRoistatDirectOverlayRecord(record: DailyRecord): boolean {
   return record.city === sourceRecordCity
+    && !hasRoistatSourceAttribution(record)
     && sourceNameEquals(record.channel, "Директ")
     && (record.comment ?? "").includes("Roistat API");
 }
@@ -8960,7 +8971,7 @@ function getSourceMoneyTotalsFromDaily(
     const commentBudget = moneyRecords.reduce((sum, record) => sum + sourceMoneyFromComment(record.comment, ["расход", "расходы", "бюджет"]), 0);
     const performanceSourceRows = performanceRows.filter((row) => sourceNameEquals(row.source, source));
     const performanceTotals = getSourceMetricTotalsFromPerformance(performanceSourceRows);
-    const totals = sourceNameEquals(source, "Директ") && hasAnySourceMetric(performanceTotals)
+    const totals = sourceNameEquals(source, "Директ") && !sourceRecords.some(hasRoistatSourceAttribution) && hasAnySourceMetric(performanceTotals)
       ? performanceTotals
       : getSourceMetricTotals(records, source);
     const performanceRevenue = performanceSourceRows.reduce((sum, row) => sum + row.revenue, 0);

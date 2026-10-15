@@ -3160,7 +3160,7 @@ function refreshRoistatFields_() {
 }
 
 function syncRoistatSources_(payload) {
-  return syncRoistatSourcesFromSheet_(payload);
+  return syncRoistatRange_(payload, 'sources');
 }
 
 function syncRoistatBrands_(payload) {
@@ -3280,13 +3280,12 @@ function writeRoistatSourceSheetRows_(rawRows, range, warnings) {
     });
   });
 
-  const directMonthly = readRoistatDirectMonthlyMetrics_(warnings);
-  redistributeRoistatSourceOther_(aggregated, directMonthly, warnings);
+  redistributeRoistatSourceOther_(aggregated, null, warnings);
 
   const records = Object.keys(aggregated).flatMap((key) => {
     const item = aggregated[key];
     if (item.source === ROISTAT_SOURCE_OTHER || !roistatHasAnyMetric_(item)) return [];
-    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat spreadsheet';
+    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat spreadsheet [SOURCE_ATTRIBUTION=proportional-v1]';
     return [
       roistatSourceDailyRecord_(item, 'Лиды', item.leads, baseComment),
       roistatSourceDailyRecord_(item, 'Квалы', item.qualified, baseComment),
@@ -3328,12 +3327,18 @@ function deleteRoistatSourceRowsInRange_(fromDate, toDate) {
     const date = stringifyDate_(row[dateIndex]);
     const city = String(row[cityIndex] || '');
     const comment = String(row[commentIndex] || '');
-    if (city === 'источники' && date >= fromDate && date <= toDate && (comment.indexOf('Roistat API') >= 0 || comment.indexOf('Roistat spreadsheet') >= 0)) {
+    if (city === 'источники' && date >= fromDate && date <= toDate && /Roistat (API|spreadsheet|report-\d+)/.test(comment)) {
       rowsToDelete.push(index + 2);
     }
   });
 
-  rowsToDelete.sort((a, b) => b - a).forEach((rowNumber) => sheet.deleteRow(rowNumber));
+  const blocks = [];
+  rowsToDelete.forEach((rowNumber) => {
+    const block = blocks[blocks.length - 1];
+    if (block && block.start + block.count === rowNumber) block.count += 1;
+    else blocks.push({ start: rowNumber, count: 1 });
+  });
+  blocks.reverse().forEach((block) => sheet.deleteRows(block.start, block.count));
 }
 
 function syncRoistatRange_(payload, kind) {
@@ -3382,12 +3387,14 @@ function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
   let skippedRows = 0;
 
   rawRows.forEach((row) => {
-    const dimensionText = roistatDimensionText_(row);
     const date = stringifyDate_(row.syncDate || range.fromDate);
-    const city = normalizeRoistatCity_(dimensionText);
-    const source = isRoistatMessageLead_(dimensionText)
-      ? ROISTAT_SOURCE_OTHER
-      : canonicalRoistatSource_(dimensionText, row.dimensions[fields.domainDimension]);
+    const pipelineText = String(row.dimensions[fields.pipelineDimension] || '');
+    if (pipelineText && ['мск аш', 'спб аш'].indexOf(salesNormalizeText_(pipelineText)) < 0) return;
+    const cityText = String(row.dimensions[fields.cityDimension] || '');
+    if (isRoistatMessageLead_(cityText)) return;
+    const city = normalizeRoistatCity_(pipelineText) || normalizeRoistatCity_(cityText) || normalizeRoistatCity_(row.dimensions[fields.domainDimension]);
+    const sourceText = fields.sourceDimensions.map((field) => String(row.dimensions[field] || '').trim()).find(Boolean) || '';
+    const source = canonicalRoistatSource_(sourceText, row.dimensions[fields.domainDimension]);
     if (!city || !source) {
       skippedRows += 1;
       return;
@@ -3396,13 +3403,15 @@ function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
     roistatAddRowMetrics_(ensureRoistatSourceAggregate_(aggregated, date, city, source), row, fields);
   });
 
-  const directMonthly = readRoistatDirectMonthlyMetrics_(warnings);
-  redistributeRoistatSourceOther_(aggregated, directMonthly, warnings);
+  if (skippedRows && !Object.keys(aggregated).length) {
+    throw new Error('Roistat: не удалось определить город источников. Сохраненные данные не изменены. Проверьте ROISTAT_DIMENSION_CITY.');
+  }
+  redistributeRoistatSourceOther_(aggregated, null, warnings);
 
   const records = Object.keys(aggregated).flatMap((key) => {
     const item = aggregated[key];
     if (item.source === ROISTAT_SOURCE_OTHER || !roistatHasAnyMetric_(item)) return [];
-    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat API';
+    const baseComment = '[SOURCE_CITY=' + item.city + '] Roistat API [SOURCE_ATTRIBUTION=proportional-v1]';
     return [
       roistatSourceDailyRecord_(item, 'Лиды', item.leads, baseComment),
       roistatSourceDailyRecord_(item, 'Квалы', item.qualified, baseComment),
@@ -3410,6 +3419,7 @@ function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
     ];
   });
 
+  deleteRoistatSourceRowsInRange_(range.fromDate, range.toDate);
   const upsertResult = records.length
     ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, records, dailyRow_)
     : { updated: 0 };
@@ -3717,33 +3727,44 @@ function roistatDirectBrand_(value) {
 
 function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
   const groups = {};
+  const periodWeights = {};
   Object.keys(aggregated).forEach((key) => {
     const item = aggregated[key];
-    const groupKey = [String(item.date).slice(0, 7), item.city].join('|');
+    const groupKey = [item.date, item.city].join('|');
     if (!groups[groupKey]) groups[groupKey] = { items: [], other: [] };
     groups[groupKey].items.push(item);
     if (item.source === ROISTAT_SOURCE_OTHER) groups[groupKey].other.push(item);
+    else {
+      const periodKey = [String(item.date).slice(0, 7), item.city].join('|');
+      if (!periodWeights[periodKey]) periodWeights[periodKey] = {};
+      if (!periodWeights[periodKey][item.source]) periodWeights[periodKey][item.source] = {};
+      ROISTAT_METRIC_KEYS.forEach((metric) => {
+        const weights = periodWeights[periodKey][item.source];
+        weights[metric] = Number(weights[metric] || 0) + Math.max(0, Number(item[metric] || 0));
+      });
+    }
   });
 
   let otherMoved = 0;
   Object.keys(groups).forEach((groupKey) => {
     const group = groups[groupKey];
     if (!group.other.length) return;
-    const directTarget = directMonthly.byMonthCity[groupKey];
-    const directLocked = directTarget && roistatHasAnyMetric_(directTarget);
-
-    const knownSources = unique_(group.items.map((item) => item.source).filter((source) => roistatCanReceiveOther_(source, directLocked)));
-    const receiverSources = knownSources.length
-      ? knownSources
-      : ROISTAT_SOURCE_FALLBACK_DISTRIBUTION.filter((source) => roistatCanReceiveOther_(source, directLocked));
-
     group.other.forEach((otherItem) => {
       ROISTAT_METRIC_KEYS.forEach((metric) => {
         const amount = Math.round(Number(otherItem[metric] || 0));
-        if (amount <= 0 || !receiverSources.length) return;
-        const receivers = receiverSources.map((source) => ensureRoistatSourceAggregate_(aggregated, otherItem.date, otherItem.city, source));
-        roistatAllocateAmount_(amount, receivers, (item) => item[metric]).forEach((allocation) => {
-          allocation.item[metric] += allocation.value;
+        if (!amount) return;
+        const dailyReceivers = group.items.filter((item) => item.source !== ROISTAT_SOURCE_OTHER && Number(item[metric] || 0) > 0);
+        const periodKey = [String(otherItem.date).slice(0, 7), otherItem.city].join('|');
+        const weights = periodWeights[periodKey] || {};
+        const receivers = dailyReceivers.length
+          ? dailyReceivers.map((item) => ({ source: item.source, weight: Number(item[metric]) }))
+          : Object.keys(weights).filter((source) => weights[source][metric] > 0).map((source) => ({ source: source, weight: weights[source][metric] }));
+        if (!receivers.length) {
+          throw new Error('Roistat: нет распознанных источников для пропорционального распределения ' + metric + ' (' + otherItem.city + ', ' + otherItem.date + '). Сохраненные данные не изменены.');
+        }
+        roistatAllocateAmount_(Math.abs(amount), receivers, (item) => item.weight).forEach((allocation) => {
+          const target = ensureRoistatSourceAggregate_(aggregated, otherItem.date, otherItem.city, allocation.item.source);
+          target[metric] += allocation.value * (amount < 0 ? -1 : 1);
         });
         otherItem[metric] = 0;
         otherMoved += amount;
@@ -3751,7 +3772,7 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
     });
   });
 
-  if (otherMoved) warnings.push('Другие источники и мессенджеры распределены пропорционально по рабочим источникам; Директ и Рек/кешбэк не затронуты.');
+  if (otherMoved) warnings.push('Нераспознанное и мессенджеры распределены расчетно по всем остальным источникам, включая Директ и Рек/кешбэк: отдельно по дню, городу и показателю, с сохранением итогов. При отсутствии дневной базы используются исходные доли выбранного периода в том же месяце и городе.');
 }
 
 function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {
@@ -3826,9 +3847,11 @@ function getRoistatFieldMap_(kind) {
   const hostDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_DOMAIN') || selectRoistatField_(dimensionsDictionary, ['custom_dimension_3', 'order_field_94', 'host', 'domain'], ['бренд/домен', 'домен', 'host'], 'custom_dimension_3');
   const cityDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_CITY') || selectRoistatField_(dimensionsDictionary, ['order_field_2', 'custom_dimension_6', 'pipeline', 'funnel', 'project', 'city'], ['воронк', 'город', 'мск', 'спб'], 'order_field_2');
   const leadTypeDimension = roistatDimensionOverride_('ROISTAT_DIMENSION_LEAD_TYPE') || selectRoistatField_(dimensionsDictionary, ['order_field_21', 'lead_type', 'order_type', 'request_type'], ['тип лида', 'тип заявки'], 'order_field_21');
+  const pipelineDimension = selectRoistatField_(dimensionsDictionary, ['order_field_2', 'pipeline'], ['воронка продаж'], 'order_field_2');
 
-  const dimensions = unique_(
-    []
+  const dimensions = unique_(kind === 'sources'
+    ? [sourceDimensions[0], cityDimension, pipelineDimension].filter(Boolean)
+    : []
       .concat(kind === 'brands' ? [hostDimension] : sourceDimensions)
       .concat(kind === 'brands' ? sourceDimensions.slice(0, 2) : [hostDimension])
       .concat([cityDimension, leadTypeDimension])
@@ -3846,6 +3869,7 @@ function getRoistatFieldMap_(kind) {
     domainDimension: hostDimension,
     cityDimension: cityDimension,
     leadTypeDimension: leadTypeDimension,
+    pipelineDimension: pipelineDimension,
     metrics: metrics,
     metricMap: metricMap,
     warnings: warnings,
@@ -3865,6 +3889,18 @@ function buildRoistatAnalyticsPayload_(fields, fromDate, toDate) {
 }
 
 function fetchRoistatAnalyticsData_(payload, fields, kind) {
+  // Source attribution needs every requested metric and the city dimension.
+  // Do not silently replace a rejected report with a partial one full of zeroes.
+  if (kind === 'sources') {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return { response: fetchRoistatEndpoint_('analytics/data', payload), warnings: [] };
+      } catch (error) {
+        if (attempt === 2 || !/HTTP (429|500|502|503|504)\b|timed?\s*out|timeout/i.test(String(error.message || error))) throw error;
+        Utilities.sleep(500 * (attempt + 1));
+      }
+    }
+  }
   const attempts = roistatAnalyticsAttempts_(payload, fields, kind);
   const errors = [];
   for (let index = 0; index < attempts.length; index += 1) {
@@ -4436,10 +4472,10 @@ function collectRoistatRows_(items, inheritedDimensions, rows, fields, syncDate)
   if (!Array.isArray(items)) return;
   items.forEach((item) => {
     if (!item || typeof item !== 'object') return;
-    const dimensions = Object.assign({}, inheritedDimensions, roistatObjectFromSection_(item.dimensions, fields.allDimensions));
+    const dimensions = Object.assign({}, inheritedDimensions, roistatObjectFromSection_(item.dimensions, fields.allDimensions, true));
     fields.allDimensions.forEach((dimension) => {
       if (item[dimension] !== undefined && dimensions[dimension] === undefined) {
-        dimensions[dimension] = roistatValue_(item[dimension]);
+        dimensions[dimension] = item[dimension] && item[dimension].title !== undefined ? item[dimension].title : roistatValue_(item[dimension]);
       }
     });
     const metrics = roistatObjectFromSection_(item.metrics, fields.metrics);
@@ -4449,7 +4485,8 @@ function collectRoistatRows_(items, inheritedDimensions, rows, fields, syncDate)
       }
     });
 
-    if (Object.keys(metrics).some((metric) => Number(metrics[metric] || 0) !== 0)) {
+    const children = Array.isArray(item.items) && item.items.length ? item.items : item.children;
+    if ((!Array.isArray(children) || !children.length) && Object.keys(metrics).some((metric) => Number(metrics[metric] || 0) !== 0)) {
       rows.push({
         dimensions: dimensions,
         metrics: metrics,
@@ -4462,14 +4499,15 @@ function collectRoistatRows_(items, inheritedDimensions, rows, fields, syncDate)
   });
 }
 
-function roistatObjectFromSection_(section, fieldOrder) {
+function roistatObjectFromSection_(section, fieldOrder, preferTitle) {
   const result = {};
+  const valueOf = (value) => preferTitle && value && value.title !== undefined && value.title !== '' ? value.title : roistatValue_(value);
   if (!section) return result;
   if (Array.isArray(section)) {
     section.forEach((item, index) => {
       if (item && typeof item === 'object') {
         const name = roistatSectionItemName_(item, fieldOrder[index]);
-        if (name) result[name] = roistatValue_(item);
+        if (name) result[name] = valueOf(item);
       } else if (fieldOrder[index]) {
         result[fieldOrder[index]] = roistatValue_(item);
       }
@@ -4478,7 +4516,7 @@ function roistatObjectFromSection_(section, fieldOrder) {
   }
   if (typeof section === 'object') {
     Object.keys(section).forEach((key) => {
-      result[key] = roistatValue_(section[key]);
+      result[key] = valueOf(section[key]);
     });
   }
   return result;
@@ -4569,17 +4607,22 @@ function isRoistatMessageLead_(text) {
 }
 
 function canonicalRoistatSource_(text, domainValue) {
+  const sourceText = String(text || '').trim().toLowerCase();
+  if (/нераспозн|неизвест|не определ|unknown|unrecognized|undefined|not set|месс[еэ]ндж|месседж|messeng|telegram|телеграм|whats\s*app|ватсап|вотсап|viber|вайбер|сообщ|message/.test(sourceText)) return ROISTAT_SOURCE_OTHER;
   const lower = String((domainValue || '') + ' ' + (text || '')).toLowerCase();
   const domain = normalizeRoistatDomain_(domainValue);
-  if (domain === 'изи-драйв.рф' || lower.indexOf('директ') >= 0) return 'Директ';
+  if (lower.indexOf('директ') >= 0 || lower.indexOf('yandex.direct') >= 0) return 'Директ';
+  if (lower.indexOf('авито') >= 0 || lower.indexOf('avito') >= 0) return 'Авито';
+  if (lower.indexOf('вконтакте') >= 0 || /(^|[\s:_-])vk($|[\s:_-])/.test(lower)) return 'ВКонтакте';
   if (lower.indexOf('2gis') >= 0 || lower.indexOf('2гис') >= 0 || lower.indexOf('2 гис') >= 0 || lower.indexOf('link.2gis') >= 0) return '2ГИС';
   if (lower.indexOf('gkart') >= 0 || lower.indexOf('google') >= 0 || lower.indexOf('гугл') >= 0 || /(^|[:_\s-])go($|[:_\s-])/.test(lower)) return 'Гугл Карты';
-  if (lower.indexOf('ykart') >= 0 || lower.indexOf('ykar') >= 0 || lower.indexOf('geoadv_maps') >= 0 || /(^|[:_\s-])yk($|[:_\s-])/.test(lower) || /(^|[:_\s-])ya($|[:_\s-])/.test(lower)) return 'Яндекс Карты';
+  if (lower.indexOf('ykart') >= 0 || lower.indexOf('ykar') >= 0 || lower.indexOf('geoadv_maps') >= 0 || /яндекс[.\s]*карт|yandex[.\s]*maps/.test(lower) || /(^|[:_\s-])yk($|[:_\s-])/.test(lower) || /(^|[:_\s-])ya($|[:_\s-])/.test(lower)) return 'Яндекс Карты';
   if (lower.indexOf('seo') >= 0 || lower.indexOf('сео') >= 0 || lower.indexOf('сайт') >= 0) return 'SEO';
   if (lower.indexOf('zoon') >= 0) return 'Zoon';
   if (lower.indexOf('прям') >= 0 || lower.indexOf('direct visits') >= 0) return 'Прямые визиты';
   if (lower.indexOf('кеш') >= 0 || lower.indexOf('кэш') >= 0 || lower.indexOf('cashback') >= 0) return 'Рек/кешбэк';
   if (lower.indexOf('друг') >= 0 || lower.indexOf('other') >= 0) return 'Другие';
+  if (domain === 'изи-драйв.рф') return 'Директ';
   return 'Другие';
 }
 
