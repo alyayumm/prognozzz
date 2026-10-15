@@ -3262,6 +3262,7 @@ function SourcesAnalyticsDashboard({
           `Бренд: ${selectedSourceBrand?.label ?? "Все бренды"}`,
           `Период: ${activePeriodLabel.toLowerCase()}`,
           `Включено: ${visibleSources.length} из ${activeSources.length}`,
+          ...(!isBrandSourceMode && scopedRecords.some(hasRoistatSourceAttribution) ? ["Нераспознанное и мессенджеры распределены расчетно"] : []),
           strongestSource?.value ? `Лидер: ${strongestSource.source}` : "FACT по источникам пока пустой",
         ]}
       />

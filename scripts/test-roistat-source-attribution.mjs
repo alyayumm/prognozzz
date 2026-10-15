@@ -16,6 +16,8 @@ function runtime(extra = "", globals = {}) {
     deleted: () => deleted,
     fetch: fetchRoistatAnalyticsData_,
     requests: () => requests,
+    daily: extractRoistatDailyRows_,
+    bulk: upsertRoistatSourceRecords_,
   })`, globals);
 }
 const fields = {
@@ -177,12 +179,25 @@ test("nested API subtotals are not counted again alongside detail rows", () => {
   assert.equal(rows[0].dimensions.city, "МСК АШ");
 });
 
+test("a multi-day API report keeps each interval on its actual date", () => {
+  const api = runtime();
+  const response = { data: [
+    { dateFrom: "2026-09-01T00:00:00+0300", items: [{ dimensions: { source: "SEO" }, metrics: { leads: 7 } }] },
+    { dateFrom: "2026-09-01T21:00:00Z", items: [{ dimensions: { source: "SEO" }, metrics: { leads: 3 } }] },
+  ] };
+  const rows = api.daily(response, fields, { fromDate: "2026-09-01", toDate: "2026-09-02" });
+  assert.equal(rows[0].syncDate, "2026-09-01");
+  assert.equal(rows[1].syncDate, "2026-09-02");
+  assert.equal(rows.reduce((n, row) => n + row.metrics.leads, 0), 10);
+  assert.throws(() => api.daily({ data: [{ items: response.data[0].items }] }, fields, { fromDate: "2026-09-01", toDate: "2026-09-02" }), /дат|интервал/i);
+});
+
 test("writer replaces the imported period, ignores message funnels, and marks estimated attribution", () => {
   const api = runtime(`
     var written = [];
     var deleted = [];
     deleteRoistatSourceRowsInRange_ = function(from, to) { deleted.push([from, to]); };
-    upsertRowsById_ = function(sheet, headers, rows) { written = rows; return { updated: rows.length }; };
+    upsertRoistatSourceRecords_ = function(rows) { written = rows; return { updated: rows.length }; };
     rebuildWeeklySummary_ = function() {};
     readRoistatDirectMonthlyMetrics_ = function() { throw new Error('unrelated manual Direct table'); };
   `, { Utilities: { formatDate: d => d.toISOString().slice(0, 10) } });
@@ -204,4 +219,20 @@ test("writer replaces the imported period, ignores message funnels, and marks es
   assert.equal(api.deleted().length, 1);
   api.write(raw, fields, range, []);
   assert.equal(api.written().filter(r => r.metric === "Лиды").reduce((n, r) => n + r.fact, 0), 110);
+});
+
+test("a large source import writes new rows as one batch", () => {
+  const writes = [];
+  const api = runtime(`
+    getWeeklyReportSpreadsheet_ = function() { return { getSheetByName: () => batchSheet }; };
+    readRowNumbersById_ = function() { return {}; };
+  `, { batchSheet: {
+    getLastRow: () => 1, getMaxRows: () => 2000,
+    getRange: (row, column, height, width) => ({ setValues: values => writes.push({ row, height, width, values }) }),
+  } });
+  const records = Array.from({ length: 1500 }, (_, index) => ({ id: `source-${index}`, date: "2026-09-01", month: "2026-09", week: 1, city: "источники", channel: "SEO", metric: "Лиды", fact: 1 }));
+  assert.equal(api.bulk(records).updated, 1500);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].row, 2);
+  assert.equal(writes[0].values.length, 1500);
 });

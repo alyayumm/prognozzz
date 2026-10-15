@@ -3295,7 +3295,7 @@ function writeRoistatSourceSheetRows_(rawRows, range, warnings) {
 
   deleteRoistatSourceRowsInRange_(range.fromDate, range.toDate);
   const upsertResult = records.length
-    ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, records, dailyRow_)
+    ? upsertRoistatSourceRecords_(records)
     : { updated: 0 };
   unique_(records.map((record) => record.month)).forEach(rebuildWeeklySummary_);
 
@@ -3341,6 +3341,33 @@ function deleteRoistatSourceRowsInRange_(fromDate, toDate) {
   blocks.reverse().forEach((block) => sheet.deleteRows(block.start, block.count));
 }
 
+function upsertRoistatSourceRecords_(records) {
+  const sheet = getWeeklyReportSpreadsheet_().getSheetByName(CONFIG.sheets.daily);
+  const rowsById = readRowNumbersById_(sheet, HEADERS.Data_Daily);
+  const updates = [];
+  const appended = [];
+  records.forEach((record) => {
+    const values = dailyRow_(record);
+    const existing = rowsById[String(values[0])];
+    if (existing && existing.length) updates.push({ row: existing[0], values: values });
+    else appended.push(values);
+  });
+  const blocks = [];
+  updates.sort((a, b) => a.row - b.row).forEach((update) => {
+    const block = blocks[blocks.length - 1];
+    if (block && block.start + block.values.length === update.row) block.values.push(update.values);
+    else blocks.push({ start: update.row, values: [update.values] });
+  });
+  blocks.forEach((block) => sheet.getRange(block.start, 1, block.values.length, HEADERS.Data_Daily.length).setValues(block.values));
+  if (appended.length) {
+    const start = sheet.getLastRow() + 1;
+    const extraRows = start + appended.length - 1 - sheet.getMaxRows();
+    if (extraRows > 0) sheet.insertRowsAfter(sheet.getMaxRows(), extraRows);
+    sheet.getRange(start, 1, appended.length, HEADERS.Data_Daily.length).setValues(appended);
+  }
+  return { updated: records.length };
+}
+
 function syncRoistatRange_(payload, kind) {
   const range = normalizeRoistatDateRange_(payload);
   const fields = getRoistatFieldMap_(kind);
@@ -3353,12 +3380,20 @@ function syncRoistatRange_(payload, kind) {
   try {
     const rawRows = [];
     const warnings = [].concat(fields.warnings || []);
-    dates.forEach((date) => {
-      const requestPayload = buildRoistatAnalyticsPayload_(fields, date, date);
+    if (kind === 'sources') {
+      const requestPayload = buildRoistatAnalyticsPayload_(fields, range.fromDate, range.toDate);
+      requestPayload.interval = '1d';
       const result = fetchRoistatAnalyticsData_(requestPayload, fields, kind);
       warnings.push.apply(warnings, result.warnings || []);
-      rawRows.push.apply(rawRows, extractRoistatRows_(result.response, fields, date));
-    });
+      rawRows.push.apply(rawRows, extractRoistatDailyRows_(result.response, fields, range));
+    } else {
+      dates.forEach((date) => {
+        const requestPayload = buildRoistatAnalyticsPayload_(fields, date, date);
+        const result = fetchRoistatAnalyticsData_(requestPayload, fields, kind);
+        warnings.push.apply(warnings, result.warnings || []);
+        rawRows.push.apply(rawRows, extractRoistatRows_(result.response, fields, date));
+      });
+    }
 
     const result = kind === 'brands'
       ? writeRoistatBrandRows_(rawRows, fields, range, warnings)
@@ -3421,7 +3456,7 @@ function writeRoistatSourceRows_(rawRows, fields, range, warnings) {
 
   deleteRoistatSourceRowsInRange_(range.fromDate, range.toDate);
   const upsertResult = records.length
-    ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, records, dailyRow_)
+    ? upsertRoistatSourceRecords_(records)
     : { updated: 0 };
   unique_(records.map((record) => record.month)).forEach(rebuildWeeklySummary_);
 
@@ -4457,6 +4492,23 @@ function roistatFieldOverride_(name) {
 
 function roistatDimensionOverride_(name) {
   return roistatFieldOverride_(name);
+}
+
+function extractRoistatDailyRows_(response, fields, range) {
+  if (!response || !Array.isArray(response.data)) throw new Error('Roistat: отчет не содержит дневных интервалов. Сохраненные данные не изменены.');
+  const dates = {};
+  const rows = [];
+  response.data.forEach((section) => {
+    const startTime = Date.parse(String(section.dateFrom || ''));
+    // The report is requested in Moscow time (+0300), even if Roistat returns UTC.
+    const date = isFinite(startTime) ? new Date(startTime + 3 * 60 * 60 * 1000).toISOString().slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < range.fromDate || date > range.toDate || dates[date] || !Array.isArray(section.items)) {
+      throw new Error('Roistat: неверные даты дневных интервалов. Сохраненные данные не изменены.');
+    }
+    dates[date] = true;
+    collectRoistatRows_(section.items, {}, rows, fields, date);
+  });
+  return rows;
 }
 
 function extractRoistatRows_(response, fields, syncDate) {
