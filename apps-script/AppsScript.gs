@@ -3730,7 +3730,7 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
   const periodWeights = {};
   Object.keys(aggregated).forEach((key) => {
     const item = aggregated[key];
-    const groupKey = [item.date, item.city].join('|');
+    const groupKey = [String(item.date).slice(0, 7), item.city].join('|');
     if (!groups[groupKey]) groups[groupKey] = { items: [], other: [] };
     groups[groupKey].items.push(item);
     if (item.source === ROISTAT_SOURCE_OTHER) groups[groupKey].other.push(item);
@@ -3749,30 +3749,34 @@ function redistributeRoistatSourceOther_(aggregated, directMonthly, warnings) {
   Object.keys(groups).forEach((groupKey) => {
     const group = groups[groupKey];
     if (!group.other.length) return;
-    group.other.forEach((otherItem) => {
-      ROISTAT_METRIC_KEYS.forEach((metric) => {
-        const amount = Math.round(Number(otherItem[metric] || 0));
-        if (!amount) return;
-        const dailyReceivers = group.items.filter((item) => item.source !== ROISTAT_SOURCE_OTHER && Number(item[metric] || 0) > 0);
-        const periodKey = [String(otherItem.date).slice(0, 7), otherItem.city].join('|');
-        const weights = periodWeights[periodKey] || {};
-        const receivers = dailyReceivers.length
-          ? dailyReceivers.map((item) => ({ source: item.source, weight: Number(item[metric]) }))
-          : Object.keys(weights).filter((source) => weights[source][metric] > 0).map((source) => ({ source: source, weight: weights[source][metric] }));
+    ROISTAT_METRIC_KEYS.forEach((metric) => {
+      const weights = periodWeights[groupKey] || {};
+      [1, -1].forEach((sign) => {
+        const others = group.other.filter((item) => Math.round(Number(item[metric] || 0)) * sign > 0).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        const total = others.reduce((sum, item) => sum + Math.abs(Math.round(Number(item[metric] || 0))), 0);
+        if (!total) return;
+        const receivers = Object.keys(weights).filter((source) => weights[source][metric] > 0).map((source) => ({ source: source, weight: weights[source][metric], remaining: 0 }));
         if (!receivers.length) {
-          throw new Error('Roistat: нет распознанных источников для пропорционального распределения ' + metric + ' (' + otherItem.city + ', ' + otherItem.date + '). Сохраненные данные не изменены.');
+          throw new Error('Roistat: нет распознанных источников для пропорционального распределения ' + metric + ' (' + groupKey + '). Сохраненные данные не изменены.');
         }
-        roistatAllocateAmount_(Math.abs(amount), receivers, (item) => item.weight).forEach((allocation) => {
-          const target = ensureRoistatSourceAggregate_(aggregated, otherItem.date, otherItem.city, allocation.item.source);
-          target[metric] += allocation.value * (amount < 0 ? -1 : 1);
+        // Fix each source's quota for the entire period before assigning dates.
+        // Spending those quotas preserves both monthly shares and daily totals.
+        roistatAllocateAmount_(total, receivers, (item) => item.weight).forEach((allocation) => { allocation.item.remaining = allocation.value; });
+        others.forEach((otherItem) => {
+          const amount = Math.abs(Math.round(Number(otherItem[metric] || 0)));
+          roistatAllocateAmount_(amount, receivers, (item) => item.remaining).forEach((allocation) => {
+            const target = ensureRoistatSourceAggregate_(aggregated, otherItem.date, otherItem.city, allocation.item.source);
+            target[metric] += allocation.value * sign;
+            allocation.item.remaining -= allocation.value;
+          });
+          otherItem[metric] = 0;
+          otherMoved += amount;
         });
-        otherItem[metric] = 0;
-        otherMoved += amount;
       });
     });
   });
 
-  if (otherMoved) warnings.push('Нераспознанное и мессенджеры распределены расчетно по всем остальным источникам, включая Директ и Рек/кешбэк: отдельно по дню, городу и показателю, с сохранением итогов. При отсутствии дневной базы используются исходные доли выбранного периода в том же месяце и городе.');
+  if (otherMoved) warnings.push('Нераспознанное и мессенджеры распределены расчетно по всем остальным источникам, включая Директ и Рек/кешбэк: по исходным долям выбранного периода в каждом месяце и городе, отдельно для каждого показателя. Месячные доли и дневные итоги сохранены с точностью до целочисленного округления.');
 }
 
 function redistributeRoistatBrandOther_(aggregated, directMonthly, warnings) {

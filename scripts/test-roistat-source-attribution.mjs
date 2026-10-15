@@ -15,6 +15,7 @@ function runtime(extra = "", globals = {}) {
     written: () => written,
     deleted: () => deleted,
     fetch: fetchRoistatAnalyticsData_,
+    requests: () => requests,
   })`, globals);
 }
 const fields = {
@@ -53,6 +54,20 @@ test("each metric uses its own original proportions", () => {
   assert.equal(rows["2026-09-01|МСК|SEO"].sales, 15);
 });
 
+test("monthly source proportions survive uneven unknown traffic while daily totals stay unchanged", () => {
+  const api = runtime();
+  const rows = {};
+  for (const [date, seo, direct, other] of [["2026-09-01", 80, 20, 90], ["2026-09-02", 20, 80, 10]]) {
+    api.aggregate(rows, date, "МСК", "SEO").leads = seo;
+    api.aggregate(rows, date, "МСК", "Директ").leads = direct;
+    api.aggregate(rows, date, "МСК", "Другие").leads = other;
+  }
+  api.redistribute(rows, null, []);
+  for (const source of ["SEO", "Директ"]) assert.equal(Object.values(rows).filter(r => r.source === source).reduce((n, r) => n + r.leads, 0), 150);
+  assert.equal(Object.values(rows).filter(r => r.date === "2026-09-01").reduce((n, r) => n + r.leads, 0), 190);
+  assert.equal(Object.values(rows).filter(r => r.date === "2026-09-02").reduce((n, r) => n + r.leads, 0), 110);
+});
+
 test("rounding preserves totals, zero sources stay zero, and cities do not mix", () => {
   const api = runtime();
   const rows = {};
@@ -67,6 +82,37 @@ test("rounding preserves totals, zero sources stay zero, and cities do not mix",
     assert.equal(rows[`2026-09-01|${city}|Яндекс Карты`].leads, 2);
     assert.equal(rows[`2026-09-01|${city}|Директ`].leads, 0);
     assert.equal(Object.values(rows).filter(r => r.city === city).reduce((n, r) => n + r.leads, 0), 5);
+  }
+});
+
+test("source quotas preserve monthly proportions and every daily total across varied inputs", () => {
+  const api = runtime();
+  for (let scenario = 1; scenario <= 40; scenario += 1) {
+    const rows = {};
+    const dailyTotals = {};
+    const original = { SEO: 0, Директ: 0, "Рек/кешбэк": 0 };
+    let otherTotal = 0;
+    for (let day = 1; day <= 8; day += 1) {
+      const date = `2026-09-${String(day).padStart(2, "0")}`;
+      dailyTotals[date] = 0;
+      for (const [index, source] of Object.keys(original).entries()) {
+        const value = (scenario * (index + 3) + day * 7) % 19;
+        api.aggregate(rows, date, "МСК", source).leads = value;
+        original[source] += value;
+        dailyTotals[date] += value;
+      }
+      const other = (scenario * day) % 31;
+      api.aggregate(rows, date, "МСК", "Другие").leads = other;
+      otherTotal += other;
+      dailyTotals[date] += other;
+    }
+    api.redistribute(rows, null, []);
+    const knownTotal = Object.values(original).reduce((n, value) => n + value, 0);
+    for (const [source, before] of Object.entries(original)) {
+      const after = Object.values(rows).filter(row => row.source === source).reduce((n, row) => n + row.leads, 0);
+      assert.ok(Math.abs(after - before - otherTotal * before / knownTotal) < 1);
+    }
+    for (const [date, expected] of Object.entries(dailyTotals)) assert.equal(Object.values(rows).filter(row => row.date === date).reduce((n, row) => n + row.leads, 0), expected);
   }
 });
 
@@ -116,6 +162,8 @@ test("temporary Roistat errors retry the identical complete report without dropp
     };
   `, { Utilities: { sleep() {} } });
   assert.ok(api.fetch({ dimensions: ["source", "city"], metrics: ["leads", "sales"] }, fields, "sources").response);
+  assert.equal(api.requests().length, 2);
+  assert.equal(api.requests()[0], api.requests()[1]);
 });
 
 test("nested API subtotals are not counted again alongside detail rows", () => {
