@@ -767,14 +767,15 @@ function getSalesDepartmentDashboard_(payload) {
     : salesStaticPlanByManager_();
   const planManagerNames = salesUniqueManagers_(planSnapshot.managerNames.length ? planSnapshot.managerNames : Object.keys(planByManager));
   const authoritativeManagerNames = planManagerNames.length ? planManagerNames : salesUniqueManagers_(config.managers);
+  const cachedLeads = salesReadCachedAmoLeadsForMonth_(config, warnings);
   const amo = salesReadAmoDepartmentData_(Object.assign({}, config, {
     managers: authoritativeManagerNames,
     restrictManagers: true,
-  }), warnings);
+  }), warnings, cachedLeads);
   const departmentAmo = salesReadAmoDepartmentData_(Object.assign({}, config, {
     managers: authoritativeManagerNames,
     restrictManagers: false,
-  }), []);
+  }), [], cachedLeads);
   const manualDeals = salesReadManualDeals_(config, warnings);
   const manualDealsByManager = manualDeals.byManager;
   const manualActualDealsByManager = manualDeals.actualByManager;
@@ -1009,7 +1010,7 @@ function salesDepartmentConfigForRequest_(payload) {
   return base;
 }
 
-function salesReadAmoDepartmentData_(config, warnings) {
+function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
   const byManager = {};
   const daily = salesCreateAmoDaily_(config);
   let dictionaries = { users: {}, pipelines: {}, statuses: {} };
@@ -1026,7 +1027,7 @@ function salesReadAmoDepartmentData_(config, warnings) {
   };
 
   try {
-    leads = salesReadCachedAmoLeadsForMonth_(config, warnings);
+    leads = Array.isArray(cachedLeads) ? cachedLeads : salesReadCachedAmoLeadsForMonth_(config, warnings);
     if (!leads.length) {
       warnings.push('amoCRM: кэш сделок пустой. Нажмите обновить, чтобы сохранить слой AmoCRM_Raw_Leads.');
     }
@@ -1396,17 +1397,34 @@ function readAmoCrmRawLeadObjectsFast_() {
     'lossReasonId',
     'lossReasonName',
   ];
+  const ranges = [];
+  required.map((header) => ({ header: header, index: headers.indexOf(header) }))
+    .filter((column) => column.index >= 0)
+    .sort((left, right) => left.index - right.index)
+    .forEach((column) => {
+      const previous = ranges[ranges.length - 1];
+      if (previous && column.index === previous.end + 1) {
+        previous.end = column.index;
+        previous.columns.push(column);
+      } else {
+        ranges.push({ start: column.index, end: column.index, columns: [column] });
+      }
+    });
   const columns = {};
-  required.forEach((header) => {
-    const index = headers.indexOf(header);
-    if (index >= 0) columns[header] = sheet.getRange(2, index + 1, rowCount, 1).getValues();
+  // Read adjacent scalar columns together, excluding large JSON and contact payloads.
+  ranges.forEach((range) => {
+    const values = sheet.getRange(2, range.start + 1, rowCount, range.end - range.start + 1).getValues();
+    range.columns.forEach((column) => {
+      columns[column.header] = { values: values, offset: column.index - range.start };
+    });
   });
   const rows = [];
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
     const row = {};
     let hasValue = false;
     required.forEach((header) => {
-      const value = columns[header] ? columns[header][rowIndex][0] : '';
+      const column = columns[header];
+      const value = column ? column.values[rowIndex][column.offset] : '';
       row[header] = value;
       if (value !== '' && value !== null && value !== undefined) hasValue = true;
     });

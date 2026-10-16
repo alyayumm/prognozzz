@@ -1897,7 +1897,9 @@ function SalesDepartmentDashboard({
         </button>
         <span>
           {integrationsEnabled
-            ? isSalesRefreshing ? "Читаю свежие данные из amoCRM..." : "Показаны свежие данные из amoCRM."
+            ? isSalesRefreshing ? "Читаю данные отдела продаж..."
+              : loadError ? "Не удалось обновить данные отдела продаж."
+              : snapshot ? "Данные загружены из сохраненного слоя amoCRM." : "Данные отдела продаж пока не загружены."
             : "Внешние интеграции отдела продаж временно отключены, чтобы не замедлять сайт."}
         </span>
       </div>
