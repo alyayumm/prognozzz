@@ -1565,6 +1565,9 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 7px;
   padding-inline: 13px;
 }
+.month-daily-refresh {
+  flex-wrap: wrap;
+}
 .sales-refresh-button:disabled {
   opacity: 0.62;
   cursor: wait;

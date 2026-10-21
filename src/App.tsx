@@ -685,7 +685,7 @@ export default function App() {
     return persistDailyValues(values, message);
   }
 
-  async function refreshSharedSnapshotAfterWrite() {
+  async function refreshMainReportSnapshot() {
     const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
     if (snapshot.records.length) {
       setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
@@ -695,7 +695,10 @@ export default function App() {
       }
       latestRecordDateRef.current = snapshot.latestActualDate;
     }
+  }
 
+  async function refreshSharedSnapshotAfterWrite() {
+    await refreshMainReportSnapshot();
     const brandSnapshot = await loadBrandAnalyticsSnapshot();
     setBrandData(brandSnapshot);
     setBrandLoadMessage(
@@ -788,9 +791,11 @@ export default function App() {
     setSavedMessage("Загружаю сделки amoCRM за выбранный период...");
     try {
       const result = await callReportApi<AmoCrmSyncResult>("syncAmoCrmLeads", { fromDate, toDate }, writePassword);
-      setSavedMessage(result.message);
+      await refreshMainReportSnapshot();
+      setSavedMessage(`${result.message} Лиды, квалы и продажи обновлены на экране.`);
     } catch (error) {
       setSavedMessage(`amoCRM не загрузилась: ${getErrorMessage(error)}`);
+      throw error;
     } finally {
       setIsSavingDaily(false);
     }
@@ -1000,6 +1005,8 @@ export default function App() {
                 trafficMode={trafficMode}
                 todayIso={todayIso}
                 highlightedEventId={highlightedDailyEventId}
+                onRefresh={syncAmoCrmLeads}
+                isRefreshing={isSavingDaily}
               />
             )}
             {mode === "leadDaily" && (
@@ -1591,6 +1598,8 @@ function MonthDailyDashboard({
   trafficMode,
   todayIso,
   highlightedEventId,
+  onRefresh,
+  isRefreshing,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -1602,16 +1611,20 @@ function MonthDailyDashboard({
   trafficMode: TrafficMode;
   todayIso: string;
   highlightedEventId: string | null;
+  onRefresh: (fromDate: string, toDate: string) => Promise<void>;
+  isRefreshing: boolean;
 }) {
   const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso, trafficMode));
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
   const status = getPeriodStatus(totals);
+  const latestFactDate = getLatestActualRecordDate(records);
+  const syncToDate = getSalesDepartmentSyncToDate(config);
 
   return (
     <div className="page-stack month-daily-dashboard">
       <ExecutiveSummary
         status={status}
-        eyebrow={`${config.label} · ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope} · обновлено ${formatDay(todayIso)}`}
+        eyebrow={`${config.label} · ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope} · ${latestFactDate ? `факт до ${formatDay(latestFactDate)}` : "нет факта"}`}
         title="Факт и прогноз по дням выбранного месяца"
         subtitle="Дневная динамика факта, прогнозный коридор Optima и события по датам."
         facts={[
@@ -1622,6 +1635,23 @@ function MonthDailyDashboard({
           monthTiming.isClosed ? "Месяц завершен" : `Осталось дней: ${monthTiming.left}`,
         ]}
       />
+
+      <div className="sales-refresh-row month-daily-refresh">
+        <button
+          className="secondary-button sales-refresh-button"
+          type="button"
+          disabled={isRefreshing || !syncToDate}
+          onClick={() => {
+            if (syncToDate) void onRefresh(`${config.monthKey}-01`, syncToDate).catch(() => {
+              // The shared report notice displays the import error.
+            });
+          }}
+        >
+          <RefreshCw size={17} />
+          {isRefreshing ? "Обновляю из amoCRM..." : "Обновить из amoCRM"}
+        </button>
+        <span aria-live="polite">{isRefreshing ? "Обновляю лиды, квалы и продажи за месяц" : "Лиды, квалы и продажи за выбранный месяц"}</span>
+      </div>
 
       <section className="daily-kpi-summary" aria-label="Краткие показатели месяца по дням">
         {summaries.map((summary) => (

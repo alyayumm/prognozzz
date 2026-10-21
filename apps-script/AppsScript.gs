@@ -1265,7 +1265,7 @@ function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionarie
   if (!pipelineIds.length) {
     const available = Object.keys(dictionaries.pipelines || {}).map((pipelineId) => dictionaries.pipelines[pipelineId]).filter(Boolean).slice(0, 12);
     warnings.push('amoCRM: не найдены воронки МСК АШ / СПБ АШ. Доступные воронки: ' + (available.join(', ') || 'пусто') + '.');
-    return [];
+    throw new Error(warnings[warnings.length - 1]);
   }
 
   function addRows(rows) {
@@ -1285,6 +1285,7 @@ function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionarie
       addRows(closedRows);
     } catch (error) {
       warnings.push('amoCRM: фильтр по дате завершения не сработал для воронки ' + (dictionaries.pipelines[pipelineId] || pipelineId) + ', продажи считаются по сделкам из периода создания.');
+      throw error;
     }
   });
 
@@ -1317,7 +1318,7 @@ function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, m
       response = fetchAmoCrmEndpoint_('/api/v4/leads', params);
     } catch (error) {
       if (warnings) warnings.push('amoCRM: страница ' + page + ' не загрузилась (' + fieldName + ':' + pipelineId + '), сохранено уже ' + result.length + ' сделок: ' + salesErrorMessage_(error));
-      break;
+      throw new Error('amoCRM: неполная выгрузка ' + fieldName + ', страница ' + page + '. ' + sanitizeAmoCrmText_(salesErrorMessage_(error)));
     }
     const leads = response && response._embedded && Array.isArray(response._embedded.leads)
       ? response._embedded.leads
@@ -1327,6 +1328,7 @@ function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, m
     if (!response._links || !response._links.next || !response._links.next.href) break;
     if (page === safeMaxPages && warnings) {
       warnings.push('amoCRM: загрузка ' + fieldName + ' остановлена по лимиту страниц, уже загружено сделок ' + result.length + '.');
+      throw new Error(warnings[warnings.length - 1]);
     }
   }
   return result;
@@ -5028,15 +5030,36 @@ function upsertRowsById_(sheetName, headers, records, mapRow) {
     });
   }
 
+  const updates = {};
+  const additions = new Map();
   records.forEach((record) => {
     const values = mapRow(record);
     const id = values[0];
     if (rowById[id]) {
-      sheet.getRange(rowById[id], 1, 1, headers.length).setValues([values]);
+      updates[rowById[id]] = values;
     } else {
-      sheet.appendRow(values);
+      additions.set(id, values);
     }
   });
+
+  const rowNumbers = Object.keys(updates).map(Number).sort((a, b) => a - b);
+  for (let index = 0; index < rowNumbers.length;) {
+    const start = rowNumbers[index];
+    const values = [updates[start]];
+    index += 1;
+    while (index < rowNumbers.length && rowNumbers[index] === start + values.length) {
+      values.push(updates[rowNumbers[index]]);
+      index += 1;
+    }
+    sheet.getRange(start, 1, values.length, headers.length).setValues(values);
+  }
+  if (additions.size) {
+    const values = Array.from(additions.values());
+    const start = sheet.getLastRow() + 1;
+    const requiredRows = start + values.length - 1;
+    if (requiredRows > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+    sheet.getRange(start, 1, values.length, headers.length).setValues(values);
+  }
 
   return { updated: records.length };
 }
