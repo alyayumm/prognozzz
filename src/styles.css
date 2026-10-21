@@ -1568,6 +1568,12 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
 .month-daily-refresh {
   flex-wrap: wrap;
 }
+.month-daily-refresh .sales-refresh-button {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  color: var(--blue-dark);
+}
 .sales-refresh-button:disabled {
   opacity: 0.62;
   cursor: wait;
