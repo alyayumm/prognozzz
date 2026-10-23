@@ -42,6 +42,30 @@ test('a failed amo import cannot appear successful to the refresh button', async
   assert.deepEqual(calls, []);
 });
 
+test('post-import refresh requires the shared service data and rejects an empty snapshot', async () => {
+  const refresh = runInNewContext(`${appFunction('refreshMainReportSnapshot')}; refreshMainReportSnapshot;`, {
+    seedMonthConfigs: [],
+    loadPublicSheetSnapshot: async (_, options) => {
+      assert.equal(options?.requireServiceSheets, true);
+      return { records: [] };
+    },
+  });
+  await assert.rejects(refresh(), /пуст/);
+});
+
+test('post-import reads cannot silently fall back to an older city sheet', async () => {
+  const source = readFileSync(new URL('../src/api/publicSheetApi.ts', import.meta.url), 'utf8');
+  const file = ts.createSourceFile('publicSheetApi.ts', source, ts.ScriptTarget.Latest, true);
+  const declaration = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'loadPublicSheetSnapshot');
+  const js = ts.transpileModule(declaration.getText(file).replace('export ', ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const read = runInNewContext(`${js}; loadPublicSheetSnapshot;`, {
+    loadServiceSheetSnapshot: async () => { throw new Error('service unavailable'); },
+    sourceSheets: [{ sheetName: 'legacy' }],
+    loadGvizSheet: async () => { throw new Error('legacy should not be read'); },
+  });
+  await assert.rejects(read([], { requireServiceSheets: true }), /service unavailable/);
+});
+
 function batchStore(initial, maxRows = initial.length) {
   const rows = initial.map(row => [...row]);
   const writes = [];

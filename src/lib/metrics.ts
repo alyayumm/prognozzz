@@ -114,8 +114,8 @@ export function trafficModeLabel(trafficMode: TrafficMode): string {
 
 export function getPeriodStatus(totals: MetricTotals) {
   const deviations = Object.values(totals)
-    .filter((item) => item.plan > 0)
-    .map((item) => ((item.fact - item.plan) / item.plan) * 100);
+    .filter((item) => item.forecast > 0)
+    .map((item) => ((item.fact - item.forecast) / item.forecast) * 100);
 
   if (!deviations.length) {
     return { label: "", tone: "neutral" as const };
@@ -124,15 +124,30 @@ export function getPeriodStatus(totals: MetricTotals) {
   const minDeviation = Math.min(...deviations);
   const maxDeviation = Math.max(...deviations);
 
-  if (minDeviation <= -5) {
+  if (minDeviation < -5) {
     return { label: "сильное отклонение", tone: "danger" as const };
   }
 
-  if (maxDeviation >= 5) {
+  if (maxDeviation > 5) {
     return { label: "сильное отклонение", tone: "good" as const };
   }
 
   return { label: "", tone: "neutral" as const };
+}
+
+export function getRecordsPeriodStatus(records: DailyRecord[], trafficMode: TrafficMode = "op") {
+  // A partial month must be compared with the forecast for the same imported dates.
+  const lastFactByCityMonth = new Map<string, string>();
+  const periodKey = (record: DailyRecord) => `${record.city}|${record.date.slice(0, 7)}`;
+  for (const record of records) {
+    if (record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0) {
+      const key = periodKey(record);
+      if (record.date > (lastFactByCityMonth.get(key) ?? "")) lastFactByCityMonth.set(key, record.date);
+    }
+  }
+  const comparableRecords = records.filter((record) => record.date <= (lastFactByCityMonth.get(periodKey(record)) ?? ""));
+  const metricKeys = [...new Set(records.map((record) => record.metric))];
+  return getPeriodStatus(applyTrafficModeToTotals(buildMetricTotals(comparableRecords, metricKeys), trafficMode));
 }
 
 export function getMonthTiming(monthDates: string[], todayIso: string) {

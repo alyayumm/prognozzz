@@ -62,6 +62,7 @@ import {
   filterRecordsByScope,
   getMonthTiming,
   getPeriodStatus,
+  getRecordsPeriodStatus,
   metricFactForTraffic,
   netFact,
   omQualifiedValue,
@@ -428,8 +429,18 @@ export default function App() {
       ? "Подключаю Google Sheets..."
       : "Локальный режим: изменения видны только в этом браузере и не обновляют общий сайт.",
   );
-  const todayIso = useMemo(getTodayIso, []);
+  const [todayIso, setTodayIso] = useState(getTodayIso);
   const writePassword = auth.trim() || fallbackAdminPassword;
+
+  useEffect(() => {
+    const updateToday = () => setTodayIso(getTodayIso());
+    const timer = window.setInterval(updateToday, 60000);
+    window.addEventListener("focus", updateToday);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", updateToday);
+    };
+  }, []);
 
   useEffect(() => {
     saveAdminPassword(auth);
@@ -484,7 +495,7 @@ export default function App() {
   const metricTotals = useMemo(() => mergeTotals(weeks), [weeks]);
   const displayMetricTotals = useMemo(() => applyTrafficModeToTotals(metricTotals, trafficMode), [metricTotals, trafficMode]);
   const conversions = useMemo(() => buildConversions(metricTotals, trafficMode), [metricTotals, trafficMode]);
-  const periodStatus = useMemo(() => getPeriodStatus(displayMetricTotals), [displayMetricTotals]);
+  const periodStatus = useMemo(() => getRecordsPeriodStatus(currentMonthRecords, trafficMode), [currentMonthRecords, trafficMode]);
   const monthTiming = useMemo(() => getMonthTiming(monthDates, todayIso), [monthDates, todayIso]);
   const allMonths = useMemo(
     () => buildOverallMonths(reportRecords, reportEvents, monthConfigs).map((month) => ({
@@ -686,15 +697,14 @@ export default function App() {
   }
 
   async function refreshMainReportSnapshot() {
-    const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
-    if (snapshot.records.length) {
-      setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
-      setRecords(mergePublicSheetRecords([], snapshot.records));
-      if (snapshot.eventsLoaded) {
-        setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
-      }
-      latestRecordDateRef.current = snapshot.latestActualDate;
+    const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs, { requireServiceSheets: true });
+    if (!snapshot.records.length) throw new Error("Общий отчёт вернул пустые данные. Повторите обновление.");
+    setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
+    setRecords(mergePublicSheetRecords([], snapshot.records));
+    if (snapshot.eventsLoaded) {
+      setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
     }
+    latestRecordDateRef.current = snapshot.latestActualDate;
   }
 
   async function refreshSharedSnapshotAfterWrite() {
@@ -941,12 +951,20 @@ export default function App() {
           selectedMonthKey={selectedMonthKey}
           selectedScope={selectedScope}
           trafficMode={trafficMode}
-          todayIso={todayIso}
+          latestFactDate={getLatestActualRecordDate(currentMonthRecords)}
           selectMonth={selectMonth}
           setSelectedScope={setSelectedScope}
           setTrafficMode={setTrafficMode}
           onCreateMonth={openCreateMonth}
           onExport={printCurrentPage}
+          onRefreshAmo={["allMonths", "month", "monthDaily", "week"].includes(mode) ? () => {
+            const toDate = getSalesDepartmentSyncToDate(selectedMonthConfig);
+            if (toDate) void syncAmoCrmLeads(`${selectedMonthConfig.monthKey}-01`, toDate).catch(() => {
+              // The shared notice displays the import error.
+            });
+          } : undefined}
+          isRefreshing={isSavingDaily}
+          canRefreshAmo={Boolean(getSalesDepartmentSyncToDate(selectedMonthConfig))}
         />
 
         <section className="notice">
@@ -961,6 +979,7 @@ export default function App() {
             {mode === "allMonths" && (
               <AllMonthsDashboard
                 months={allMonths}
+                records={reportRecords}
                 selectedMetric={selectedMetric}
                 setSelectedMetric={setSelectedMetric}
                 selectedScope={selectedScope}
@@ -1005,8 +1024,6 @@ export default function App() {
                 trafficMode={trafficMode}
                 todayIso={todayIso}
                 highlightedEventId={highlightedDailyEventId}
-                onRefresh={syncAmoCrmLeads}
-                isRefreshing={isSavingDaily}
               />
             )}
             {mode === "leadDaily" && (
@@ -1208,12 +1225,15 @@ function Topbar({
   selectedMonthKey,
   selectedScope,
   trafficMode,
-  todayIso,
+  latestFactDate,
   selectMonth,
   setSelectedScope,
   setTrafficMode,
   onCreateMonth,
   onExport,
+  onRefreshAmo,
+  isRefreshing,
+  canRefreshAmo,
 }: {
   title: string;
   subtitle: string;
@@ -1221,12 +1241,15 @@ function Topbar({
   selectedMonthKey: string;
   selectedScope: ReportScope;
   trafficMode: TrafficMode;
-  todayIso: string;
+  latestFactDate: string | null;
   selectMonth: (monthKey: string) => void;
   setSelectedScope: (scope: ReportScope) => void;
   setTrafficMode: (mode: TrafficMode) => void;
   onCreateMonth: () => void;
   onExport: () => void;
+  onRefreshAmo?: () => void;
+  isRefreshing: boolean;
+  canRefreshAmo: boolean;
 }) {
   return (
     <header className="topbar">
@@ -1247,7 +1270,20 @@ function Topbar({
         </label>
         <CityToggle value={selectedScope} onChange={setSelectedScope} />
         <TrafficToggle value={trafficMode} onChange={setTrafficMode} />
-        <span className="updated-pill">обновлено {formatDay(todayIso)}</span>
+        {onRefreshAmo && (
+          <button
+            className="report-refresh-button sales-refresh-button"
+            type="button"
+            disabled={isRefreshing || !canRefreshAmo}
+            onClick={onRefreshAmo}
+            title="Загрузить лиды, квалы и продажи за выбранный месяц и обновить отчёт"
+            aria-busy={isRefreshing}
+          >
+            <RefreshCw size={17} />
+            {isRefreshing ? "Обновляю из amoCRM..." : "Обновить из amoCRM"}
+          </button>
+        )}
+        <span className="updated-pill">{latestFactDate ? `Факт по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
@@ -1275,6 +1311,7 @@ function CityToggle({ value, onChange }: { value: ReportScope; onChange: (value:
 
 function AllMonthsDashboard({
   months,
+  records,
   selectedMetric,
   setSelectedMetric,
   selectedScope,
@@ -1283,6 +1320,7 @@ function AllMonthsDashboard({
   events,
 }: {
   months: Array<{ config: MonthConfig; dates: string[]; events: EventItem[]; weeks: WeekSummary[] }>;
+  records: DailyRecord[];
   selectedMetric: Metric;
   setSelectedMetric: (metric: Metric) => void;
   selectedScope: ReportScope;
@@ -1292,7 +1330,7 @@ function AllMonthsDashboard({
 }) {
   const rawTotals = mergeTotals(months.flatMap((month) => month.weeks));
   const totals = applyTrafficModeToTotals(rawTotals, trafficMode);
-  const status = getPeriodStatus(totals);
+  const status = getRecordsPeriodStatus(records, trafficMode);
   const insights = buildAttentionItems(totals, events);
   const worstMonth = pickMonthByCompletion(months, "worst", trafficMode);
   const monthRange = getMonthRangeLabel(months);
@@ -1598,8 +1636,6 @@ function MonthDailyDashboard({
   trafficMode,
   todayIso,
   highlightedEventId,
-  onRefresh,
-  isRefreshing,
 }: {
   config: MonthConfig;
   totals: MetricTotals;
@@ -1611,14 +1647,11 @@ function MonthDailyDashboard({
   trafficMode: TrafficMode;
   todayIso: string;
   highlightedEventId: string | null;
-  onRefresh: (fromDate: string, toDate: string) => Promise<void>;
-  isRefreshing: boolean;
 }) {
   const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso, trafficMode));
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
-  const status = getPeriodStatus(totals);
+  const status = getRecordsPeriodStatus(records, trafficMode);
   const latestFactDate = getLatestActualRecordDate(records);
-  const syncToDate = getSalesDepartmentSyncToDate(config);
 
   return (
     <div className="page-stack month-daily-dashboard">
@@ -1635,23 +1668,6 @@ function MonthDailyDashboard({
           monthTiming.isClosed ? "Месяц завершен" : `Осталось дней: ${monthTiming.left}`,
         ]}
       />
-
-      <div className="sales-refresh-row month-daily-refresh">
-        <button
-          className="secondary-button sales-refresh-button"
-          type="button"
-          disabled={isRefreshing || !syncToDate}
-          onClick={() => {
-            if (syncToDate) void onRefresh(`${config.monthKey}-01`, syncToDate).catch(() => {
-              // The shared report notice displays the import error.
-            });
-          }}
-        >
-          <RefreshCw size={17} />
-          {isRefreshing ? "Обновляю из amoCRM..." : "Обновить из amoCRM"}
-        </button>
-        <span aria-live="polite">{isRefreshing ? "Обновляю лиды, квалы и продажи за месяц" : "Лиды, квалы и продажи за выбранный месяц"}</span>
-      </div>
 
       <section className="daily-kpi-summary" aria-label="Краткие показатели месяца по дням">
         {summaries.map((summary) => (
@@ -3134,7 +3150,7 @@ function WeekDashboard({
 }) {
   const totals = applyTrafficModeToTotals(week.totals, trafficMode);
   const conversions = buildConversions(week.totals, trafficMode);
-  const status = getPeriodStatus(totals);
+  const status = getRecordsPeriodStatus(records.filter((record) => record.date >= week.startDate && record.date <= week.endDate), trafficMode);
   const insights = buildAttentionItems(totals, events);
 
   return (
@@ -3184,7 +3200,7 @@ function MessagesDashboard({ records, selectedMonthKey }: { records: DailyRecord
   return (
     <div className="page-stack">
       <ExecutiveSummary
-        status={getPeriodStatus(totals)}
+        status={getRecordsPeriodStatus(messageRecords)}
         eyebrow="Отдельная логика сообщений"
         title="Сообщения"
         facts={["План", "Факт", "Прогноз Optima", "Динамика"]}
@@ -5619,7 +5635,7 @@ function ExecutiveSummary({
         <h2>{title}</h2>
         {subtitle && <p>{subtitle}</p>}
       </div>
-      {status.label && <strong>{status.label}</strong>}
+      {status.label && <strong title="Факт отличается от прогноза за те же даты более чем на 5%">{status.label}</strong>}
       <div className="summary-facts">
         {facts.map((fact) => <span key={fact}>{fact}</span>)}
       </div>

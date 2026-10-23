@@ -1565,14 +1565,18 @@ h1 { font-size: 30px; line-height: 1.05; font-weight: 780; color: var(--navy); }
   gap: 7px;
   padding-inline: 13px;
 }
-.month-daily-refresh {
-  flex-wrap: wrap;
-}
-.month-daily-refresh .sales-refresh-button {
+.report-refresh-button {
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background: var(--surface-strong);
   color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.report-refresh-button:hover:not(:disabled) {
+  border-color: var(--blue);
+  background: var(--soft-blue);
 }
 .sales-refresh-button:disabled {
   opacity: 0.62;

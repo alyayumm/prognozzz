@@ -88,13 +88,18 @@ export type PublicSheetSnapshot = {
   latestActualDate: string | null;
 };
 
-export async function loadPublicSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Promise<PublicSheetSnapshot> {
+export async function loadPublicSheetSnapshot(
+  fallbackMonthConfigs: MonthConfig[],
+  options: { requireServiceSheets?: boolean } = {},
+): Promise<PublicSheetSnapshot> {
   try {
     const serviceSnapshot = await loadServiceSheetSnapshot(fallbackMonthConfigs);
     if (serviceSnapshot.monthConfigs.length && serviceSnapshot.records.length) {
       return serviceSnapshot;
     }
-  } catch {
+    if (options.requireServiceSheets) throw new Error("Общий отчёт вернул пустые данные. Повторите обновление.");
+  } catch (error) {
+    if (options.requireServiceSheets) throw error;
     // If service sheets are not published yet, keep the old city-sheet import path alive.
   }
 
