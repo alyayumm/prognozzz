@@ -1579,7 +1579,7 @@ function buildMonthPotentialRevenue(
   selectedScope: ReportScope,
 ): number {
   const scopedSourceRecords = getSourceRecordsForCity(
-    sourceRecords.filter((record) => record.date.startsWith(monthKey)),
+    getPreferredSourceRecords(sourceRecords.filter((record) => record.date.startsWith(monthKey))),
     selectedScope,
   ).filter(isSourceValueRecord);
   const scopedPerformanceRows = performanceRows.filter((row) => {
@@ -8679,7 +8679,7 @@ function getSourceRecordsForCity(records: DailyRecord[], city: SourceCityFilter)
 }
 
 function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRecord[] {
-  const adjusted = records.map((record) => ({ ...record }));
+  const adjusted = getPreferredSourceRecords(records).map((record) => ({ ...record }));
   const targetByKey = new Map<string, number>();
   const sourceByKey = new Map<string, number>();
   const recipientsByKey = new Map<string, Array<{ index: number; weight: number }>>();
@@ -8728,6 +8728,16 @@ function reconcileSourceResidualsToReportFacts(records: DailyRecord[]): DailyRec
   });
 
   return adjusted;
+}
+
+function getPreferredSourceRecords(records: DailyRecord[]): DailyRecord[] {
+  const groupKey = (record: DailyRecord) => `${record.date}|${getSourceRecordCityScope(record)}|${record.metric}`;
+  const importedGroups = new Set(records
+    .filter((record) => isSourceValueRecord(record) && hasRoistatSourceAttribution(record))
+    .map(groupKey));
+  return records.filter((record) => !isSourceValueRecord(record)
+    || hasRoistatSourceAttribution(record)
+    || !importedGroups.has(groupKey(record)));
 }
 
 function hasRoistatSourceAttribution(record: DailyRecord): boolean {

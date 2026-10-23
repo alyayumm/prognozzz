@@ -9,7 +9,7 @@ const tree = ts.createSourceFile("App.tsx", source, ts.ScriptTarget.Latest, true
 const names = ["normalizeSourceName", "canonicalSourceName", "sourceNameEquals", "reconcileSourceResidualsToReportFacts",
   "hasRoistatSourceAttribution", "isEditableSourceCity", "isDistributedSourceRecord", "canReceiveSourceResidual",
   "sourceResidualGroupKey", "allocateIntegerAmount", "getSourceRecordCityScope", "sourceCityFromCode",
-  "isRoistatDirectOverlayRecord", "applyDirectMonthlyRowsToSourceBuckets", "findSourceLabel"];
+  "isRoistatDirectOverlayRecord", "applyDirectMonthlyRowsToSourceBuckets", "findSourceLabel", "getPreferredSourceRecords"];
 const functions = tree.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name?.text)).map(n => n.getText(tree)).join("\n");
 const js = ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const api = runInNewContext(`
@@ -35,6 +35,26 @@ test("the UI retains Roistat totals instead of topping them up to amoCRM totals"
   const result = api.reconcile(rows);
   assert.equal(result[1].fact, 88);
   assert.equal(result[2].fact, 22);
+});
+
+test("a fresh import replaces overlapping manual Avito facts without changing saved rows", () => {
+  const manual = { ...imported('Авито', 23), comment: 'Авито ручной ввод: 01-03.09 [SOURCE_CITY=МСК]' };
+  const rows = [imported('Авито', 15), imported('SEO', 85), manual];
+  const result = api.reconcile(rows);
+  assert.equal(result.reduce((sum, row) => sum + row.fact, 0), 100);
+  assert.equal(rows.length, 3);
+  assert.equal(manual.fact, 23);
+});
+
+test("manual facts outside the imported city, date or metric remain available", () => {
+  const manual = { ...imported('Авито', 23), comment: '[SOURCE_CITY=МСК] ручной ввод' };
+  const rows = [imported('SEO', 100), manual,
+    { ...manual, date: '2026-09-02' },
+    { ...manual, metric: 'Квалы' },
+    { ...manual, comment: '[SOURCE_CITY=СПБ] ручной ввод' }];
+  const result = api.reconcile(rows);
+  assert.equal(result.length, 4);
+  assert.equal(result.reduce((sum, row) => sum + row.fact, 0), 169);
 });
 
 test("Direct with the new attribution is a visible source record", () => {
