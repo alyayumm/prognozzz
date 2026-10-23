@@ -560,7 +560,7 @@ export default function App() {
 
     async function loadFromPublicSheet() {
       try {
-        const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs);
+        const snapshot = await loadPublicSheetSnapshot(seedMonthConfigs, { requireServiceSheets: true });
         if (cancelled || !snapshot.records.length) return;
 
         setMonthConfigs(dedupeMonthConfigs(snapshot.monthConfigs.map(normalizeMonthConfig)));
@@ -576,7 +576,7 @@ export default function App() {
         );
       } catch (error) {
         if (!cancelled) {
-          setSavedMessage(`Google-таблица пока не загрузилась напрямую: ${getErrorMessage(error)}. Показываю опубликованный снимок.`);
+          setSavedMessage(`Google-таблица пока не загрузилась напрямую: ${getErrorMessage(error)}. Показываю последние сохранённые данные.`);
         }
       }
     }

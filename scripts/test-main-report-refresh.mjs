@@ -66,6 +66,21 @@ test('post-import reads cannot silently fall back to an older city sheet', async
   await assert.rejects(read([], { requireServiceSheets: true }), /service unavailable/);
 });
 
+test('initial and background refresh preserve saved data during a service outage', async () => {
+  let options;
+  const writes = [];
+  const refresh = runInNewContext(`${appFunction('loadFromPublicSheet')}; loadFromPublicSheet;`, {
+    cancelled: false, seedMonthConfigs: [],
+    loadPublicSheetSnapshot: async (_, value) => { options = value; throw new Error('temporary outage'); },
+    setRecords: () => writes.push('records'), setMonthConfigs: () => writes.push('months'),
+    setSavedMessage: message => writes.push(message), getErrorMessage: error => error.message,
+  });
+  await refresh();
+  assert.equal(options?.requireServiceSheets, true);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0], /temporary outage/);
+});
+
 function batchStore(initial, maxRows = initial.length) {
   const rows = initial.map(row => [...row]);
   const writes = [];

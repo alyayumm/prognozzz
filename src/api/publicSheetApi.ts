@@ -154,7 +154,15 @@ async function loadOptionalGvizSheet(sheetName: string): Promise<GvizTable | nul
   }
 }
 
-function loadGvizSheet(sheetName: string): Promise<GvizTable> {
+async function loadGvizSheet(sheetName: string): Promise<GvizTable> {
+  try {
+    return await loadGvizSheetOnce(sheetName);
+  } catch {
+    return loadGvizSheetOnce(sheetName);
+  }
+}
+
+function loadGvizSheetOnce(sheetName: string): Promise<GvizTable> {
   return new Promise((resolve, reject) => {
     if (typeof document === "undefined") {
       reject(new Error("Browser document is not available"));
