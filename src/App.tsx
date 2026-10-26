@@ -1380,7 +1380,7 @@ function AllMonthsDashboard({
         >
           <MetricSelect value={selectedMetric} onChange={setSelectedMetric} />
         </PanelHead>
-        <ContinuousDashboardChart months={months} metric={selectedMetric} todayIso={todayIso} trafficMode={trafficMode} />
+        <ContinuousDashboardChart months={months} metric={selectedMetric} todayIso={selectedMetric === "Продажи" ? getPsSalesCoverage(records)?.toDate ?? todayIso : todayIso} trafficMode={trafficMode} />
       </section>
 
       <MonthMatrix months={months} trafficMode={trafficMode} />
@@ -1481,7 +1481,7 @@ function MonthDashboard({
               key={metric}
               metric={metric}
               weeks={weeks}
-              todayIso={todayIso}
+              todayIso={metric === "Продажи" ? getPsSalesCoverage(records)?.toDate ?? todayIso : todayIso}
               trafficMode={trafficMode}
             />
           ))}
@@ -5974,7 +5974,7 @@ function ContinuousDashboardChart({
               <div
                 className={`continuous-week ${tooltipEdgeClass(index, values.length)}`}
                 key={`${item.monthKey}-${item.week.week}`}
-                data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+                data-tooltip={`${item.monthLabel}, ${item.week.week} неделя\nФакт: ${item.isFutureEmpty ? "—" : formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
               >
                 <div className="continuous-bar-area">
                   {showOmSegment ? (
@@ -5992,7 +5992,7 @@ function ContinuousDashboardChart({
                     />
                   )}
                 </div>
-                <strong>{formatNumber(item.fact)}</strong>
+                <strong>{item.isFutureEmpty ? "—" : formatNumber(item.fact)}</strong>
                 <small>{item.week.week} нед.</small>
                 <EventDots events={item.week.events} />
                 <em className={item.trend}>{deltaLabel}</em>
@@ -6049,7 +6049,7 @@ function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
     <section className="analytics-panel recommendation-panel">
       <PanelHead
         title="График по рекомендациям"
-        description="Отдельно показывает рекомендации по лидам, КВАЛ и продажам. Эти значения вычитаются из FACT перед расчетом отчетов."
+        description="Рекомендации показаны отдельно. Из продаж ПС они не вычитаются: в итог входят все заказы."
       />
       <div className="recommendation-grid">
         {metrics.map((metric) => (
@@ -6250,7 +6250,7 @@ function WeeklyTrendChart({
         <div
           key={item.week.week}
           className={`trend-week ${tooltipEdgeClass(index, values.length)}`}
-          data-tooltip={`${item.week.week} неделя\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+          data-tooltip={`${item.week.week} неделя\nФакт: ${item.isFutureEmpty ? "—" : formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
         >
           <div className="trend-plot" style={{ height: chartHeight }}>
             {showOmSegment ? (
@@ -6268,7 +6268,7 @@ function WeeklyTrendChart({
               />
             )}
           </div>
-          <strong>{formatNumber(item.fact)}</strong>
+          <strong>{item.isFutureEmpty ? "—" : formatNumber(item.fact)}</strong>
           <small>{item.week.week} нед.</small>
           <EventDots events={item.week.events} />
           <em className={item.trend}>{deltaLabel}</em>
