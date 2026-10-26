@@ -53,6 +53,7 @@ import {
 } from "./api/salesDepartmentApi";
 import type { CSSProperties, ReactNode } from "react";
 import { buildAttentionItems } from "./lib/insights";
+import { getPsSalesCoverage, hasActualRecord, isPsSale, psSalesFactAvailable } from "./lib/psSales";
 import {
   applyTrafficModeToTotals,
   buildConversions,
@@ -799,13 +800,13 @@ export default function App() {
     }
 
     setIsSavingDaily(true);
-    setSavedMessage("Загружаю сделки amoCRM за выбранный период...");
+    setSavedMessage("Обновляю отчёт: лиды и квалы — amoCRM, продажи — ПС...");
     try {
       const result = await callReportApi<AmoCrmSyncResult>("syncAmoCrmLeads", { fromDate, toDate }, writePassword);
       await refreshMainReportSnapshot();
-      setSavedMessage(`${result.message} Лиды, квалы и продажи обновлены на экране.`);
+      setSavedMessage(`${result.message} Данные отчёта обновлены на экране.`);
     } catch (error) {
-      setSavedMessage(`amoCRM не загрузилась: ${getErrorMessage(error)}`);
+      setSavedMessage(`Отчёт не обновился: ${getErrorMessage(error)}`);
       throw error;
     } finally {
       setIsSavingDaily(false);
@@ -952,7 +953,8 @@ export default function App() {
           selectedMonthKey={selectedMonthKey}
           selectedScope={selectedScope}
           trafficMode={trafficMode}
-          latestFactDate={getLatestActualRecordDate(currentMonthRecords)}
+          latestFactDate={getLatestActualRecordDate(getPsSalesCoverage(currentMonthRecords) ? currentMonthRecords.filter((record) => record.metric !== "Продажи") : currentMonthRecords)}
+          salesSourceLabel={["allMonths", "month", "monthDaily", "week"].includes(mode) ? psSalesSourceLabel(currentMonthRecords) : null}
           selectMonth={selectMonth}
           setSelectedScope={setSelectedScope}
           setTrafficMode={setTrafficMode}
@@ -1232,6 +1234,7 @@ function Topbar({
   selectedScope,
   trafficMode,
   latestFactDate,
+  salesSourceLabel,
   selectMonth,
   setSelectedScope,
   setTrafficMode,
@@ -1249,6 +1252,7 @@ function Topbar({
   selectedScope: ReportScope;
   trafficMode: TrafficMode;
   latestFactDate: string | null;
+  salesSourceLabel: string | null;
   selectMonth: (monthKey: string) => void;
   setSelectedScope: (scope: ReportScope) => void;
   setTrafficMode: (mode: TrafficMode) => void;
@@ -1286,14 +1290,15 @@ function Topbar({
             type="button"
             disabled={isRefreshing || !canRefreshAmo}
             onClick={onRefreshAmo}
-            title="Загрузить лиды, квалы и продажи за выбранный месяц и обновить отчёт"
+            title="Лиды и квалы — amoCRM; продажи — ПС"
             aria-busy={isRefreshing}
           >
             <RefreshCw size={17} />
-            {isRefreshing ? "Обновляю из amoCRM..." : "Обновить из amoCRM"}
+            {isRefreshing ? "Обновляю отчёт..." : "Обновить отчёт"}
           </button>
         )}
-        {showReportFilters && <span className="updated-pill">{latestFactDate ? `Факт по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
+        {showReportFilters && <span className="updated-pill">{latestFactDate ? `${salesSourceLabel ? "Лиды и квалы" : "Факт"} по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
+        {salesSourceLabel && <span className="updated-pill" title="Продажи по дате создания заказа в ПС; А+Б считается как две продажи">{salesSourceLabel}</span>}
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
@@ -1356,6 +1361,7 @@ function AllMonthsDashboard({
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
           `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
           `Период: ${monthRange}`,
+          ...psSalesSourceFacts(records, true),
           `Зона риска: ${worstMonth}`,
           `Событий в периоде: ${events.length}`,
         ]}
@@ -1451,6 +1457,7 @@ function MonthDashboard({
           `Осталось дней: ${monthTiming.left}`,
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
           `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
+          ...psSalesSourceFacts(records),
           `Событий: ${events.length}`,
         ]}
       />
@@ -1655,19 +1662,20 @@ function MonthDailyDashboard({
   const dailyCharts = dailyChartMeta.map((meta) => buildMetricDailyChartData(meta, records, events, monthDates, todayIso, trafficMode));
   const summaries = metrics.map((metric) => buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed));
   const status = getRecordsPeriodStatus(records, trafficMode);
-  const latestFactDate = getLatestActualRecordDate(records);
+  const latestFactDate = getLatestActualRecordDate(getPsSalesCoverage(records) ? records.filter((record) => record.metric !== "Продажи") : records);
 
   return (
     <div className="page-stack month-daily-dashboard">
       <ExecutiveSummary
         status={status}
-        eyebrow={`${config.label} · ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope} · ${latestFactDate ? `факт до ${formatDay(latestFactDate)}` : "нет факта"}`}
+        eyebrow={`${config.label} · ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope} · ${latestFactDate ? `${getPsSalesCoverage(records) ? "лиды и квалы" : "факт"} до ${formatDay(latestFactDate)}` : "нет факта"}`}
         title="Факт и прогноз по дням выбранного месяца"
         subtitle="Дневная динамика факта, прогнозный коридор Optima и события по датам."
         facts={[
           `Дней в месяце: ${monthDates.length}`,
           `Прошло дней: ${monthTiming.passed}`,
           `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
+          ...psSalesSourceFacts(records),
           `Событий месяца: ${events.length}`,
           monthTiming.isClosed ? "Месяц завершен" : `Осталось дней: ${monthTiming.left}`,
         ]}
@@ -3166,6 +3174,7 @@ function WeekDashboard({
         facts={[
           `Город: ${selectedScope === "Все" ? "МСК + СПБ" : selectedScope}`,
           `Режим: ${trafficMode === "marketing" ? "маркетинговый КВАЛ" : "КВАЛ ОП"}`,
+          ...psSalesSourceFacts(records.filter((record) => record.date >= week.startDate && record.date <= week.endDate)),
           `Дней в неделе: ${dates.length}`,
           `Событий: ${events.length}`,
           `Лид → квал: ${conversions.leadToQualified}%`,
@@ -7001,10 +7010,12 @@ function DailyWeekEditor({
             <div className="table-row" key={date}>
               <span className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></span>
               {metrics.map((metric) => {
-                const value = metricFactFromRecords(records.filter((record) => record.date === date && record.metric === metric), metric, trafficMode);
+                const dayRecords = records.filter((record) => record.date === date && record.metric === metric);
+                const available = psSalesFactAvailable(dayRecords);
+                const value = metricFactFromRecords(dayRecords, metric, trafficMode);
                 return (
                   <label key={metric} className="compact-input">
-                    <input type="number" value={value} readOnly title="Чтобы изменить неделю, отредактируйте значения конкретных дней." />
+                    <input type={available ? "number" : "text"} value={available ? value : "—"} readOnly title={available ? "Чтобы изменить неделю, отредактируйте значения конкретных дней." : "Продажи ПС за эту дату ещё не загружены"} />
                   </label>
                 );
               })}
@@ -7018,11 +7029,12 @@ function DailyWeekEditor({
             <div className="date-cell">{formatDay(date)} <small>{weekdayLabel(date)}</small></div>
             <div>
               {metrics.map((metric) => {
-                const value = metricFactFromRecords(records.filter((record) => record.date === date && record.metric === metric), metric, trafficMode);
+                const dayRecords = records.filter((record) => record.date === date && record.metric === metric);
+                const value = metricFactFromRecords(dayRecords, metric, trafficMode);
                 return (
                   <span key={metric}>
                     <small>{metric === "Квалы" ? "КВАЛ" : metric}</small>
-                    <strong>{formatNumber(value)}</strong>
+                    <strong title={psSalesFactAvailable(dayRecords) ? undefined : "Продажи ПС за эту дату ещё не загружены"}>{psSalesFactAvailable(dayRecords) ? formatNumber(value) : "—"}</strong>
                   </span>
                 );
               })}
@@ -7431,7 +7443,7 @@ function forecastMetricByFactAverage(
   recordsByCity.forEach(({ city, records }) => {
     const factDates = monthDates.filter((date) => {
       const dayRecords = records.filter((record) => record.date === date);
-      return dayRecords.some((record) => record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0);
+      return dayRecords.some(hasActualRecord);
     });
     const cityFact = records
       .filter((record) => factDates.includes(record.date))
@@ -7471,10 +7483,24 @@ function forecastMetricByFactAverage(
 
 function getLastFactDate(records: DailyRecord[]): string | null {
   const factDates = records
-    .filter((record) => record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0)
+    .filter(hasActualRecord)
     .map((record) => record.date)
     .sort();
   return factDates[factDates.length - 1] ?? null;
+}
+
+function psSalesSourceLabel(records: DailyRecord[], showRange = false): string | null {
+  const coverage = getPsSalesCoverage(records);
+  if (!coverage) return null;
+  const period = showRange && coverage.fromDate <= coverage.toDate
+    ? `${formatDay(coverage.fromDate)}–${formatDay(coverage.toDate)}`
+    : `по ${formatDay(coverage.toDate)}`;
+  return `Продажи: ПС · ${period}`;
+}
+
+function psSalesSourceFacts(records: DailyRecord[], showRange = false): string[] {
+  const label = psSalesSourceLabel(records, showRange);
+  return label ? [label] : [];
 }
 
 function coefficientForRecord(record: DailyRecord, metric: Metric, date: string, coefficients: ForecastCoefficients): number {
@@ -7707,7 +7733,7 @@ function buildMetricDailyChartData(
   trafficMode: TrafficMode,
 ): MetricDailyChartData {
   const metricRecords = records.filter((record) => record.metric === meta.sourceMetric);
-  const hasAnyFact = metricRecords.some((record) => Number.isFinite(record.fact) && (record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0));
+  const hasAnyFact = metricRecords.some(hasActualRecord);
 
   return {
     ...meta,
@@ -7748,6 +7774,7 @@ function sumNullable(
   trafficMode: TrafficMode = "op",
 ): number | null {
   if (!records.length) return null;
+  if (key === "fact" && !psSalesFactAvailable(records)) return null;
   return records.reduce((sum, record) => {
     if (key === "fact") return sum + metricFactForTraffic(metric ?? record.metric, recordToMetricTotal(record), trafficMode);
     if (key === "recommendations") return sum + recommendationValue(record);
@@ -9465,13 +9492,15 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
     const plan = value.plan ?? current?.plan ?? 0;
     const forecast = value.forecast ?? current?.forecast ?? plan;
     const omQualified = value.metric === "Квалы" ? value.omQualified ?? current?.omQualified ?? 0 : 0;
+    const manualPsFact = current && isPsSale(current) && value.fact !== undefined && value.fact !== current.fact;
+    const comment = value.comment ?? current?.comment ?? "";
 
     return {
       ...value,
       plan,
       forecast,
       omQualified,
-      comment: encodeOmQualifiedInComment(value.comment ?? current?.comment ?? "", omQualified),
+      comment: encodeOmQualifiedInComment(manualPsFact ? comment.replace(/\[(?:SALES_SOURCE|PS_COVERED_FROM|PS_COVERED_TO|PS_PENDING)=[^\]]*\]/g, "").trim() : comment, omQualified),
     };
   });
 }
@@ -9744,7 +9773,7 @@ function mergeSeedRecords(seedRecords: DailyRecord[], storedRecords: DailyRecord
 
 function getLatestActualRecordDate(records: DailyRecord[]): string | null {
   return records.reduce<string | null>((latestDate, record) => {
-    if (record.fact <= 0 && record.recommendations <= 0 && record.omQualified <= 0) return latestDate;
+    if (!hasActualRecord(record)) return latestDate;
     if (!latestDate || record.date > latestDate) return record.date;
     return latestDate;
   }, null);

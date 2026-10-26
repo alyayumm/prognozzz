@@ -31,6 +31,7 @@ type ApiAction =
   | "getAmoCrmStatus"
   | "testAmoCrmConnection"
   | "syncAmoCrmLeads"
+  | "syncPsSales"
   | "syncRoistatSources"
   | "syncRoistatBrands"
   | "syncYandexMetrikaBrandSources"

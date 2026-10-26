@@ -170,5 +170,5 @@ test('main report adds target duplicates to OM on creation day and keeps the OP 
   assert.equal(actual.omQualified, 3);
   assert.equal(actual.plan, 40);
   assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
-  assert.equal(saved.find(row => row.metric === 'Продажи' && row.city === 'МСК').fact, 0);
+  assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
 });

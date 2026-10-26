@@ -1,6 +1,7 @@
 import type { City, DailyRecord, EventItem, Metric, MonthConfig, WeekSummary } from "../types";
 import { getMonthDates } from "../utils/date";
 import { buildWeeklySummary } from "../utils/report";
+import { hasActualRecord, isPendingPsSale, isPsSale } from "./psSales";
 
 export type ReportScope = "Все" | "МСК" | "СПБ";
 export type TrafficMode = "op" | "marketing";
@@ -140,12 +141,12 @@ export function getRecordsPeriodStatus(records: DailyRecord[], trafficMode: Traf
   const lastFactByCityMonth = new Map<string, string>();
   const periodKey = (record: DailyRecord) => `${record.city}|${record.date.slice(0, 7)}`;
   for (const record of records) {
-    if (record.fact > 0 || recommendationValue(record) > 0 || omQualifiedValue(record) > 0) {
+    if (hasActualRecord(record)) {
       const key = periodKey(record);
       if (record.date > (lastFactByCityMonth.get(key) ?? "")) lastFactByCityMonth.set(key, record.date);
     }
   }
-  const comparableRecords = records.filter((record) => record.date <= (lastFactByCityMonth.get(periodKey(record)) ?? ""));
+  const comparableRecords = records.filter((record) => !isPendingPsSale(record) && record.date <= (lastFactByCityMonth.get(periodKey(record)) ?? ""));
   const metricKeys = [...new Set(records.map((record) => record.metric))];
   return getPeriodStatus(applyTrafficModeToTotals(buildMetricTotals(comparableRecords, metricKeys), trafficMode));
 }
@@ -182,6 +183,8 @@ export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" 
 }
 
 export function netFact(record: DailyRecord): number {
+  if (isPendingPsSale(record)) return 0;
+  if (isPsSale(record)) return Math.max(0, Number(record.fact || 0));
   return Math.max(0, Number(record.fact || 0) - recommendationValue(record));
 }
 

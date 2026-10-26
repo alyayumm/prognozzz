@@ -119,7 +119,7 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
     assert.equal(qualified.forecast, 44);
     assert.equal(qualified.recommendations, 2);
     assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
-    assert.equal(saved.find(row => row.metric === 'Продажи' && row.city === 'МСК').fact, 2);
+    assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
   }
 });
 
@@ -144,5 +144,5 @@ test('all successful sales include ROP and technical owners, regardless of the c
     syncAmoCrmMainReportFacts_;
   `, { ...globals, saveRows: rows => { daily = rows; } });
   sync(records, '2026-10-01', '2026-10-01', []);
-  assert.equal(daily.find(row => row.metric === 'Продажи' && row.city === 'МСК').fact, 5);
+  assert.equal(daily.find(row => row.metric === 'Продажи'), undefined);
 });

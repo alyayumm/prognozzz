@@ -421,6 +421,7 @@ function doPost(e) {
       getAmoCrmStatus: getAmoCrmStatus_,
       testAmoCrmConnection: testAmoCrmConnection_,
       syncAmoCrmLeads: syncAmoCrmLeads_,
+      syncPsSales: syncMainPsSales_,
       getYandexMetrikaSyncStatus: getYandexMetrikaSyncStatus_,
       getMetrikaBrandSources: getMetrikaBrandSources_,
       syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
@@ -432,7 +433,7 @@ function doPost(e) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncPsSales', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -4060,11 +4061,12 @@ function testAmoCrmConnection_() {
 }
 
 function syncAmoCrmLeads_(payload) {
-  ensureAmoCrmRawLeadSheet_();
   const today = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
   const fromDate = normalizeAmoCrmDate_(payload && payload.fromDate, today);
   const toDate = normalizeAmoCrmDate_(payload && payload.toDate, fromDate);
   const warnings = [];
+  const psSnapshot = readMainPsSalesSnapshot_(fromDate, toDate);
+  ensureAmoCrmRawLeadSheet_();
   const dictionaries = salesFetchAmoDictionaries_();
   const leads = salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionaries);
   const records = leads.map((lead) => amoCrmLeadRecord_(lead, dictionaries));
@@ -4072,16 +4074,21 @@ function syncAmoCrmLeads_(payload) {
     ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
     : { updated: 0 };
   const mainReportResult = syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings);
+  const psResult = syncMainPsSales_({ fromDate: fromDate, toDate: toDate }, psSnapshot);
+  warnings.push.apply(warnings, psResult.warnings || []);
   const result = {
     kind: 'leads',
     fromDate: fromDate,
     toDate: toDate,
-    status: 'success',
-    message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads. Основной отчет обновлен: ' + mainReportResult.updated + ' строк.',
+    status: psResult.status === 'warning' ? 'warning' : 'success',
+    message: 'Отчет обновлен: лиды и КВАЛ из amoCRM, продажи из ПС. ' + psResult.message,
     rows: upsertResult.updated,
-    mainReportRows: mainReportResult.updated,
-    mainReportSales: mainReportResult.sales,
-    monthsRebuilt: mainReportResult.months,
+    mainReportRows: mainReportResult.updated + psResult.updated,
+    salesSource: 'PS',
+    mainReportSales: psResult.sales,
+    mainReportAmoSalesAudit: mainReportResult.amoSalesAudit,
+    salesCoverageByMonth: psResult.coverageByMonth,
+    monthsRebuilt: unique_((mainReportResult.months || []).concat(psResult.months || [])),
     warnings: warnings,
     updatedAt: new Date(),
   };
@@ -4092,7 +4099,7 @@ function syncAmoCrmLeads_(payload) {
 function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const dates = eachDateInRange_(fromDate, toDate);
   const cities = ['МСК', 'СПБ'];
-  const metrics = ['Лиды', 'Квалы', 'Продажи'];
+  const metrics = ['Лиды', 'Квалы'];
   const aggregated = {};
   const omQualified = {};
   const sales = { deals: 0, doubleDeals: 0, count: 0, byDay: {} };
@@ -4117,8 +4124,6 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
     const sale = salesAmoSalesFacts_(lead, { users: {}, pipelines: {} }, reportConfig);
     if (sale && sale.closedInMonth) {
       const count = salesAmoDealCount_(sale);
-      const key = sale.closedDate + '|' + sale.city + '|Продажи';
-      aggregated[key] = (aggregated[key] || 0) + count;
       sales.deals += 1;
       sales.doubleDeals += sale.isDoubleAB ? 1 : 0;
       sales.count += count;
@@ -4178,9 +4183,9 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания. Продажи — статус 142 по штатной дате закрытия amoCRM в московском времени, все типы и ответственные, А+Б = 2. ОМ КВАЛ: целевые лиды на «Технический»/«Системный», целевые дубли и указанные целевые отказы на РОП; из КВАЛ ОП они исключены.');
+    warnings.push('amoCRM: обновлены только лиды и КВАЛ по дате создания; продажи основного отчета загружаются из ПС. ОМ КВАЛ: целевые лиды на «Технический»/«Системный», целевые дубли и указанные целевые отказы на РОП; из КВАЛ ОП они исключены.');
   }
-  return { updated: upsertResult.updated, months: rebuiltMonths, sales: sales };
+  return { updated: upsertResult.updated, months: rebuiltMonths, amoSalesAudit: sales };
 }
 
 function ensureAmoCrmRawLeadSheet_() {

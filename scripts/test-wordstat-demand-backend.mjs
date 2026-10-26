@@ -219,7 +219,8 @@ test('provider transport errors are sanitized and do not overwrite cache', () =>
 });
 
 test('public demand reads work independently, but forced provider refresh requires the report password', () => {
-  const routerSource = readFileSync(new URL('../apps-script/AppsScript.gs', import.meta.url), 'utf8');
+  const routerSource = readFileSync(new URL('../apps-script/AppsScript.gs', import.meta.url), 'utf8')
+    + '\n' + readFileSync(new URL('../apps-script/PsSales.gs', import.meta.url), 'utf8');
   const api = runInNewContext(`${routerSource}\n${source}
     let refreshes = 0;
     ensureServiceSheets_ = () => { throw new Error('Unrelated report setup must not run'); };

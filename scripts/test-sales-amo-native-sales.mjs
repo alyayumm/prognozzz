@@ -238,20 +238,21 @@ test('department sales include message-type A plus B without adding those leads 
   assert.equal(result.daily.reduce((sum, row) => sum + row.totalTraffic, 0), 0);
 });
 
-test('main sales use native dates and include message-type A plus B while preserving traffic exclusions', () => {
+test('amo refresh retains its native sales audit without overwriting authoritative PS city sales', () => {
   let saved = [];
   const syncApi = loadApi({ saveRows: rows => { saved = rows; } }, `
     readObjects_ = () => [];
     upsertRowsById_ = (sheet, headers, rows) => { saveRows(rows); return { updated: rows.length }; };
     rebuildWeeklySummary_ = () => {};
   `);
-  syncApi.sync([record({
+  const result = syncApi.sync([record({
     createdAt: '2026-10-01 12:00:00', createdDate: '2026-10-01',
     closedAt: '2026-09-30 21:30:00', closedDate: '2026-09-30',
     city: '', excludeReason: 'messagesType', typeLabel: 'Сообщение', category: 'А+Б',
   })], '2026-10-01', '2026-10-01', []);
   const metric = name => saved.find(row => row.metric === name && row.city === 'МСК');
-  assert.equal(metric('Продажи').fact, 2);
+  assert.equal(metric('Продажи'), undefined);
+  assert.equal(result.amoSalesAudit.count, 2);
   assert.equal(metric('Лиды').fact, 0);
   assert.equal(metric('Квалы').fact, 0);
   assert.equal(metric('Квалы').omQualified, 0);
