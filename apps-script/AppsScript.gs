@@ -1567,7 +1567,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     cached.closedInMonth = salesDateInReportPeriod_(cached.closedDate, config);
     cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
     cached.isQualified = salesAmoIsQualified_(cached.stage, lead);
-    cached.isOmQualified = cached.isQualified && salesAmoIsTechnicalOwner_(lead, dictionaries, cached.manager);
+    cached.isOmQualified = cached.isQualified && (salesAmoIsOmRefusal_(cached.stage, lead)
+      || salesAmoIsTechnicalOwner_(lead, dictionaries, cached.manager));
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
   }
@@ -1618,7 +1619,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     createdInMonth: salesDateInReportPeriod_(createdDate, config),
     closedInMonth: salesDateInReportPeriod_(closedDate, config),
     isQualified: qualified,
-    isOmQualified: qualified && salesAmoIsTechnicalOwner_(lead, dictionaries, manager),
+    isOmQualified: qualified && (salesAmoIsOmRefusal_(stage, lead)
+      || salesAmoIsTechnicalOwner_(lead, dictionaries, manager)),
     isNotQualifiedYet: notQualifiedYet,
     isWon: won,
     isVip: salesNormalizeText_(vip) === 'да',
@@ -1737,6 +1739,7 @@ function salesAmoIsQualified_(stageName, lead) {
   if (excludedStages.some((name) => stage === salesNormalizeLabel_(name))) return false;
   const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
   if (statusId === '143' || stage.indexOf(salesNormalizeLabel_('Закрыто и не реализовано')) === 0) {
+    if (salesAmoIsOmRefusal_(stageName, lead)) return true;
     const parenthetical = String(stageName || '').match(/\(([^)]*)\)/);
     const lossReasonName = parenthetical ? parenthetical[1] : salesAmoLossReasonName_(lead);
     if (String(lossReasonName || '').trim()) {
@@ -1747,6 +1750,36 @@ function salesAmoIsQualified_(stageName, lead) {
     return salesAmoQualifiedLossReasonIds_().indexOf(lossReasonId) >= 0;
   }
   return true;
+}
+
+function salesAmoIsTargetDuplicate_(stageName, lead) {
+  const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
+  const closedLost = statusId ? statusId === '143'
+    : salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('Закрыто и не реализовано')) === 0;
+  if (!closedLost) return false;
+  const lossReasonId = String((lead && (lead.loss_reason_id || lead.lossReasonId)) || '').trim();
+  // Target duplicates are qualified for marketing only, regardless of their current owner.
+  if (lossReasonId) return lossReasonId === '23760226';
+  const parenthetical = String(stageName || '').match(/\(([^)]*)\)/);
+  const lossReasonName = parenthetical ? parenthetical[1] : salesAmoLossReasonName_(lead);
+  return salesNormalizeLabel_(lossReasonName) === salesNormalizeLabel_('Дубль ЦЕЛЕВОЙ');
+}
+
+function salesAmoIsOmRefusal_(stageName, lead) {
+  if (salesAmoIsTargetDuplicate_(stageName, lead)) return true;
+  const ownerId = String((lead && (lead.responsible_user_id || lead.responsibleUserId)) || '').trim();
+  if (ownerId !== '10304986') return false;
+  const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
+  const closedLost = statusId ? statusId === '143'
+    : salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('Закрыто и не реализовано')) === 0;
+  if (!closedLost) return false;
+  const lossReasonId = String((lead && (lead.loss_reason_id || lead.lossReasonId)) || '').trim();
+  if (lossReasonId) return salesAmoQualifiedLossReasonIds_().indexOf(lossReasonId) >= 0;
+  const parenthetical = String(stageName || '').match(/\(([^)]*)\)/);
+  const lossReasonName = parenthetical ? parenthetical[1] : salesAmoLossReasonName_(lead);
+  return ['Хотят именно офлайн класс', 'Не выходит на связь ЦЕЛЕВОЙ', 'Дорого',
+    'Передумал учиться', 'Выбрали другую школу'].some((name) =>
+    salesNormalizeLabel_(lossReasonName) === salesNormalizeLabel_(name));
 }
 
 function salesAmoLossReasonName_(lead) {
@@ -4145,7 +4178,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания. Продажи — статус 142 по штатной дате закрытия amoCRM в московском времени, все типы и ответственные, А+Б = 2. КВАЛ по правилу «Динамики»; «Технический» и «Системный» — ОМ КВАЛ.');
+    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания. Продажи — статус 142 по штатной дате закрытия amoCRM в московском времени, все типы и ответственные, А+Б = 2. ОМ КВАЛ: целевые лиды на «Технический»/«Системный», целевые дубли и указанные целевые отказы на РОП; из КВАЛ ОП они исключены.');
   }
   return { updated: upsertResult.updated, months: rebuiltMonths, sales: sales };
 }

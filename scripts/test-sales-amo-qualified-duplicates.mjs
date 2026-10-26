@@ -40,7 +40,7 @@ const duplicateCachedLead = {
 
 const normalizedDuplicate = salesNormalizeAmoLead_(duplicateCachedLead, { users: {}, pipelines: {}, statuses: {} }, { monthKey: "2026-10" });
 
-assertCase("target duplicate from cached amo leads is not qualified", normalizedDuplicate.isQualified === false);
+assertCase("target duplicate from cached amo leads is qualified for OM", normalizedDuplicate.isQualified === true && normalizedDuplicate.isOmQualified === true);
 assertCase("target duplicate from cached amo leads is not waiting for qualification", normalizedDuplicate.isNotQualifiedYet === false);
 `, {
   console,

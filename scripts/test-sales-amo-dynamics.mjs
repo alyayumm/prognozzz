@@ -28,7 +28,7 @@ test('Dynamics excluded stages stay unqualified even with the Yes field', () => 
   for (const stage of ['Неразобранное', 'Звонки', 'Недозвоны', 'На проверку', 'В работе', 'ЯГ ЛИДЫ', 'Обзвон', 'Отложенный спрос', 'Иностранные права', '']) {
     assert.equal(api.qualify(stage, lead({ custom_fields_values: yesFlag })), false, stage);
   }
-  assert.equal(api.qualify('Закрыто и не реализовано', lead({ status_id: 143, loss_reason_id: 23760226, custom_fields_values: yesFlag })), false);
+  assert.equal(api.qualify('Закрыто и не реализовано', lead({ status_id: 143, loss_reason_id: 23760226, custom_fields_values: yesFlag })), true);
   assert.equal(api.qualify('Закрыто и не реализовано', lead({ status_id: 143, loss_reason_id: 11249860, name: 'дорого' })), false);
 });
 
