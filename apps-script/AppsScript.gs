@@ -389,8 +389,8 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    const externalReadActions = ['getSalesDepartmentDashboard'];
-    if (externalReadActions.indexOf(action) < 0) {
+    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand'];
+    if (independentActions.indexOf(action) < 0) {
       ensureServiceSheets_();
     }
 
@@ -424,13 +424,15 @@ function doPost(e) {
       getYandexMetrikaSyncStatus: getYandexMetrikaSyncStatus_,
       getMetrikaBrandSources: getMetrikaBrandSources_,
       syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
+      getWordstatDemand: getWordstatDemand_,
+      syncWordstatDemand: syncWordstatDemand_,
     };
 
     if (!routes[action]) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
