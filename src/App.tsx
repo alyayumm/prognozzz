@@ -1497,13 +1497,13 @@ function MonthFinancePanel({
   finance: MonthFinanceSummary;
   selectedScope: ReportScope;
 }) {
-  const hasRows = finance.revenue > 0 || finance.actualRevenue > 0 || finance.debtAmount > 0;
+  const hasRows = finance.revenue > 0 || finance.actualRevenue > 0;
 
   return (
     <section className="month-finance-panel">
       <PanelHead
-        title="Выручка и дебиторка"
-        description="Потенциальная выручка берется из Roistat, фактическая выручка и дебиторка — из PS."
+        title="Выручка"
+        description="Потенциальная выручка берется из Roistat, фактическая — из PS."
       />
       <div className="month-finance-grid">
         <article>
@@ -1516,11 +1516,6 @@ function MonthFinancePanel({
           <strong>{formatBrandCurrency(finance.actualRevenue, { allowZero: true })}</strong>
           <small>уже оплаченная часть</small>
         </article>
-        <article className={finance.debtAmount > 0 ? "debt" : ""}>
-          <span>Дебиторка</span>
-          <strong>{formatBrandCurrency(finance.debtAmount, { allowZero: true })}</strong>
-          <small>{finance.debtCount ? `${formatNumber(finance.debtCount)} строк с долгом` : "долга нет"}</small>
-        </article>
       </div>
       {selectedScope === "Все" && (
         <div className="month-finance-city-grid">
@@ -1528,13 +1523,12 @@ function MonthFinancePanel({
             <div key={item.city}>
               <b>{item.city}</b>
               <span>факт {formatBrandCurrency(item.actualRevenue, { allowZero: true })}</span>
-              <span>дебиторка {formatBrandCurrency(item.debtAmount, { allowZero: true })}</span>
             </div>
           ))}
         </div>
       )}
       {!hasRows && (
-        <p className="month-finance-empty">По этому месяцу в PS пока нет оплаченной части или задолженности.</p>
+        <p className="month-finance-empty">По этому месяцу пока нет данных о выручке.</p>
       )}
     </section>
   );
@@ -4072,7 +4066,7 @@ function BrandOverviewPanel({
       <section className="brand-ranking-grid brand-ranking-grid-v2">
         <BrandTopListCard title="Топ по продажам" caption="Топ-16 выбранного периода" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.sales, "desc")} formatValue={formatNumber} />
         <BrandTopListCard title="Топ по выручке" caption="Бренды с максимальной выручкой" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.revenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
-        <BrandTopListCard title="Топ по факт. выручке" caption="Выручка без задолженности" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.actualRevenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
+        <BrandTopListCard title="Топ по факт. выручке" caption="Уже оплаченная часть" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.actualRevenue, "desc")} formatValue={(value) => formatBrandCurrency(value, { allowZero: true })} />
         <BrandTopListCard title="Цена КВАЛ" caption="Чем ниже, тем лучше" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.cpql, "asc")} formatValue={(value) => formatBrandCurrency(value)} />
         <BrandTopListCard title={`Продаж на филиал: ${platform}`} caption="Только внутри выбранной площадки" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.salesPerBranch[platform], "desc")} formatValue={(value) => formatCompactDecimal(value)} />
         <BrandTopListCard title="Топ по ROAS" caption="Выручка / бюджет ДРР" rows={rankBrandDashboardSummaries(summaries, (summary) => summary.roas ?? 0, "desc")} formatValue={(value) => `${formatCompactDecimal(value)}x`} />
