@@ -106,7 +106,7 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
   const records = [record(), record({ leadId: '2', responsibleUserName: 'Системный' }),
     record({ leadId: '3', responsibleUserName: 'Технический' }),
     record({ leadId: '4', stageName: 'На проверку', statusId: '73650530' }),
-    record({ leadId: '5', createdDate: '2026-09-15', stageName: 'Успешно реализовано', statusId: '142', closedDate: '2026-10-01', isWon: 'TRUE', category: 'А+В' })];
+    record({ leadId: '5', createdDate: '2026-09-15', stageName: 'Успешно реализовано', statusId: '142', closedDate: '2026-10-01', closedAt: '2026-10-01 12:00:00', isWon: 'TRUE', category: 'А+В' })];
   for (let run = 0; run < 2; run++) {
     sync(records, '2026-10-01', '2026-10-01', []);
     const qualified = saved.find(row => row.metric === 'Квалы' && row.city === 'МСК');
@@ -125,7 +125,7 @@ test('all successful sales include ROP and technical owners, regardless of the c
     record({ leadId: 'rop', responsibleUserName: 'РОП', managerName: 'РОП', category: 'А+Б' }),
     record({ leadId: 'technical', responsibleUserName: 'Технический', managerName: 'Технический', category: 'A+B' }),
     record({ leadId: 'system', responsibleUserName: 'Системный', managerName: 'Системный', category: 'B' }),
-  ].map(row => ({ ...row, createdDate: '2026-09-15', closedDate: '2026-10-01', stageName: 'Успешно реализовано', statusId: '142', isWon: 'TRUE' }));
+  ].map(row => ({ ...row, createdDate: '2026-09-15', closedDate: '2026-10-01', closedAt: '2026-10-01 12:00:00', stageName: 'Успешно реализовано', statusId: '142', isWon: 'TRUE' }));
   const department = api.department(config, [], records.map(api.cached));
   assert.equal(department.daily[0].totalTraffic, 0);
   assert.equal(department.daily[0].totalDeals, 5);

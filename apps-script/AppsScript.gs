@@ -1038,22 +1038,25 @@ function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
 
   leads.forEach((lead) => {
     const normalized = salesNormalizeAmoLead_(lead, dictionaries, config);
-    if (!normalized || normalized.exclude) {
+    const sale = salesAmoSalesFacts_(lead, dictionaries, config);
+    const hasSale = sale && sale.closedInMonth;
+    if ((!normalized || normalized.exclude) && !hasSale) {
       if (normalized && normalized.excludeReason === 'noCity') debug.excludedNoCity += 1;
       if (normalized && normalized.excludeReason === 'messagesPipeline') debug.excludedMessagesPipeline += 1;
       if (normalized && normalized.excludeReason === 'messagesType') debug.excludedMessagesType += 1;
       return;
     }
-    const canonicalManager = salesCanonicalManagerName_(normalized.manager, config.managers);
+    const managerName = hasSale ? sale.manager : normalized.manager;
+    const canonicalManager = salesCanonicalManagerName_(managerName, config.managers);
     if (config.restrictManagers && !canonicalManager) {
       debug.excludedManager += 1;
       return;
     }
     debug.accepted += 1;
-    const manager = canonicalManager || normalized.manager || 'Без ответственного';
+    const manager = canonicalManager || managerName || 'Без ответственного';
     const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
 
-    if (normalized.createdInMonth) {
+    if (normalized && !normalized.exclude && normalized.createdInMonth) {
       debug.createdInMonth += 1;
       item.totalTraffic += 1;
       if (normalized.city === 'МСК') item.mskTraffic += 1;
@@ -1099,24 +1102,24 @@ function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
       }
     }
 
-    if (normalized.closedInMonth && normalized.isWon) {
+    if (hasSale) {
       debug.closedWonInMonth += 1;
-      const dealCount = salesAmoDealCount_(normalized);
+      const dealCount = salesAmoDealCount_(sale);
       item.factDeals += dealCount;
       item.orderCount += dealCount;
       item.paidDeals += dealCount;
-      item.revenue += normalized.budget;
-      if (normalized.city === 'МСК') item.mskDeals += dealCount;
-      if (normalized.city === 'СПБ') item.spbDeals += dealCount;
-      if (normalized.isVip) item.vipDeals += 1;
-      if (normalized.isDistant) item.distantDeals += 1;
-      if (normalized.isAB) item.abDeals += dealCount;
+      item.revenue += sale.budget;
+      if (sale.city === 'МСК') item.mskDeals += dealCount;
+      if (sale.city === 'СПБ') item.spbDeals += dealCount;
+      if (sale.isVip) item.vipDeals += 1;
+      if (sale.isDistant) item.distantDeals += 1;
+      if (sale.isAB) item.abDeals += dealCount;
 
-      const closedDay = daily[normalized.closedDate];
+      const closedDay = daily[sale.closedDate];
       if (closedDay) {
         closedDay.totalDeals += dealCount;
-        if (normalized.city === 'МСК') closedDay.mskDeals += dealCount;
-        if (normalized.city === 'СПБ') closedDay.spbDeals += dealCount;
+        if (sale.city === 'МСК') closedDay.mskDeals += dealCount;
+        if (sale.city === 'СПБ') closedDay.spbDeals += dealCount;
       }
     }
 
@@ -1302,8 +1305,13 @@ function salesTargetPipelineIds_(dictionaries) {
 }
 
 function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, maxPages, warnings) {
-  const dateFrom = Math.floor(new Date(fromDate + 'T00:00:00Z').getTime() / 1000);
-  const dateTo = Math.floor(new Date(toDate + 'T23:59:59Z').getTime() / 1000);
+  const nativeClosingDate = fieldName === 'closed_at';
+  const dateFrom = Math.floor((nativeClosingDate
+    ? Utilities.parseDate(fromDate + ' 00:00:00', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss')
+    : new Date(fromDate + 'T00:00:00Z')).getTime() / 1000);
+  const dateTo = Math.floor((nativeClosingDate
+    ? Utilities.parseDate(toDate + ' 23:59:59', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss')
+    : new Date(toDate + 'T23:59:59Z')).getTime() / 1000);
   const result = [];
   const safeMaxPages = Math.max(1, Number(maxPages || 18));
 
@@ -1348,9 +1356,12 @@ function salesReadCachedAmoLeadsForMonth_(config, warnings) {
 
   const leads = [];
   rows.forEach((row) => {
-    const createdAt = String(row.createdAt || '');
-    const closedAt = String(row.closedAt || '');
-    if (!salesDateInReportPeriod_(createdAt.slice(0, 10), config) && !salesDateInReportPeriod_(closedAt.slice(0, 10), config)) return;
+    const createdAt = salesCachedDateTimeString_(row.createdAt);
+    const closedAt = salesCachedDateTimeString_(row.closedAt);
+    const nativeClosedDate = salesAmoDate_('', salesTimestampFromCachedDate_(closedAt));
+    if (!salesDateInReportPeriod_(createdAt.slice(0, 10), config)
+      && !salesDateInReportPeriod_(closedAt.slice(0, 10), config)
+      && !salesDateInReportPeriod_(nativeClosedDate, config)) return;
     const lead = salesAmoLeadFromCachedRecord_(row);
     if (lead) leads.push(lead);
   });
@@ -1502,7 +1513,7 @@ function salesCachedDateOnlyString_(value) {
 
 function salesCachedDateTimeString_(value) {
   const date = salesCachedDateObject_(value);
-  if (date) return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  if (date) return Utilities.formatDate(date, 'GMT', 'yyyy-MM-dd HH:mm:ss');
   return String(value || '').trim();
 }
 
@@ -1686,6 +1697,37 @@ function salesAmoDate_(customValue, unixValue) {
 function salesAmoIsWon_(stageName, statusId) {
   if (String(statusId || '').trim() === '142') return true;
   return salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('успешно реализовано')) >= 0;
+}
+
+function salesAmoSalesFacts_(lead, dictionaries, config) {
+  if (!lead || String(lead.status_id || '').trim() !== '142') return null;
+  const cached = lead.cachedNormalized || {};
+  const pipeline = lead.pipeline_name || (dictionaries.pipelines || {})[String(lead.pipeline_id || '')] || cached.pipeline;
+  const city = salesAmoCity_(pipeline);
+  const closedDate = salesAmoDate_('', lead.closed_at);
+  if (!city || !closedDate) return null;
+
+  const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
+  const manager = cached.manager
+    || salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
+    || lead.responsible_user_name
+    || (dictionaries.users || {})[String(lead.responsible_user_id || '')]
+    || String(lead.responsible_user_id || '').trim()
+    || 'Без ответственного';
+  const category = String(cached.category || salesAmoField_(fields, ['категория']));
+  const isDoubleAB = category ? salesAmoIsDoubleAB_(category) : salesParseBoolean_(cached.isDoubleAB);
+  return {
+    city: city,
+    manager: String(manager).trim(),
+    closedDate: closedDate,
+    closedInMonth: salesDateInReportPeriod_(closedDate, config),
+    category: category,
+    isDoubleAB: isDoubleAB,
+    isAB: isDoubleAB,
+    budget: Number(lead.price || cached.budget || salesAmoField_(fields, ['бюджет']) || 0) || 0,
+    isVip: Boolean(cached.isVip) || salesNormalizeText_(salesAmoField_(fields, ['вип пакет', 'vip пакет'])) === 'да',
+    isDistant: Boolean(cached.isDistant) || salesNormalizeText_(salesAmoField_(fields, ['формат'])) === 'онлайн',
+  };
 }
 
 function salesAmoIsQualified_(stageName, lead) {
@@ -4009,6 +4051,7 @@ function syncAmoCrmLeads_(payload) {
     message: 'amoCRM: загружено сделок ' + upsertResult.updated + '. Сырой слой обновлен в AmoCRM_Raw_Leads. Основной отчет обновлен: ' + mainReportResult.updated + ' строк.',
     rows: upsertResult.updated,
     mainReportRows: mainReportResult.updated,
+    mainReportSales: mainReportResult.sales,
     monthsRebuilt: mainReportResult.months,
     warnings: warnings,
     updatedAt: new Date(),
@@ -4023,6 +4066,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const metrics = ['Лиды', 'Квалы', 'Продажи'];
   const aggregated = {};
   const omQualified = {};
+  const sales = { deals: 0, doubleDeals: 0, count: 0, byDay: {} };
 
   dates.forEach((date) => {
     cities.forEach((city) => {
@@ -4041,6 +4085,20 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
 
   (records || []).forEach((record) => {
     const lead = salesAmoLeadFromCachedRecord_(record);
+    const sale = salesAmoSalesFacts_(lead, { users: {}, pipelines: {} }, reportConfig);
+    if (sale && sale.closedInMonth) {
+      const count = salesAmoDealCount_(sale);
+      const key = sale.closedDate + '|' + sale.city + '|Продажи';
+      aggregated[key] = (aggregated[key] || 0) + count;
+      sales.deals += 1;
+      sales.doubleDeals += sale.isDoubleAB ? 1 : 0;
+      sales.count += count;
+      const day = sales.byDay[sale.closedDate] || { deals: 0, doubleDeals: 0, count: 0 };
+      day.deals += 1;
+      day.doubleDeals += sale.isDoubleAB ? 1 : 0;
+      day.count += count;
+      sales.byDay[sale.closedDate] = day;
+    }
     const normalized = salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, reportConfig);
     if (!normalized || normalized.exclude || (cities.indexOf(normalized.city) < 0)) return;
 
@@ -4053,9 +4111,6 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
       }
     }
 
-    if (normalized.closedDate >= fromDate && normalized.closedDate <= toDate && normalized.isWon) {
-      aggregated[normalized.closedDate + '|' + normalized.city + '|Продажи'] = (aggregated[normalized.closedDate + '|' + normalized.city + '|Продажи'] || 0) + salesAmoDealCount_(normalized);
-    }
   });
 
   const currentById = {};
@@ -4094,9 +4149,9 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания, продажи по дате завершения. КВАЛ по правилу «Динамики»; ответственные «Технический» и «Системный» — ОМ КВАЛ, остальные — КВАЛ ОП.');
+    warnings.push('amoCRM: основной отчет обновлен по МСК/СПБ; лиды и КВАЛ по дате создания. Продажи — статус 142 по штатной дате закрытия amoCRM в московском времени, все типы и ответственные, А+Б = 2. КВАЛ по правилу «Динамики»; «Технический» и «Системный» — ОМ КВАЛ.');
   }
-  return { updated: upsertResult.updated, months: rebuiltMonths };
+  return { updated: upsertResult.updated, months: rebuiltMonths, sales: sales };
 }
 
 function ensureAmoCrmRawLeadSheet_() {
@@ -4232,6 +4287,9 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     responsible_user_name: responsibleUserName,
   });
   const normalized = salesNormalizeAmoLead_(leadWithNames, dictionaries || { users: {}, pipelines: {}, statuses: {} }, { monthKey: '0000-00' }) || {};
+  const fields = salesAmoFieldMap_(customFields);
+  const category = normalized.category || salesAmoField_(fields, ['категория']);
+  const isDoubleAB = salesAmoIsDoubleAB_(category);
   return {
     id: 'amocrm-lead-' + leadId,
     leadId: leadId,
@@ -4255,11 +4313,11 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     closedDate: normalized.closedDate || String(closedAt).slice(0, 10),
     isQualified: normalized.isQualified ? 'TRUE' : '',
     isNotQualifiedYet: normalized.isNotQualifiedYet ? 'TRUE' : '',
-    isWon: normalized.isWon ? 'TRUE' : '',
-    isVip: normalized.isVip ? 'TRUE' : '',
-    isDistant: normalized.isDistant ? 'TRUE' : '',
-    isAB: normalized.isAB ? 'TRUE' : '',
-    isDoubleAB: normalized.isDoubleAB ? 'TRUE' : '',
+    isWon: String(lead.status_id || '') === '142' ? 'TRUE' : '',
+    isVip: (normalized.isVip || salesNormalizeText_(salesAmoField_(fields, ['вип пакет', 'vip пакет'])) === 'да') ? 'TRUE' : '',
+    isDistant: (normalized.isDistant || salesNormalizeText_(salesAmoField_(fields, ['формат'])) === 'онлайн') ? 'TRUE' : '',
+    isAB: isDoubleAB ? 'TRUE' : '',
+    isDoubleAB: isDoubleAB ? 'TRUE' : '',
     budget: Number(normalized.budget || lead.price || 0) || 0,
     excludeReason: normalized.exclude ? (normalized.excludeReason || 'excluded') : '',
     source: amoCrmLeadSource_(lead, customFields),
@@ -4267,7 +4325,7 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     customFieldsJson: '',
     rawJson: '',
     syncedAt: new Date(),
-    category: normalized.category || '',
+    category: category,
     lossReasonId: lossReasonId,
     lossReasonName: lossReasonName,
   };
