@@ -1307,13 +1307,8 @@ function salesTargetPipelineIds_(dictionaries) {
 }
 
 function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, maxPages, warnings) {
-  const nativeClosingDate = fieldName === 'closed_at';
-  const dateFrom = Math.floor((nativeClosingDate
-    ? Utilities.parseDate(fromDate + ' 00:00:00', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss')
-    : new Date(fromDate + 'T00:00:00Z')).getTime() / 1000);
-  const dateTo = Math.floor((nativeClosingDate
-    ? Utilities.parseDate(toDate + ' 23:59:59', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss')
-    : new Date(toDate + 'T23:59:59Z')).getTime() / 1000);
+  const dateFrom = Math.floor(Utilities.parseDate(fromDate + ' 00:00:00', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss').getTime() / 1000);
+  const dateTo = Math.floor(Utilities.parseDate(toDate + ' 23:59:59', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss').getTime() / 1000);
   const result = [];
   const safeMaxPages = Math.max(1, Number(maxPages || 18));
 
@@ -1358,14 +1353,13 @@ function salesReadCachedAmoLeadsForMonth_(config, warnings) {
 
   const leads = [];
   rows.forEach((row) => {
-    const createdAt = salesCachedDateTimeString_(row.createdAt);
-    const closedAt = salesCachedDateTimeString_(row.closedAt);
-    const nativeClosedDate = salesAmoDate_('', salesTimestampFromCachedDate_(closedAt));
-    if (!salesDateInReportPeriod_(createdAt.slice(0, 10), config)
-      && !salesDateInReportPeriod_(closedAt.slice(0, 10), config)
-      && !salesDateInReportPeriod_(nativeClosedDate, config)) return;
     const lead = salesAmoLeadFromCachedRecord_(row);
-    if (lead) leads.push(lead);
+    if (!lead) return;
+    const createdDate = lead.cachedNormalized.createdDate;
+    const nativeClosedDate = salesAmoDate_('', lead.closed_at);
+    if (!salesDateInReportPeriod_(createdDate, config)
+      && !salesDateInReportPeriod_(nativeClosedDate, config)) return;
+    leads.push(lead);
   });
 
   if (leads.length) {
@@ -1456,7 +1450,7 @@ function salesAmoLeadFromCachedRecord_(record) {
   if (!leadId) return null;
   const createdAt = salesCachedDateTimeString_(record.createdAt);
   const closedAt = salesCachedDateTimeString_(record.closedAt);
-  const createdDate = salesCachedDateOnlyString_(record.createdDate) || String(createdAt).slice(0, 10);
+  const createdDate = salesCachedDateOnlyString_(record.createdDate) || salesAmoDate_('', salesTimestampFromCachedDate_(createdAt));
   const closedDate = salesCachedDateOnlyString_(record.closedDate) || String(closedAt).slice(0, 10);
   const city = salesValidCachedCity_(record.city);
   const isDoubleAB = salesAmoIsDoubleAB_(record.category) || salesParseBoolean_(record.isDoubleAB);

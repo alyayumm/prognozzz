@@ -172,7 +172,7 @@ test('raw caching retains the A plus B category and multiplier on message-type e
   assert.equal(api.dealCount(api.facts(api.cached(raw), dictionaries, config)), 2);
 });
 
-test('closed_at fetch uses Moscow calendar boundaries while created_at keeps its existing UTC range', () => {
+test('creation and closing fetches use the same Moscow calendar boundaries as daily facts', () => {
   const requests = [];
   const fetchApi = loadApi({ capture: params => requests.push(params) }, `
     fetchAmoCrmEndpoint_ = (path, params) => { capture(params); return { _embedded: { leads: [] } }; };
@@ -181,8 +181,36 @@ test('closed_at fetch uses Moscow calendar boundaries while created_at keeps its
   assert.equal(requests[0]['filter[closed_at][from]'], unix('2026-09-30T21:00:00Z'));
   assert.equal(requests[0]['filter[closed_at][to]'], unix('2026-10-25T20:59:59Z'));
   fetchApi.fetchByDate('2026-10-01', '2026-10-25', 'created_at', '4535038', 80, []);
-  assert.equal(requests[1]['filter[created_at][from]'], unix('2026-10-01T00:00:00Z'));
-  assert.equal(requests[1]['filter[created_at][to]'], unix('2026-10-25T23:59:59Z'));
+  assert.equal(requests[1]['filter[created_at][from]'], unix('2026-09-30T21:00:00Z'));
+  assert.equal(requests[1]['filter[created_at][to]'], unix('2026-10-25T20:59:59Z'));
+});
+
+test('cache period selection uses the same creation date as OP qualification', () => {
+  const rows = [record({
+    createdAt: '2026-09-15 12:00:00', createdDate: '2026-10-03',
+    updatedAt: '2026-10-20 12:00:00', closedAt: '', closedDate: '',
+    stageName: 'Брифинг', statusId: '123', isWon: '',
+  })];
+  const cachedApi = loadApi({ cachedRows: () => rows }, 'readAmoCrmRawLeadObjectsFast_ = () => cachedRows();');
+  const leads = cachedApi.readCached(config, []);
+  assert.equal(leads.length, 1);
+  const result = cachedApi.department(config, [], leads);
+  assert.equal(result.daily.find(day => day.key === '2026-10-03').totalQualified, 1);
+  assert.equal(result.daily.find(day => day.key === '2026-10-20').totalQualified, 0);
+});
+
+test('missing cached creation dates fall back to the native Moscow day, including month boundaries', () => {
+  for (const createdAt of ['2026-09-30 21:30:00', new Date('2026-09-30T21:30:00Z')]) {
+    const rows = [record({
+      createdAt, createdDate: '', closedAt: '', closedDate: '',
+      stageName: 'Брифинг', statusId: '123', isWon: '',
+    })];
+    const cachedApi = loadApi({ cachedRows: () => rows }, 'readAmoCrmRawLeadObjectsFast_ = () => cachedRows();');
+    const leads = cachedApi.readCached(config, []);
+    assert.equal(leads.length, 1);
+    assert.equal(leads[0].cachedNormalized.createdDate, '2026-10-01');
+    assert.equal(cachedApi.department(config, [], leads).daily[0].totalQualified, 1);
+  }
 });
 
 test('cache prefilter retains October sales closed just after Moscow midnight on October first', () => {

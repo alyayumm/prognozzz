@@ -7,7 +7,10 @@ const source = readFileSync(new URL('../apps-script/AppsScript.gs', import.meta.
 const dictionaries = { users: { 1: 'Менеджер', 2: 'Системный' }, pipelines: {}, statuses: {} };
 const config = { monthKey: '2026-10', monthYear: 2026, monthIndex: 9, managers: [], restrictManagers: false };
 const globals = {
-  Utilities: { formatDate: date => date.toISOString().slice(0, 10) },
+  Utilities: {
+    formatDate: date => date.toISOString().slice(0, 10),
+    parseDate: value => new Date(value.replace(' ', 'T') + '+03:00'),
+  },
   Session: { getScriptTimeZone: () => 'Europe/Moscow' },
 };
 const api = runInNewContext(`${source}\n({ qualify: salesAmoIsQualified_, normalize: salesNormalizeAmoLead_, cached: salesAmoLeadFromCachedRecord_, record: amoCrmLeadRecord_, department: salesReadAmoDepartmentData_ });`, globals);
@@ -76,7 +79,7 @@ test('CRM refresh requests loss reason names so classification also works for ne
   const fetchLeads = runInNewContext(`${source}
     fetchAmoCrmEndpoint_ = (path, params) => { inspectRequest(params); return { _embedded: { leads: [] } }; };
     fetchAmoCrmLeadsByDateField_;
-  `, { inspectRequest: params => { requested = params; } });
+  `, { ...globals, inspectRequest: params => { requested = params; } });
   fetchLeads('2026-10-01', '2026-10-26', 'created_at', '4535038', 80, []);
   assert.ok(requested.with.split(',').includes('loss_reason'));
 });

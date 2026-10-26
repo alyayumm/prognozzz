@@ -128,7 +128,10 @@ test('an incomplete amo page cannot overwrite the main report with partial count
       throw new Error('temporary HTTP 503');
     };
     fetchAmoCrmLeadsByDateField_;
-  `);
+  `, {
+    Session: { getScriptTimeZone: () => 'Europe/Moscow' },
+    Utilities: { parseDate: value => new Date(value.replace(' ', 'T') + '+03:00') },
+  });
   assert.throws(() => read('2026-10-01', '2026-10-21', 'created_at', '1', 80, []), /503/);
 });
 
