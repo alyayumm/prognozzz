@@ -119,3 +119,27 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
     assert.equal(saved.find(row => row.metric === 'Продажи' && row.city === 'МСК').fact, 2);
   }
 });
+
+test('all successful sales include ROP and technical owners, regardless of the creation month', () => {
+  const records = [
+    record({ leadId: 'rop', responsibleUserName: 'РОП', managerName: 'РОП', category: 'А+Б' }),
+    record({ leadId: 'technical', responsibleUserName: 'Технический', managerName: 'Технический', category: 'A+B' }),
+    record({ leadId: 'system', responsibleUserName: 'Системный', managerName: 'Системный', category: 'B' }),
+  ].map(row => ({ ...row, createdDate: '2026-09-15', closedDate: '2026-10-01', stageName: 'Успешно реализовано', statusId: '142', isWon: 'TRUE' }));
+  const department = api.department(config, [], records.map(api.cached));
+  assert.equal(department.daily[0].totalTraffic, 0);
+  assert.equal(department.daily[0].totalDeals, 5);
+  assert.equal(department.byManager['РОП'].factDeals, 2);
+  assert.equal(department.byManager['Технический'].factDeals, 2);
+  assert.equal(department.byManager['Системный'].factDeals, 1);
+
+  let daily;
+  const sync = runInNewContext(`${source}
+    readObjects_ = () => [];
+    upsertRowsById_ = (sheet, headers, rows) => { saveRows(rows); return { updated: rows.length }; };
+    rebuildWeeklySummary_ = () => {};
+    syncAmoCrmMainReportFacts_;
+  `, { ...globals, saveRows: rows => { daily = rows; } });
+  sync(records, '2026-10-01', '2026-10-01', []);
+  assert.equal(daily.find(row => row.metric === 'Продажи' && row.city === 'МСК').fact, 5);
+});

@@ -14,6 +14,9 @@ assertCase("B is not double A+B", salesAmoIsAB_("B") === false);
 assertCase("Latin A+B is double", salesAmoIsAB_("A+B") === true);
 assertCase("Latin AB is double", salesAmoIsAB_("AB") === true);
 assertCase("Cyrillic А+В is double", salesAmoIsAB_("А+В") === true);
+assertCase("Cyrillic А+Б is double", salesAmoIsAB_("А+Б") === true);
+assertCase("Cyrillic АБ is double", salesAmoIsAB_("АБ") === true);
+assertCase("Single Б is not double", salesAmoIsAB_("Б") === false);
 assertCase("Regular deal count is 1", salesAmoDealCount_({ isDoubleAB: false }) === 1);
 assertCase("A+B deal count is 2", salesAmoDealCount_({ isDoubleAB: true }) === 2);
 `, {

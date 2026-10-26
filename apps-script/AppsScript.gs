@@ -1775,7 +1775,7 @@ function salesAmoDealCount_(normalized) {
 function salesAmoCategoryKey_(category) {
   return salesNormalizeLabel_(category)
     .replace(/а/g, 'a')
-    .replace(/в/g, 'b');
+    .replace(/[бв]/g, 'b');
 }
 
 function salesReadLiveDepartmentData_(config, warnings) {
