@@ -34,6 +34,8 @@ type ApiAction =
   | "syncRoistatSources"
   | "syncRoistatBrands"
   | "syncYandexMetrikaBrandSources"
+  | "getWordstatDemand"
+  | "syncWordstatDemand"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

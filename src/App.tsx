@@ -29,6 +29,7 @@ import {
 } from "./data/dashboardMock";
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
+import DemandView from "./features/demand/DemandView";
 import {
   legacyBrandRecordsToPerformance,
   loadBrandAnalyticsSnapshot,
@@ -108,7 +109,7 @@ import type {
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "brands" | "messages" | "events" | "admin";
+type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "brands" | "demand" | "messages" | "events" | "admin";
 type AdminTab = "day" | "month" | "sources" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
@@ -965,16 +966,17 @@ export default function App() {
           } : undefined}
           isRefreshing={isSavingDaily}
           canRefreshAmo={Boolean(getSalesDepartmentSyncToDate(selectedMonthConfig))}
+          showReportFilters={mode !== "demand"}
         />
 
-        <section className="notice">
+        {mode !== "demand" && <section className="notice">
           <CheckCircle2 size={18} />
           {mode === "leadDaily"
             ? "Отдел продаж обновляется отдельно: данные берутся из листов «Динамика», планов и PS."
             : savedMessage}
-        </section>
+        </section>}
 
-        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
+        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
               <AllMonthsDashboard
@@ -1068,6 +1070,9 @@ export default function App() {
                 loadMessage={brandLoadMessage}
               />
             )}
+            {mode === "demand" && (
+              <DemandView writePassword={writePassword} canRefresh={apiConfigured && Boolean(writePassword)} />
+            )}
             {mode === "events" && (
               <EventsDashboard
                 dates={monthDates}
@@ -1120,7 +1125,7 @@ export default function App() {
             />
           )}
 
-          {mode !== "events" && mode !== "messages" && mode !== "brands" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
+          {mode !== "events" && mode !== "messages" && mode !== "brands" && mode !== "demand" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -1156,6 +1161,7 @@ function Sidebar({
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "sources", label: "Источники", icon: <Target /> },
     { mode: "brands", label: "Бренды", icon: <TrendingUp /> },
+    { mode: "demand", label: "Спрос", icon: <TrendingUp /> },
     { mode: "messages", label: "Сообщения", icon: <MessageSquare /> },
     { mode: "events", label: "События", icon: <TriangleAlert /> },
   ];
@@ -1234,6 +1240,7 @@ function Topbar({
   onRefreshAmo,
   isRefreshing,
   canRefreshAmo,
+  showReportFilters = true,
 }: {
   title: string;
   subtitle: string;
@@ -1250,6 +1257,7 @@ function Topbar({
   onRefreshAmo?: () => void;
   isRefreshing: boolean;
   canRefreshAmo: boolean;
+  showReportFilters?: boolean;
 }) {
   return (
     <header className="topbar">
@@ -1260,6 +1268,7 @@ function Topbar({
       </div>
 
       <div className="topbar-actions">
+        {showReportFilters && <>
         <label className="month-select-wrap">
           <select value={selectedMonthKey} onChange={(event) => selectMonth(event.target.value)}>
             {monthConfigs.map((config) => (
@@ -1270,6 +1279,7 @@ function Topbar({
         </label>
         <CityToggle value={selectedScope} onChange={setSelectedScope} />
         <TrafficToggle value={trafficMode} onChange={setTrafficMode} />
+        </>}
         {onRefreshAmo && (
           <button
             className="report-refresh-button sales-refresh-button"
@@ -1283,15 +1293,15 @@ function Topbar({
             {isRefreshing ? "Обновляю из amoCRM..." : "Обновить из amoCRM"}
           </button>
         )}
-        <span className="updated-pill">{latestFactDate ? `Факт по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>
+        {showReportFilters && <span className="updated-pill">{latestFactDate ? `Факт по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
         </button>
-        <button className="primary-button" type="button" onClick={onCreateMonth}>
+        {showReportFilters && <button className="primary-button" type="button" onClick={onCreateMonth}>
           <Plus size={16} />
           Создать месяц
-        </button>
+        </button>}
       </div>
     </header>
   );
@@ -8388,6 +8398,10 @@ function getPageCopy(mode: Mode) {
     brands: {
       title: "Бренды",
       subtitle: "Динамика брендов по городам, рейтинги эффективности и автособытия по заметным изменениям.",
+    },
+    demand: {
+      title: "Спрос и сезонность",
+      subtitle: "Запрос «автошкола» в Москве и Санкт-Петербурге. Сравнение лет по одинаковым месяцам.",
     },
     events: {
       title: "События",
