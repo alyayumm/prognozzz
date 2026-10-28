@@ -35,6 +35,8 @@ type ApiAction =
   | "syncRoistatSources"
   | "syncRoistatBrands"
   | "syncYandexMetrikaBrandSources"
+  | "getLeadConversion"
+  | "syncLeadConversion"
   | "getWordstatDemand"
   | "syncWordstatDemand"
   | "verifyPassword";

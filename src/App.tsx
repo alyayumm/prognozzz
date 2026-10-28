@@ -30,6 +30,7 @@ import {
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import DemandView from "./features/demand/DemandView";
+import LeadConversionView from "./features/lead-conversion/LeadConversionView";
 import {
   legacyBrandRecordsToPerformance,
   loadBrandAnalyticsSnapshot,
@@ -110,7 +111,7 @@ import type {
 import { formatDay, getMonthDates, getWeekOfMonth, weekdayLabel } from "./utils/date";
 import { buildWeeklySummary } from "./utils/report";
 
-type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "brands" | "demand" | "messages" | "events" | "admin";
+type Mode = "allMonths" | "month" | "monthDaily" | "leadDaily" | "week" | "sources" | "brands" | "leadConversion" | "demand" | "messages" | "events" | "admin";
 type AdminTab = "day" | "month" | "sources" | "events" | "coefficients";
 type EventGroupFilter = "all" | EventGroup;
 type EventCategoryFilter = "all" | EventType;
@@ -969,16 +970,19 @@ export default function App() {
           isRefreshing={isSavingDaily}
           canRefreshAmo={Boolean(getSalesDepartmentSyncToDate(selectedMonthConfig))}
           showReportFilters={mode !== "demand"}
+          showTrafficMode={mode !== "leadConversion"}
+          showFactStatus={mode !== "leadConversion"}
+          showCreateMonth={mode !== "leadConversion"}
         />
 
-        {mode !== "demand" && <section className="notice">
+        {mode !== "demand" && mode !== "leadConversion" && <section className="notice">
           <CheckCircle2 size={18} />
           {mode === "leadDaily"
             ? "Отдел продаж обновляется отдельно: данные берутся из листов «Динамика», планов и PS."
             : savedMessage}
         </section>}
 
-        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
+        <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "leadConversion" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
               <AllMonthsDashboard
@@ -1075,6 +1079,15 @@ export default function App() {
             {mode === "demand" && (
               <DemandView writePassword={writePassword} canRefresh={apiConfigured && Boolean(writePassword)} />
             )}
+            {mode === "leadConversion" && (
+              <LeadConversionView
+                selectedMonthKey={selectedMonthKey}
+                selectedScope={selectedScope}
+                writePassword={writePassword}
+                canRefresh={apiConfigured && Boolean(writePassword)}
+                todayIso={todayIso}
+              />
+            )}
             {mode === "events" && (
               <EventsDashboard
                 dates={monthDates}
@@ -1127,7 +1140,7 @@ export default function App() {
             />
           )}
 
-          {mode !== "events" && mode !== "messages" && mode !== "brands" && mode !== "demand" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
+          {mode !== "events" && mode !== "messages" && mode !== "brands" && mode !== "leadConversion" && mode !== "demand" && mode !== "admin" && mode !== "monthDaily" && mode !== "leadDaily" && (
             <EventsPanel
               title={mode === "week" ? "События недели" : mode === "month" ? "События месяца" : "События периода"}
               events={visibleEvents}
@@ -1163,6 +1176,7 @@ function Sidebar({
     { mode: "admin", label: "Админка", icon: <Save /> },
     { mode: "sources", label: "Источники", icon: <Target /> },
     { mode: "brands", label: "Бренды", icon: <TrendingUp /> },
+    { mode: "leadConversion", label: "Переход → лид", icon: <Target /> },
     { mode: "demand", label: "Спрос", icon: <TrendingUp /> },
     { mode: "messages", label: "Сообщения", icon: <MessageSquare /> },
     { mode: "events", label: "События", icon: <TriangleAlert /> },
@@ -1244,6 +1258,9 @@ function Topbar({
   isRefreshing,
   canRefreshAmo,
   showReportFilters = true,
+  showTrafficMode = true,
+  showFactStatus = true,
+  showCreateMonth = true,
 }: {
   title: string;
   subtitle: string;
@@ -1262,6 +1279,9 @@ function Topbar({
   isRefreshing: boolean;
   canRefreshAmo: boolean;
   showReportFilters?: boolean;
+  showTrafficMode?: boolean;
+  showFactStatus?: boolean;
+  showCreateMonth?: boolean;
 }) {
   return (
     <header className="topbar">
@@ -1282,7 +1302,7 @@ function Topbar({
           <ChevronDown size={16} />
         </label>
         <CityToggle value={selectedScope} onChange={setSelectedScope} />
-        <TrafficToggle value={trafficMode} onChange={setTrafficMode} />
+        {showTrafficMode && <TrafficToggle value={trafficMode} onChange={setTrafficMode} />}
         </>}
         {onRefreshAmo && (
           <button
@@ -1297,13 +1317,13 @@ function Topbar({
             {isRefreshing ? "Обновляю отчёт..." : "Обновить отчёт"}
           </button>
         )}
-        {showReportFilters && <span className="updated-pill">{latestFactDate ? `${salesSourceLabel ? "Лиды и квалы" : "Факт"} по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
+        {showReportFilters && showFactStatus && <span className="updated-pill">{latestFactDate ? `${salesSourceLabel ? "Лиды и квалы" : "Факт"} по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
         {salesSourceLabel && <span className="updated-pill" title="Продажи по дате создания заказа в ПС; А+Б считается как две продажи">{salesSourceLabel}</span>}
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
         </button>
-        {showReportFilters && <button className="primary-button" type="button" onClick={onCreateMonth}>
+        {showReportFilters && showCreateMonth && <button className="primary-button" type="button" onClick={onCreateMonth}>
           <Plus size={16} />
           Создать месяц
         </button>}
@@ -8425,6 +8445,10 @@ function getPageCopy(mode: Mode) {
     brands: {
       title: "Бренды",
       subtitle: "Динамика брендов по городам, рейтинги эффективности и автособытия по заметным изменениям.",
+    },
+    leadConversion: {
+      title: "Переход → лид",
+      subtitle: "Визиты, лиды и конверсия по источникам и брендам.",
     },
     demand: {
       title: "Спрос и сезонность",

@@ -104,6 +104,11 @@ h2,
 }
 .brand > span { color: var(--muted); font-size: 12px; line-height: 1.25; }
 
+@media (min-width: 901px) {
+  .sidebar { overflow-y: auto; scrollbar-width: thin; }
+  .sidebar > * { flex-shrink: 0; }
+}
+
 nav { display: grid; gap: 7px; }
 .nav-button, .ghost-button {
   width: 100%;
