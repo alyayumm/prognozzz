@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Info, RefreshCw, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   loadLeadConversion,
   refreshLeadConversion,
@@ -7,6 +7,7 @@ import {
 } from "../../api/leadConversionApi";
 import {
   buildLeadConversionReport,
+  LEAD_CONVERSION_VISIBLE_SOURCES,
   leadConversionRefreshRange,
   sortLeadConversionRows,
   type LeadConversionGroup,
@@ -111,7 +112,7 @@ export default function LeadConversionView({ selectedMonthKey, selectedScope, wr
 export function LeadConversionDashboard({ snapshot, loading, refreshing, error, selectedMonthKey, selectedScope, canRefresh, futureMonth, onRefresh, onRetry }: ViewProps) {
   const [brand, setBrand] = useState("all");
   const [source, setSource] = useState("all");
-  const report = useMemo(() => buildLeadConversionReport(snapshot?.records ?? [], { monthKey: selectedMonthKey, scope: selectedScope, brand, source }), [snapshot, selectedMonthKey, selectedScope, brand, source]);
+  const report = useMemo(() => buildLeadConversionReport(snapshot?.records ?? [], { monthKey: selectedMonthKey, scope: selectedScope, brand, source, visibleSources: LEAD_CONVERSION_VISIBLE_SOURCES }), [snapshot, selectedMonthKey, selectedScope, brand, source]);
   const updatedAt = formatUpdatedAt(snapshot?.updatedAt ?? "");
   const warnings = [...(snapshot?.warnings ?? []), ...(report.invalidRows ? [`Не включено строк с некорректными датами или значениями: ${report.invalidRows}.`] : [])];
   const coverage = snapshot?.coverage;
@@ -129,7 +130,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
         <div>
           <span className="lead-conversion-eyebrow">Roistat · переходы и заявки</span>
           <h2>Какие переходы становятся лидами</h2>
-          <p>Конверсия = лиды Roistat / переходы Roistat × 100%. Источники объединены в каналы. Школы разделены по городу из справочника и UTM; переходы и лиды не перераспределяются.</p>
+          <p>Яндекс Карты, 2ГИС, Гугл Карты, Сайт и Директ. Все показатели рассчитаны по этим пяти источникам. Раскройте бренд, чтобы сравнить его источники. Конверсия = лиды / переходы × 100%.</p>
           <div className="lead-conversion-meta" aria-live="polite">
             <span>{selectedScope === "Все" ? "МСК + СПБ" : selectedScope}</span>
             <span>{loading ? "Читаю данные…" : coverage ? `Данные: ${formatDay(coverage.fromDate)}–${formatDay(coverage.toDate)}` : "Период ещё не загружен"}</span>
@@ -154,7 +155,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
             <option value="all">Все бренды</option>{report.options.brands.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select></label>
           <label><span>Источник</span><select value={source} onChange={(event) => setSource(event.target.value)}>
-            <option value="all">Все источники</option>{report.options.sources.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <option value="all">Все пять источников</option>{report.options.sources.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select></label>
           {(brand !== "all" || source !== "all") && <button type="button" className="ghost-button" onClick={() => { setBrand("all"); setSource("all"); }}>Сбросить фильтры</button>}
           <span className="lead-conversion-filter-note">Месяц и город — вверху страницы</span>
@@ -169,7 +170,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
           <p>Для этих строк нет однозначной привязки школы к городу в справочнике и UTM. Они не включены в показатели выбранного города. Здесь можно проверить каждый бренд и источник.</p>
           <div className="lead-conversion-table-grid lead-conversion-unknown-aggregates">
             <section><h3>Источники без города</h3><ConversionTable title="Конверсия источников без города" rows={unknown.bySource} dimension="source" /></section>
-            <section><h3>Бренды без города</h3><ConversionTable title="Конверсия брендов без города" rows={unknown.byBrand} dimension="brand" /></section>
+            <section><h3>Бренды без города</h3><ConversionTable title="Конверсия брендов без города" rows={unknown.byBrand} dimension="brand" brandSources={unknown.byBrandSource} /></section>
           </div>
           <h3 className="lead-conversion-unknown-detail-title">Бренд × источник без города</h3>
           <ConversionTable title="Бренды и источники без города" rows={unknown.byBrandSource} dimension="brandSource" />
@@ -179,7 +180,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
           <ConversionKpis totals={report.totals} />
           <div className="lead-conversion-table-grid">
             <section className="analytics-panel lead-conversion-table-panel"><div className="lead-conversion-panel-head"><h2>По источникам</h2><p>Какой канал приводит заявки</p></div><ConversionTable title="Конверсия по источникам" rows={report.bySource} dimension="source" /></section>
-            <section className="analytics-panel lead-conversion-table-panel"><div className="lead-conversion-panel-head"><h2>По брендам</h2><p>Где переходы чаще становятся лидами</p></div><ConversionTable title="Конверсия по брендам" rows={report.byBrand} dimension="brand" /></section>
+            <section className="analytics-panel lead-conversion-table-panel"><div className="lead-conversion-panel-head"><h2>По брендам</h2><p>Нажмите на бренд, чтобы раскрыть источники</p></div><ConversionTable title="Конверсия по брендам" rows={report.byBrand} dimension="brand" brandSources={report.byBrandSource} /></section>
           </div>
           <ConversionComparison rows={report.bySource} />
           <details className="analytics-panel lead-conversion-detail">
@@ -204,9 +205,16 @@ function ConversionKpis({ totals }: { totals: LeadConversionTotals }) {
   </section>;
 }
 
-function ConversionTable({ title, rows, dimension }: { title: string; rows: LeadConversionGroup[]; dimension: "source" | "brand" | "brandSource" }) {
+function ConversionTable({ title, rows, dimension, brandSources, nested = false }: { title: string; rows: LeadConversionGroup[]; dimension: "source" | "brand" | "brandSource"; brandSources?: LeadConversionGroup[]; nested?: boolean }) {
   const [sort, setSort] = useState<{ key: LeadConversionSortKey; direction: LeadConversionSortDirection }>({ key: "visits", direction: "desc" });
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const tableId = useId();
   const sorted = useMemo(() => sortLeadConversionRows(rows, sort.key, sort.direction), [rows, sort]);
+  const sourcesByBrand = useMemo(() => {
+    const result = new Map<string, LeadConversionGroup[]>();
+    for (const row of brandSources ?? []) result.set(row.brand, [...(result.get(row.brand) ?? []), { ...row, label: row.source }]);
+    return result;
+  }, [brandSources]);
   const columns: Array<{ key: LeadConversionSortKey; label: string }> = [
     { key: "label", label: dimension === "source" ? "Источник" : dimension === "brand" ? "Бренд" : "Бренд / источник" },
     { key: "visits", label: "Переходы" }, { key: "leads", label: "Лиды" }, { key: "conversionRate", label: "CR, %" },
@@ -214,19 +222,37 @@ function ConversionTable({ title, rows, dimension }: { title: string; rows: Lead
   function changeSort(key: LeadConversionSortKey) {
     setSort((current) => ({ key, direction: current.key === key && current.direction === "desc" ? "asc" : "desc" }));
   }
-  return <div className="lead-conversion-table-scroll" tabIndex={0} role="region" aria-label={title}>
+  function toggleBrand(key: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+  return <div className={`lead-conversion-table-scroll${nested ? " lead-conversion-nested-table" : ""}`} tabIndex={0} role="region" aria-label={title}>
     <table className="lead-conversion-table"><caption className="lead-conversion-sr-only">{title}. CR — доля переходов, ставших лидами.</caption><thead><tr>
       {columns.map((column) => <th key={column.key} scope="col" aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}>
         <button type="button" onClick={() => changeSort(column.key)} title={`Сортировать: ${column.label}`}>
           {column.label}{sort.key !== column.key ? <ArrowUpDown size={12} /> : sort.direction === "desc" ? <ArrowDown size={12} /> : <ArrowUp size={12} />}
         </button>
       </th>)}
-    </tr></thead><tbody>{sorted.map((row) => <tr key={row.key}>
-      <th scope="row" title={row.domains.join(", ")}><strong>{dimension === "brandSource" ? row.brand : row.label}</strong>
-        <small>{dimension === "source" ? `Бренды: ${row.brandCount}` : dimension === "brandSource" ? row.source : row.domains.length === 1 ? row.domains[0] : `Домены: ${row.domains.length}`}</small>
-        {dimension !== "brand" && row.sourceLabels.length > 0 && <details className="lead-conversion-source-labels"><summary>Исходные метки: {row.sourceLabels.length}</summary><span>{row.sourceLabels.join(", ")}</span></details>}
-      </th><td>{formatCount(row.visits)}</td><td>{formatCount(row.leads)}</td><td className="lead-conversion-rate-cell" title={row.conversionRate === null ? "Нет переходов для расчёта" : undefined}>{row.conversionRate === null ? "—" : percentFormat.format(row.conversionRate)}</td>
-    </tr>)}</tbody></table>
+    </tr></thead><tbody>{sorted.map((row) => {
+      const sourceRows = dimension === "brand" ? sourcesByBrand.get(row.brand) ?? [] : [];
+      const canExpand = sourceRows.length > 0;
+      const isExpanded = expanded.has(row.key);
+      const detailId = `${tableId}-${encodeURIComponent(row.key)}`;
+      return <Fragment key={row.key}><tr className={canExpand && isExpanded ? "lead-conversion-brand-open" : undefined}>
+        <th scope="row" title={row.domains.join(", ")}>
+          {canExpand ? <button type="button" className="lead-conversion-brand-toggle" aria-label={`Источники бренда ${row.brand}`} aria-expanded={isExpanded} aria-controls={detailId} onClick={() => toggleBrand(row.key)}>
+            <ChevronDown size={15} aria-hidden="true" /><strong>{row.label}</strong>
+          </button> : <strong>{dimension === "brandSource" ? row.brand : row.label}</strong>}
+          {!nested && <small>{dimension === "source" ? `Бренды: ${row.brandCount}` : dimension === "brandSource" ? row.source : row.domains.length === 1 ? row.domains[0] : `Домены: ${row.domains.length}`}</small>}
+          {!nested && dimension !== "brand" && row.sourceLabels.length > 0 && <details className="lead-conversion-source-labels"><summary>Исходные метки: {row.sourceLabels.length}</summary><span>{row.sourceLabels.join(", ")}</span></details>}
+        </th><td>{formatCount(row.visits)}</td><td>{formatCount(row.leads)}</td><td className="lead-conversion-rate-cell" title={row.conversionRate === null ? "Нет переходов для расчёта" : undefined}>{row.conversionRate === null ? "—" : percentFormat.format(row.conversionRate)}</td>
+      </tr>{canExpand && isExpanded && <tr className="lead-conversion-brand-detail" id={detailId}><td colSpan={4}>
+        <ConversionTable title={`Источники бренда ${row.brand}`} rows={sourceRows} dimension="source" nested />
+      </td></tr>}</Fragment>;
+    })}</tbody></table>
   </div>;
 }
 
@@ -235,7 +261,7 @@ function ConversionComparison({ rows }: { rows: LeadConversionGroup[] }) {
   const maximum = Math.max(1, ...chartRows.map((row) => row.conversionRate ?? 0));
   if (!chartRows.length) return null;
   return <section className="analytics-panel lead-conversion-comparison">
-    <div className="lead-conversion-panel-head"><h2>Конверсия источников</h2><p>До 8 источников с наибольшим числом переходов. Сравнивайте CR вместе с объёмом.</p></div>
+    <div className="lead-conversion-panel-head"><h2>Конверсия источников</h2><p>Сравнивайте CR показанных источников вместе с объёмом.</p></div>
     <ol>{chartRows.map((row) => <li key={row.key}>
       <div className="lead-conversion-bar-label"><strong>{row.label}</strong><span>{formatCount(row.visits)} переходов · {formatCount(row.leads)} лидов</span></div>
       <div className="lead-conversion-bar-track" aria-hidden="true"><i style={{ width: `${(row.conversionRate ?? 0) / maximum * 100}%` }} /></div>

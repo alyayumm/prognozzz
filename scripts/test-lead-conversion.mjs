@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/lib/leadConversion.ts', import.meta.
 const js = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { buildLeadConversionReport, sortLeadConversionRows, conversionRate, leadConversionRefreshRange, groupLeadConversionSource } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+const { buildLeadConversionReport, sortLeadConversionRows, conversionRate, leadConversionRefreshRange, groupLeadConversionSource, LEAD_CONVERSION_VISIBLE_SOURCES } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
 
 const record = (id, visits, leads, overrides = {}) => ({
   id, date: '2026-10-15', city: 'МСК', brand: 'Тестовый бренд', domain: 'example.test', source: 'SEO', visits, leads, ...overrides,
@@ -219,6 +219,79 @@ test('source grouping preserves totals and weighted rates across known/unknown c
   assert.equal(report.bySource.find((row) => row.label === 'Яндекс Карты').conversionRate, 1.9);
   assert.equal(report.unknownCity.bySource.find((row) => row.label === 'Гугл Карты').conversionRate, 3);
   assert.deepEqual(report.unknownCity.bySource.find((row) => row.label === 'Прочие / Нераспознанное').sourceLabels, ['777']);
+});
+
+const limitedSourceRows = [
+  record('maps-a', 100, 10, { brand: 'Школа А', source: 'ya' }),
+  record('maps-b', 900, 9, { brand: 'Школа А', source: 'ykart_msk' }),
+  record('site-a', 200, 10, { brand: 'Школа А', source: 'SEO' }),
+  record('direct-b', 50, 2, { brand: 'Школа Б', source: 'direct8', city: 'СПБ' }),
+  record('hidden-known', 10000, 500, { brand: 'Скрытый бренд', source: 'Прямые визиты' }),
+  record('visible-unknown', 80, 4, { brand: 'Без города', source: 'go', city: 'Не определён' }),
+  record('hidden-unknown', 400, 60, { brand: 'Скрытый без города', source: 'Telegram', city: 'Не определён' }),
+];
+
+test('five-source visibility removes hidden channels before every KPI, option and known/unknown-city grouping', () => {
+  assert.deepEqual(LEAD_CONVERSION_VISIBLE_SOURCES, ['Яндекс Карты', '2ГИС', 'Гугл Карты', 'Сайт', 'Директ']);
+  const report = buildLeadConversionReport(limitedSourceRows, { ...filters, visibleSources: LEAD_CONVERSION_VISIBLE_SOURCES });
+  assert.equal(report.totals.visits, 1250);
+  assert.equal(report.totals.leads, 31);
+  assert.equal(report.totals.recordCount, 4);
+  assert.deepEqual(report.bySource.map((row) => row.label).sort(), ['Яндекс Карты', 'Сайт', 'Директ'].sort());
+  assert.deepEqual(report.options.sources.map((option) => option.label).sort(), ['Яндекс Карты', 'Гугл Карты', 'Сайт', 'Директ'].sort());
+  assert.ok(report.options.brands.every((option) => !option.label.includes('Скрытый')));
+  for (const dimension of ['bySource', 'byBrand', 'byBrandSource']) {
+    assert.equal(report[dimension].reduce((sum, row) => sum + row.visits, 0), 1250);
+    assert.equal(report[dimension].reduce((sum, row) => sum + row.leads, 0), 31);
+    assert.ok(report[dimension].every((row) => !row.label.includes('Скрытый')));
+    assert.equal(report.unknownCity[dimension].reduce((sum, row) => sum + row.visits, 0), 80);
+    assert.equal(report.unknownCity[dimension].reduce((sum, row) => sum + row.leads, 0), 4);
+    assert.ok(report.unknownCity[dimension].every((row) => !row.label.includes('Скрытый')));
+  }
+  assert.equal(report.cityCoverage.visitsShare, 1250 / 1330 * 100);
+  assert.equal(report.cityCoverage.leadsShare, 31 / 35 * 100);
+  const original = buildLeadConversionReport(limitedSourceRows, filters);
+  assert.equal(original.totals.visits, 11250);
+  assert.equal(original.unknownCity.totals.visits, 480);
+});
+
+test('visible-source filtering composes with city and selected-source filters without leaking hidden rows', () => {
+  const visible = { ...filters, visibleSources: LEAD_CONVERSION_VISIBLE_SOURCES };
+  const report = buildLeadConversionReport(limitedSourceRows, visible);
+  const maps = report.options.sources.find((option) => option.label === 'Яндекс Карты').value;
+  const selected = buildLeadConversionReport(limitedSourceRows, { ...visible, source: maps });
+  assert.equal(selected.totals.visits, 1000);
+  assert.equal(selected.totals.leads, 19);
+  assert.equal(selected.unknownCity.totals.visits, 0);
+  const petersburg = buildLeadConversionReport(limitedSourceRows, { ...visible, scope: 'СПБ' });
+  assert.equal(petersburg.totals.visits, 50);
+  assert.equal(petersburg.totals.leads, 2);
+  assert.equal(petersburg.unknownCity.totals.visits, 80);
+  const excludedSource = buildLeadConversionReport(limitedSourceRows, { ...visible, source: JSON.stringify('Мессенджеры') });
+  assert.equal(excludedSource.totals.visits, 0);
+  assert.equal(excludedSource.unknownCity.totals.leads, 0);
+});
+
+test('visible brand source children sum to each brand total with conversion weighted by visits', () => {
+  const report = buildLeadConversionReport(limitedSourceRows, { ...filters, visibleSources: LEAD_CONVERSION_VISIBLE_SOURCES });
+  for (const bucket of [report, report.unknownCity]) for (const brand of bucket.byBrand) {
+    const children = bucket.byBrandSource.filter((row) => row.brand === brand.label);
+    const visits = children.reduce((sum, row) => sum + row.visits, 0);
+    const leads = children.reduce((sum, row) => sum + row.leads, 0);
+    assert.equal(visits, brand.visits);
+    assert.equal(leads, brand.leads);
+    assert.equal(brand.conversionRate, leads / visits * 100);
+  }
+  const brand = report.byBrand.find((row) => row.label === 'Школа А · МСК');
+  assert.equal(brand.visits, 1200);
+  assert.equal(brand.leads, 29);
+  assert.equal(brand.conversionRate, 29 / 1200 * 100);
+  const empty = buildLeadConversionReport(limitedSourceRows, { ...filters, visibleSources: [] });
+  assert.equal(empty.totals.visits, 0);
+  assert.equal(empty.totals.conversionRate, null);
+  assert.equal(empty.unknownCity.totals.visits, 0);
+  assert.deepEqual(empty.options, { brands: [], sources: [] });
+  assert.equal(empty.cityCoverage.visitsShare, null);
 });
 
 test('refresh ranges end at the selected month end or today and future months cannot be imported', () => {

@@ -1,6 +1,7 @@
 import type { LeadConversionRecord } from "../api/leadConversionApi";
 
 export type LeadConversionScope = "Все" | "МСК" | "СПБ";
+export const LEAD_CONVERSION_VISIBLE_SOURCES = ["Яндекс Карты", "2ГИС", "Гугл Карты", "Сайт", "Директ"] as const;
 export type LeadConversionSortKey = "label" | "visits" | "leads" | "conversionRate";
 export type LeadConversionSortDirection = "asc" | "desc";
 export type LeadConversionOption = { value: string; label: string };
@@ -15,7 +16,7 @@ export type LeadConversionGroup = LeadConversionTotals & {
   brandCount: number;
   sourceCount: number;
 };
-export type LeadConversionFilters = { monthKey: string; scope: LeadConversionScope; brand: string; source: string };
+export type LeadConversionFilters = { monthKey: string; scope: LeadConversionScope; brand: string; source: string; visibleSources?: readonly string[] };
 type PreparedRecord = LeadConversionRecord & { brand: string; source: string; sourceLabels: string[] };
 
 const unknownBrand = "Бренд не определён";
@@ -106,7 +107,8 @@ function options(records: PreparedRecord[], dimension: "source" | "brand"): Lead
 
 export function buildLeadConversionReport(records: LeadConversionRecord[], filters: LeadConversionFilters) {
   const prepared = records.map(prepare);
-  const monthRows = prepared.filter((row): row is PreparedRecord => row !== null && row.date.startsWith(`${filters.monthKey}-`));
+  const visibleSources = filters.visibleSources === undefined ? null : new Set(filters.visibleSources);
+  const monthRows = prepared.filter((row): row is PreparedRecord => row !== null && row.date.startsWith(`${filters.monthKey}-`) && (!visibleSources || visibleSources.has(row.source)));
   const matchesDimensions = (row: PreparedRecord) => (filters.brand === "all" || dimensionKey(row.brand) === filters.brand) &&
     (filters.source === "all" || dimensionKey(row.source) === filters.source);
   const knownCityRows = monthRows.filter((row) => (row.city === "МСК" || row.city === "СПБ") && matchesDimensions(row));

@@ -41,6 +41,16 @@
 .lead-conversion-table td:last-child, .lead-conversion-table thead th:last-child { padding-right: 18px; }
 .lead-conversion-table .lead-conversion-rate-cell { color: var(--blue-dark); font-weight: 800; }
 .lead-conversion-table tbody tr:hover { background: #f1f5ff; }
+.lead-conversion-brand-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.lead-conversion-brand-toggle > svg { flex: 0 0 auto; color: var(--blue-dark); transform: rotate(-90deg); transition: transform .18s ease-out; }
+.lead-conversion-brand-toggle[aria-expanded="true"] > svg { transform: rotate(0); }
+.lead-conversion-brand-toggle:hover strong { color: var(--blue-dark); }
+.lead-conversion-brand-open { background: #edf2ff; }
+.lead-conversion-table .lead-conversion-brand-detail > td { padding: 0 8px 10px; background: #f4f7ff; text-align: left; white-space: normal; }
+.lead-conversion-nested-table .lead-conversion-table { min-width: 0; }
+.lead-conversion-nested-table .lead-conversion-table th, .lead-conversion-nested-table .lead-conversion-table td { padding: 9px 10px; }
+.lead-conversion-nested-table .lead-conversion-table tbody th { min-width: 110px; }
+.lead-conversion-nested-table .lead-conversion-table thead th { background: transparent; }
 .lead-conversion-comparison ol { display: grid; gap: 15px; margin: 0; padding: 0; list-style: none; }
 .lead-conversion-comparison li { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(120px, 1.7fr) 75px; gap: 16px; align-items: center; }
 .lead-conversion-bar-label { display: grid; gap: 4px; }
@@ -115,6 +125,7 @@
   .lead-conversion-empty { padding: 21px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .lead-conversion-brand-toggle > svg { transition: none; }
   .lead-conversion-refresh[aria-busy="true"] svg, .lead-conversion-loading > div { animation: none; }
   .lead-conversion-detail summary > svg:last-child, .lead-conversion-unknown summary > svg:last-child { transition: none; }
 }
