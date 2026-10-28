@@ -25,13 +25,15 @@ const compareLabel = (a: string, b: string) => a.localeCompare(b, "ru");
 const dimensionKey = (value: string) => JSON.stringify(value);
 
 function classifySource(value: string): string | null {
-  const text = value.replace(/\u00a0/g, " ").trim().toLocaleLowerCase("ru-RU");
+  const text = value.replace(/\u00a0/g, " ").trim().toLocaleLowerCase("ru-RU").replace(/^:utm:/, "").replace(/:u:/g, "_");
   if (/^прямые\s+визиты$|^direct\s+(?:visits|traffic)(?:\s*\/\s*traffic)?$/.test(text)) return "Прямые визиты";
   if (/^geoadv_direct$|^direct\d+$|^yandex[\s._-]*direct(?:$|[\s/_-])|^яндекс[\s._-]*директ(?:$|[\s/_-])|^директ$/.test(text)) return "Директ";
   if (/^(?:2gis|2гис)|(?:^|[\s_./-])(?:2gis|2гис)(?:$|[\s_./-])/.test(text)) return "2ГИС";
   if (/^(?:ya|yk)$|(?:^|[_\s/.-])(?:ykart|ykar)|^geoadv_.*(?:maps|organization_list)|^(?:яндекс\s*карты|yandex\s*maps)$/.test(text)) return "Яндекс Карты";
   if (/^go$|(?:^|[_\s/.-])(?:gkart|gmaps)|^(?:google\s*maps|гугл\s*карты)$/.test(text)) return "Гугл Карты";
-  if (/(?:^|[\s/_-])organic(?:$|[\s/_-])|^seo(?:$|[\s/_.-])|^(?:site|сайт)$|^визиты\s+с\s+сайтов$|^ref(?:erals|errals|erral)$/.test(text)) return "Сайт";
+  if (/^(?:yell\.ru|spravker)$/.test(text)) return "Справочники";
+  if (/^(?:perplexity|chatgpt\.com)$/.test(text)) return "Нейросети";
+  if (/(?:^|[\s/_-])organic(?:$|[\s/_-])|^seo(?:$|[\s/_.-])|^(?:site|сайт|yandex)$|^визиты\s+с\s+сайтов$|^ref(?:erals|errals|erral)$/.test(text)) return "Сайт";
   if (/^(?:tg|wa)$|telegram|whatsapp|viber|messengers|мессенджер/.test(text)) return "Мессенджеры";
   if (/^vk$|_vk$|^vk\.com(?:\/|$)|^вконтакте$|^vkontakte$/.test(text)) return "ВКонтакте";
   if (/cashback|к[еэ]шб[еэ]к/.test(text)) return "Рек/кешбэк";

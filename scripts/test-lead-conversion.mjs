@@ -112,14 +112,46 @@ test('audited provider codes map to useful source groups without guessing ambigu
     ['Гугл Карты', ['go', 'gkart_spb', 'Google Maps', 'Гугл Карты', 'izidrivespb_gkart_all', 'avtosityspb_gkart_all']],
     ['2ГИС', ['2gis', '2gis_msk', 'spb_2gis_all', '2ГИС']],
     ['Директ', ['geoadv_direct', 'direct8', 'direct9', 'direct17', 'yandex.direct', 'Яндекс Директ', 'Директ']],
-    ['Сайт', ['SEO', 'google / organic', 'yandex / organic', 'site', 'сайт', 'Визиты с сайтов', 'referals', 'referrals']],
+    ['Сайт', ['SEO', 'google / organic', 'yandex / organic', 'yandex', ':utm:yandex', 'site', 'сайт', 'Визиты с сайтов', 'referals', 'referrals']],
+    ['Справочники', ['yell.ru', ':utm:yell.ru', 'spravker', ':utm:spravker']],
+    ['Нейросети', ['perplexity', ':utm:perplexity', 'chatgpt.com', ':utm:chatgpt.com']],
     ['Прямые визиты', ['Прямые\u00a0визиты', 'Direct visits', 'Direct traffic', 'Direct visits/traffic']],
     ['Мессенджеры', ['Telegram', 'WhatsApp', 'Viber', 'messengers', 'Мессенджеры', 'tg', 'wa']],
     ['ВКонтакте', ['VK', 'msk_vk', 'ВКонтакте']],
     ['Рек/кешбэк', ['кешбэк', 'cashback', 'Рек/кешбэк']],
-    ['Прочие / Нераспознанное', ['ad', 'yandex', 'google', 'direct', '42', '169', 'unknown', 'nosource', 'unverified_channel']],
+    ['Прочие / Нераспознанное', ['ad', 'google', 'direct', '42', '169', 'unknown', 'nosource', 'unverified_channel']],
   ]);
   for (const [expected, inputs] of cases) for (const input of inputs) assert.equal(groupLeadConversionSource(input), expected, input);
+});
+
+test('confirmed website, directory and AI labels leave unknown without changing city totals or weighted conversion', () => {
+  const input = [
+    record('ya', 100, 5, { source: 'yandex' }),
+    record('dir1', 40, 2, { source: 'yell.ru' }),
+    record('dir2', 60, 1, { source: 'spravker', rawSource: ':utm:spravker' }),
+    record('ai1', 30, 3, { source: 'chatgpt.com', rawSource: ':utm:chatgpt.com' }),
+    record('ai2', 70, 1, { source: 'perplexity', city: 'СПБ' }),
+    record('unknown-city', 20, 2, { source: ':utm:perplexity', city: 'Не определён' }),
+    record('still-unknown', 10, 1, { source: 'ad' }),
+  ];
+  const report = buildLeadConversionReport(input, filters);
+  assert.equal(report.totals.visits, 310); assert.equal(report.totals.leads, 13);
+  for (const dimension of ['bySource', 'byBrand', 'byBrandSource']) {
+    assert.equal(report[dimension].reduce((n, row) => n + row.visits, 0), 310);
+    assert.equal(report[dimension].reduce((n, row) => n + row.leads, 0), 13);
+  }
+  const directories = report.bySource.find(row => row.label === 'Справочники');
+  assert.equal(directories.visits, 100); assert.equal(directories.leads, 3);
+  assert.equal(directories.conversionRate, 3);
+  const neural = report.bySource.find(row => row.label === 'Нейросети');
+  assert.equal(neural.visits, 100); assert.equal(neural.leads, 4); assert.equal(neural.conversionRate, 4);
+  assert.ok(neural.sourceLabels.includes(':utm:chatgpt.com'));
+  assert.deepEqual(report.bySource.find(row => row.label === 'Прочие / Нераспознанное').sourceLabels, ['ad']);
+  assert.equal(report.unknownCity.bySource[0].label, 'Нейросети');
+  assert.equal(report.unknownCity.totals.visits, 20);
+  const selected = report.options.sources.find(option => option.label === 'Нейросети').value;
+  assert.equal(buildLeadConversionReport(input, { ...filters, source: selected }).totals.leads, 4);
+  assert.equal(groupLeadConversionSource('yandex', 'direct8'), 'Директ');
 });
 
 test('brand labels separate the same school in Moscow and Petersburg and normalize only boundary city tokens', () => {
