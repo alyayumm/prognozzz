@@ -7,6 +7,10 @@ export type LeadConversionRecord = {
   brand: string;
   domain: string;
   source: string;
+  rawSource?: string;
+  utmCampaign?: string;
+  utmMedium?: string;
+  schoolId?: string;
   visits: number;
   leads: number;
 };

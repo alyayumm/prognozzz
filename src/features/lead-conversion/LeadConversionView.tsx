@@ -129,7 +129,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
         <div>
           <span className="lead-conversion-eyebrow">Roistat · переходы и заявки</span>
           <h2>Какие переходы становятся лидами</h2>
-          <p>Конверсия = лиды Roistat / переходы Roistat × 100%. Источники показаны без перераспределения. Город — привязка домена, а не местоположение посетителя.</p>
+          <p>Конверсия = лиды Roistat / переходы Roistat × 100%. Источники объединены в каналы. Школы разделены по городу из справочника и UTM; переходы и лиды не перераспределяются.</p>
           <div className="lead-conversion-meta" aria-live="polite">
             <span>{selectedScope === "Все" ? "МСК + СПБ" : selectedScope}</span>
             <span>{loading ? "Читаю данные…" : coverage ? `Данные: ${formatDay(coverage.fromDate)}–${formatDay(coverage.toDate)}` : "Период ещё не загружен"}</span>
@@ -166,7 +166,7 @@ export function LeadConversionDashboard({ snapshot, loading, refreshing, error, 
           <summary>
             <Info size={19} /><div><strong>Без города — отдельно от МСК и СПБ</strong><span>{formatCount(unknown.totals.visits)} переходов · {formatCount(unknown.totals.leads)} лидов · CR {formatRate(unknown.totals.conversionRate)}</span><small>Город определён для {formatRate(report.cityCoverage.visitsShare)} переходов и {formatRate(report.cityCoverage.leadsShare)} лидов выбранных брендов и источников</small></div><ChevronDown size={18} />
           </summary>
-          <p>У этих доменов не определён город. Они не включены в показатели выбранного города. Здесь можно проверить каждый бренд и источник.</p>
+          <p>Для этих строк нет однозначной привязки школы к городу в справочнике и UTM. Они не включены в показатели выбранного города. Здесь можно проверить каждый бренд и источник.</p>
           <div className="lead-conversion-table-grid lead-conversion-unknown-aggregates">
             <section><h3>Источники без города</h3><ConversionTable title="Конверсия источников без города" rows={unknown.bySource} dimension="source" /></section>
             <section><h3>Бренды без города</h3><ConversionTable title="Конверсия брендов без города" rows={unknown.byBrand} dimension="brand" /></section>
@@ -224,6 +224,7 @@ function ConversionTable({ title, rows, dimension }: { title: string; rows: Lead
     </tr></thead><tbody>{sorted.map((row) => <tr key={row.key}>
       <th scope="row" title={row.domains.join(", ")}><strong>{dimension === "brandSource" ? row.brand : row.label}</strong>
         <small>{dimension === "source" ? `Бренды: ${row.brandCount}` : dimension === "brandSource" ? row.source : row.domains.length === 1 ? row.domains[0] : `Домены: ${row.domains.length}`}</small>
+        {dimension !== "brand" && row.sourceLabels.length > 0 && <details className="lead-conversion-source-labels"><summary>Исходные метки: {row.sourceLabels.length}</summary><span>{row.sourceLabels.join(", ")}</span></details>}
       </th><td>{formatCount(row.visits)}</td><td>{formatCount(row.leads)}</td><td className="lead-conversion-rate-cell" title={row.conversionRate === null ? "Нет переходов для расчёта" : undefined}>{row.conversionRate === null ? "—" : percentFormat.format(row.conversionRate)}</td>
     </tr>)}</tbody></table>
   </div>;

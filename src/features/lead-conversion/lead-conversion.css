@@ -83,6 +83,9 @@
 .lead-conversion-loading > span { grid-column: 1 / -1; color: var(--muted-strong); font-size: 12px; }
 .lead-conversion-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); border: 0; white-space: nowrap; }
 .lead-conversion-view :is(button, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.lead-conversion-source-labels { margin-top: 5px; color: var(--muted-strong); font-size: 10px; font-weight: 400; }
+.lead-conversion-source-labels summary { cursor: pointer; }
+.lead-conversion-source-labels > span { display: block; max-width: 310px; margin-top: 5px; overflow-wrap: anywhere; }
 @keyframes conversion-spin { to { transform: rotate(360deg); } }
 @keyframes conversion-pulse { 50% { opacity: .55; } }
 @media (max-width: 1200px) {

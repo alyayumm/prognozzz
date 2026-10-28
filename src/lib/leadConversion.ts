@@ -10,17 +10,48 @@ export type LeadConversionGroup = LeadConversionTotals & {
   label: string;
   brand: string;
   source: string;
+  sourceLabels: string[];
   domains: string[];
   brandCount: number;
   sourceCount: number;
 };
 export type LeadConversionFilters = { monthKey: string; scope: LeadConversionScope; brand: string; source: string };
-type PreparedRecord = LeadConversionRecord & { brand: string; source: string };
+type PreparedRecord = LeadConversionRecord & { brand: string; source: string; sourceLabels: string[] };
 
 const unknownBrand = "Бренд не определён";
 const unknownSource = "Источник не определён";
+const otherSources = "Прочие / Нераспознанное";
 const compareLabel = (a: string, b: string) => a.localeCompare(b, "ru");
 const dimensionKey = (value: string) => JSON.stringify(value);
+
+function classifySource(value: string): string | null {
+  const text = value.replace(/\u00a0/g, " ").trim().toLocaleLowerCase("ru-RU");
+  if (/^прямые\s+визиты$|^direct\s+(?:visits|traffic)(?:\s*\/\s*traffic)?$/.test(text)) return "Прямые визиты";
+  if (/^geoadv_direct$|^direct\d+$|^yandex[\s._-]*direct(?:$|[\s/_-])|^яндекс[\s._-]*директ(?:$|[\s/_-])|^директ$/.test(text)) return "Директ";
+  if (/^(?:2gis|2гис)|(?:^|[\s_./-])(?:2gis|2гис)(?:$|[\s_./-])/.test(text)) return "2ГИС";
+  if (/^(?:ya|yk)$|(?:^|[_\s/.-])(?:ykart|ykar)|^geoadv_.*(?:maps|organization_list)|^(?:яндекс\s*карты|yandex\s*maps)$/.test(text)) return "Яндекс Карты";
+  if (/^go$|(?:^|[_\s/.-])(?:gkart|gmaps)|^(?:google\s*maps|гугл\s*карты)$/.test(text)) return "Гугл Карты";
+  if (/(?:^|[\s/_-])organic(?:$|[\s/_-])|^seo(?:$|[\s/_.-])|^(?:site|сайт)$|^визиты\s+с\s+сайтов$|^ref(?:erals|errals|erral)$/.test(text)) return "Сайт";
+  if (/^(?:tg|wa)$|telegram|whatsapp|viber|messengers|мессенджер/.test(text)) return "Мессенджеры";
+  if (/^vk$|_vk$|^vk\.com(?:\/|$)|^вконтакте$|^vkontakte$/.test(text)) return "ВКонтакте";
+  if (/cashback|к[еэ]шб[еэ]к/.test(text)) return "Рек/кешбэк";
+  return null;
+}
+
+/** Prefer the audited provider code when a display name hides it behind a brand. */
+export function groupLeadConversionSource(source: unknown, rawSource?: unknown): string {
+  return classifySource(String(rawSource ?? "")) ?? classifySource(String(source ?? "")) ?? otherSources;
+}
+
+function brandWithCity(value: unknown, city: LeadConversionRecord["city"]): string {
+  const label = String(value ?? "").trim() || unknownBrand;
+  if (label === unknownBrand) return label;
+  const brand = label
+    .replace(/^(?:мск|спб)(?=$|[\s_.·,|/()[\]–—-])[\s_.·,|/()[\]–—-]*/i, "")
+    .replace(/[\s_.·,|/()[\]–—-]+(?:мск|спб)[\s_.·,|/()[\]–—-]*$/i, "")
+    .trim();
+  return brand ? `${brand} · ${city === "МСК" || city === "СПБ" ? city : "город не определён"}` : unknownBrand;
+}
 
 function validDate(date: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -28,10 +59,12 @@ function validDate(date: string): boolean {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === date;
 }
 
-/** Keep the provider's source labels; no allocation or source canonicalization is applied. */
+/** Group audited channels while preserving the provider labels and every observation. */
 function prepare(record: LeadConversionRecord): PreparedRecord | null {
   if (!validDate(record.date) || !Number.isFinite(record.visits) || !Number.isFinite(record.leads) || record.visits < 0 || record.leads < 0) return null;
-  return { ...record, brand: String(record.brand ?? "").trim() || unknownBrand, source: String(record.source ?? "").trim() || unknownSource, domain: String(record.domain ?? "").trim() };
+  const sourceLabel = String(record.source ?? "").trim() || unknownSource;
+  const rawSource = String(record.rawSource ?? "").trim();
+  return { ...record, brand: brandWithCity(record.brand, record.city), source: groupLeadConversionSource(sourceLabel, rawSource), rawSource, sourceLabels: [...new Set([sourceLabel, rawSource].filter(Boolean))], domain: String(record.domain ?? "").trim() };
 }
 
 export function conversionRate(leads: number, visits: number): number | null {
@@ -57,6 +90,7 @@ function group(records: PreparedRecord[], dimension: "source" | "brand" | "brand
     label: dimension === "brandSource" ? `${rows[0].brand} · ${rows[0].source}` : rows[0][dimension],
     brand: dimension === "source" ? "" : rows[0].brand,
     source: dimension === "brand" ? "" : rows[0].source,
+    sourceLabels: [...new Set(rows.flatMap((row) => row.sourceLabels))].sort(compareLabel),
     domains: [...new Set(rows.map((row) => row.domain.trim()).filter(Boolean))].sort(compareLabel),
     brandCount: new Set(rows.map((row) => row.brand)).size,
     sourceCount: new Set(rows.map((row) => row.source)).size,

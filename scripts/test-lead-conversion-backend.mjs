@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { test } from 'node:test';
 
-const source = readFileSync(new URL('../apps-script/LeadConversion.gs', import.meta.url), 'utf8');
+const source = ['SchoolRegistry.gs', 'LeadConversion.gs'].map(file => readFileSync(new URL('../apps-script/' + file, import.meta.url), 'utf8')).join('\n');
 const plain = value => JSON.parse(JSON.stringify(value));
-const headers = ['id', 'date', 'city', 'brand', 'domain', 'source', 'visits', 'leads', 'rawSource', 'updatedAt'];
+const headers = ['id', 'date', 'city', 'brand', 'domain', 'source', 'visits', 'leads', 'rawSource', 'updatedAt', 'utmCampaign', 'utmMedium', 'schoolId'];
 const dateRange = (start, end) => {
   const days = [];
   for (let d = new Date(`${start}T00:00:00Z`); d <= new Date(`${end}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) days.push(d.toISOString().slice(0, 10));
@@ -64,8 +64,8 @@ test('public snapshot without credentials is an honest read with no writes or pr
 test('sync fetches visits and leads together at native source+host grain and Moscow days without CRM filters', () => {
   const f = fixture();
   const data = plain(f.api.sync({ fromDate: '2026-10-01', toDate: '2026-10-02' }));
-  assert.deepEqual(f.requests[0], { dimensions: ['host', 'marker_level_1'], metrics: ['visits', 'leads'], interval: '1d', period: { from: '2026-10-01T00:00:00+0300', to: '2026-10-02T23:59:59+0300' } });
-  assert.equal(data.records.length, 2); assert.equal(data.records[0].city, 'МСК'); assert.equal(data.records[0].brand, 'Автодрайв');
+  assert.deepEqual(f.requests[0], { dimensions: ['host', 'marker_level_1', 'utm_campaign', 'utm_medium'], metrics: ['visits', 'leads'], interval: '1d', period: { from: '2026-10-01T00:00:00+0300', to: '2026-10-02T23:59:59+0300' } });
+  assert.equal(data.records.length, 2); assert.equal(data.records[0].city, 'МСК'); assert.equal(data.records[0].brand, 'АвтоДрайв_МСК');
   assert.equal(data.records[0].source, 'Яндекс.Директ'); assert.equal(data.records[0].visits, 10); assert.equal(data.records[0].leads, 2);
   assert.deepEqual(data.coverage, { fromDate: '2026-10-01', toDate: '2026-10-02' });
   assert.equal(f.releases(), 1); assert.equal(f.stateWrites(), 1);
@@ -149,7 +149,7 @@ test('cache headers may move; adjacent sync ranges merge but gaps never produce 
   const gap = plain(g.api.sync({ fromDate: '2026-10-10', toDate: '2026-10-10' }));
   assert.equal(gap.coverage, null); assert.ok(gap.warnings.some(w => /разрыв/i.test(w)));
   const reversed = [...headers].reverse();
-  const rowValues = cacheRow('2026-10-01');
+  const rowValues = [...cacheRow('2026-10-01'), '', '', ''];
   const h = fixture({ values: [reversed, [...rowValues].reverse()], properties: props });
   assert.equal(h.api.get({ monthKey: '2026-10' }).records[0].visits, 20);
 });
@@ -182,13 +182,61 @@ test('a daily interval may end at the next exclusive Moscow midnight', () => {
 test('city mapping uses explicit hostname labels or verified sites and never confuses Tomsk or Omsk with Moscow', () => {
   const cases = [
     ['tomsk.ru', 'Не определён'], ['omsk.ru', 'Не определён'], ['омск.рф', 'Не определён'],
-    ['izidrive.ru', 'Не определён'], ['hermes-mos.ru', 'Не определён'], ['newbrandmsk.ru', 'Не определён'],
+    ['izidrive.ru', 'Не определён'], ['hermes-mos.ru', 'МСК'], ['newbrandmsk.ru', 'Не определён'],
     ['autodrive.msk.ru', 'МСК'], ['izidrive.msk.ru', 'МСК'], ['rulevoy-msk.ru', 'МСК'],
     ['avtoshkola-flagmanmsk.ru', 'МСК'], ['avtomotospb.ru', 'СПБ'], ['hermesrf-spb.ru', 'СПБ'], ['академика-спб.рф', 'СПБ'],
   ];
   const f = fixture({ response: report('2026-10-01', '2026-10-01', cases.map(([host]) => row(host))) });
   const records = f.api.sync({ fromDate: '2026-10-01', toDate: '2026-10-01' }).records;
   for (const [domain, city] of cases) assert.equal(records.find(record => record.domain === domain).city, city, domain);
+});
+
+test('observed Cyrillic and landing aliases join their exact registered school without cross-city merging', () => {
+  const domains = ['автошкола-автодрайв.москва', 'автодрайв.спб.рф', 'autodrive-school-ru.creatium.site'];
+  const f = fixture({ response: report('2026-10-01', '2026-10-01', domains.map(domain => row(domain))) });
+  const records = f.api.sync({ fromDate: '2026-10-01', toDate: '2026-10-01' }).records;
+  assert.equal(records.find(r => r.domain === domains[0]).schoolId, '949581');
+  assert.ok(records.filter(r => r.domain !== domains[0]).every(r => r.schoolId === '949579' && r.city === 'СПБ'));
+});
+
+test('registry separates same-name schools and binds exact UTM campaign+city on shared or missing hosts', () => {
+  const input = (domain, campaign, medium, visits = 10) => {
+    const item = row(domain, 'ya', visits, 2, 'ya');
+    item.dimensions.utm_campaign = { value: campaign };
+    item.dimensions.utm_medium = { value: medium };
+    return item;
+  };
+  const rows = [
+    input('autodrive.msk.ru', '', ''), input('autodrive-school.ru', '', ''),
+    input('izidrive.ru', 'izidrive', 'msk', 20), input('izidrive.ru', 'izidrive', 'spb', 30),
+    input('izidrive.ru', 'izidrive', 'cpc', 40), input('', 'avtoshkola-yaguarspb', 'spb'),
+    input('avtoshkola-yaguarmsk.ru', '', ''), input('hermes-mos.ru', 'hermesrf-spb', 'spb'),
+    input('autodrive-school.ru', 'autodrive-school', 'msk'),
+    input('autodrive.msk.ru', 'autodrive-school', 'spb'),
+  ];
+  const f = fixture({ response: report('2026-10-01', '2026-10-01', rows) });
+  const data = plain(f.api.sync({ fromDate: '2026-10-01', toDate: '2026-10-01' }));
+  assert.equal(data.records.length, rows.length, 'same-host UTM city rows must not collapse');
+  assert.equal(data.records.reduce((n, r) => n + r.visits, 0), 160);
+  assert.equal(data.records.reduce((n, r) => n + r.leads, 0), 20);
+  const school = (id) => data.records.find(r => r.schoolId === id);
+  assert.equal(school('949581').city, 'МСК'); assert.equal(school('949579').city, 'СПБ');
+  assert.equal(school('949795').visits, 20); assert.equal(school('949793').visits, 30);
+  assert.equal(school('949765').city, 'СПБ'); assert.equal(school('949649').city, 'МСК');
+  assert.equal(school('949767').domain, 'hermes-mos.ru');
+  assert.equal(data.records.find(r => r.utmMedium === 'cpc').city, 'Не определён');
+  assert.equal(data.records.find(r => r.utmCampaign === 'autodrive-school').city, 'Не определён');
+  assert.equal(data.records.find(r => r.domain === 'autodrive.msk.ru' && r.utmMedium === 'spb').city, 'Не определён');
+});
+
+test('old ten-column caches are enriched read-only from registry without calling Roistat', () => {
+  const oldHeaders = headers.slice(0, 10);
+  const old = cacheRow('2026-10-01'); old[2] = 'Не определён'; old[4] = 'autodrive-school.ru';
+  const f = fixture({ values: [oldHeaders, old] });
+  const result = plain(f.api.get({ monthKey: '2026-10' }));
+  assert.equal(result.records[0].city, 'СПБ'); assert.equal(result.records[0].brand, 'АвтоДрайв_СПб');
+  assert.equal(result.records[0].schoolId, '949579'); assert.equal(result.records[0].visits, 20);
+  assert.equal(f.writes.length, 0); assert.equal(f.requests.length, 0);
 });
 
 test('public conversion reads skip unrelated setup and shared sync always requires the report password', () => {

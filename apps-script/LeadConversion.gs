@@ -1,6 +1,7 @@
 // This cache is independent of amoCRM qualification, PS sales and redistributed marketing reports.
 const LEAD_CONVERSION_SHEET = 'Lead_Conversion_Daily';
-const LEAD_CONVERSION_HEADERS = ['id', 'date', 'city', 'brand', 'domain', 'source', 'visits', 'leads', 'rawSource', 'updatedAt'];
+const LEAD_CONVERSION_HEADERS = ['id', 'date', 'city', 'brand', 'domain', 'source', 'visits', 'leads', 'rawSource', 'updatedAt', 'utmCampaign', 'utmMedium', 'schoolId'];
+const LEAD_CONVERSION_LEGACY_HEADERS = LEAD_CONVERSION_HEADERS.slice(0, 10);
 const LEAD_CONVERSION_STATE_PROPERTY = 'LEAD_CONVERSION_STATE';
 
 function getLeadConversion_(payload) {
@@ -15,7 +16,9 @@ function getLeadConversion_(payload) {
   }
   const ranges = leadConversionMergeRanges_(state.ranges || []);
   const coverage = ranges.length === 1 ? ranges[0] : null;
-  warnings = warnings.concat(state.warnings || []);
+  warnings = warnings.concat((state.warnings || []).filter((warning) => warning.indexOf('город не определён по домену') < 0));
+  const unknownCities = records.filter((row) => row.city === 'Не определён').length;
+  if (unknownCities) warnings.push('У ' + unknownCities + ' строк город не определён по справочнику школ и UTM. Они показаны отдельно.');
   if (ranges.length > 1) warnings.push('В сохранённых периодах есть разрыв. Обновите месяц целиком для непрерывного покрытия.');
   if (!configured) warnings.push('Подключите Roistat для загрузки визитов и заявок.');
   return { records: records, coverage: coverage, updatedAt: String(state.updatedAt || ''), warnings: warnings, configured: configured };
@@ -33,7 +36,7 @@ function syncLeadConversion_(payload) {
     let response;
     try {
       response = fetchRoistatEndpoint_('analytics/data', {
-        dimensions: ['host', 'marker_level_1'], metrics: ['visits', 'leads'], interval: '1d',
+        dimensions: ['host', 'marker_level_1', 'utm_campaign', 'utm_medium'], metrics: ['visits', 'leads'], interval: '1d',
         period: { from: range.fromDate + 'T00:00:00+0300', to: range.toDate + 'T23:59:59+0300' },
       });
     } catch (error) {
@@ -83,7 +86,7 @@ function leadConversionParseReport_(response, range) {
     const collect = (items, inherited) => {
       items.forEach((item) => {
         if (!item || typeof item !== 'object') throw new Error('Roistat: повреждённая строка конверсии.');
-        const dimensions = Object.assign({}, inherited, leadConversionSection_(item.dimensions, ['host', 'marker_level_1']));
+        const dimensions = Object.assign({}, inherited, leadConversionSection_(item.dimensions, ['host', 'marker_level_1', 'utm_campaign', 'utm_medium']));
         const children = Array.isArray(item.items) && item.items.length ? item.items : Array.isArray(item.children) && item.children.length ? item.children : null;
         if (children) { collect(children, dimensions); return; }
         const metrics = leadConversionSection_(item.metrics, ['visits', 'leads']);
@@ -96,10 +99,13 @@ function leadConversionParseReport_(response, range) {
         const rawSource = String(leadConversionCellValue_(channel) || '');
         const title = channel && typeof channel === 'object' ? String(channel.title || '') : '';
         const source = title.trim() || rawSource.trim() || 'Не определён';
-        const id = 'lc:' + date + ':' + encodeURIComponent(domain) + ':' + encodeURIComponent(rawSource || source);
+        const utmCampaign = String(leadConversionCellValue_(dimensions.utm_campaign) || '');
+        const utmMedium = String(leadConversionCellValue_(dimensions.utm_medium) || '');
+        const school = leadConversionSchool_(domain, utmCampaign, utmMedium);
+        const id = 'lc:' + date + ':' + encodeURIComponent(JSON.stringify([domain, rawSource || source, utmCampaign, utmMedium]));
         const record = records[id] || (records[id] = {
-          id: id, date: date, city: leadConversionCity_(domain),
-          brand: domain ? canonicalRoistatBrand_(domain, '') || 'Не определён' : 'Не определён',
+          id: id, date: date, city: school.city, brand: school.brand, schoolId: school.id,
+          utmCampaign: utmCampaign, utmMedium: utmMedium,
           domain: domain, source: source, rawSource: rawSource, visits: 0, leads: 0,
         });
         record.visits += visits; record.leads += leads;
@@ -121,9 +127,7 @@ function leadConversionParseReport_(response, range) {
   }
   const rows = Object.keys(records).map((key) => records[key]);
   rows.forEach((row) => { leadConversionCount_(row.visits); leadConversionCount_(row.leads); });
-  const unknownCities = rows.filter((row) => row.city === 'Не определён').length;
   const warnings = ['Источники и нераспознанные заявки сохранены как в Roistat, без пропорционального распределения.'];
-  if (unknownCities) warnings.push('У ' + unknownCities + ' строк город не определён по домену; они не добавлены одновременно в Москву и СПб.');
   return { records: rows, warnings: warnings };
 }
 
@@ -170,17 +174,20 @@ function leadConversionReadRecords_() {
   if (!sheet || sheet.getLastRow() < 1) return [];
   const values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
   const headers = values[0].map((value) => String(value || '').trim());
-  if (LEAD_CONVERSION_HEADERS.some((header) => headers.indexOf(header) < 0)) throw new Error('Некорректные заголовки кэша конверсии.');
+  if (LEAD_CONVERSION_LEGACY_HEADERS.some((header) => headers.indexOf(header) < 0)) throw new Error('Некорректные заголовки кэша конверсии.');
   const columns = Object.create(null);
   LEAD_CONVERSION_HEADERS.forEach((header) => { columns[header] = headers.indexOf(header); });
   return values.slice(1).filter((row) => row.some((value) => value !== '' && value !== null)).map((row) => {
     const record = {};
-    LEAD_CONVERSION_HEADERS.forEach((header) => { record[header] = row[columns[header]]; });
-    ['id', 'brand', 'domain', 'source', 'rawSource'].forEach((key) => { record[key] = String(record[key] === undefined || record[key] === null ? '' : record[key]); });
+    LEAD_CONVERSION_HEADERS.forEach((header) => { record[header] = columns[header] >= 0 ? row[columns[header]] : ''; });
+    ['id', 'brand', 'domain', 'source', 'rawSource', 'utmCampaign', 'utmMedium', 'schoolId'].forEach((key) => { record[key] = String(record[key] === undefined || record[key] === null ? '' : record[key]); });
     record.date = leadConversionDate_(record.date);
     if (!record.date || !record.id) throw new Error('Некорректная дата или ID кэша конверсии.');
     record.visits = leadConversionCount_(record.visits); record.leads = leadConversionCount_(record.leads);
-    record.city = ['МСК', 'СПБ'].indexOf(record.city) >= 0 ? record.city : 'Не определён';
+    const school = leadConversionSchool_(record.domain, record.utmCampaign, record.utmMedium);
+    record.city = school.city;
+    record.brand = school.brand;
+    record.schoolId = school.id;
     return record;
   });
 }
