@@ -16,8 +16,8 @@ type DemandYearSeries = { year: number; values: (number | null)[] };
 type ChartSize = { width: number; height: number };
 
 const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
-const SERIES_COLORS = ["#1c46f5", "#087b79", "#8645b0", "#b15a0d", "#253c66", "#b3316e"];
-const SERIES_DASHES = [undefined, "9 4", "3 4", "12 4 3 4", undefined, "6 4"];
+const SERIES_COLORS = ["#1c46f5", "#087b79", "#8645b0", "#b15a0d", "#253c66", "#b3316e", "#386d25", "#963d32", "#5d43a6"];
+const SERIES_DASHES = [undefined, "9 4", "3 4", "12 4 3 4", undefined, "6 4", "2 3", "10 3 2 3", "6 3 2 3"];
 const numberFormat = new Intl.NumberFormat("ru-RU");
 
 function currentMoscowMonth(): string {
@@ -119,6 +119,7 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
   const hasSelectedData = selectedSeries.some((series) => series.values.some((value) => value !== null));
   const busy = loading || refreshing;
   const configured = snapshot?.configured ?? false;
+  const sheetSource = snapshot?.source === "sheet";
   const apiError = error || (snapshot?.status === "error" ? snapshot.connectionMessage : "");
   const latestMonth = records.reduce((latest, record) => record.city === city && record.month > latest ? record.month : latest, "");
   const lastSyncedAt = formatSyncedAt(snapshot?.lastSyncedAt ?? "");
@@ -166,8 +167,8 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
           ))}
         </div>
         <div className="demand-refresh-control">
-          <button className="select-button demand-refresh-button" type="button" disabled={busy || !configured || !canRefresh} aria-describedby={refreshHelp ? refreshHelpId : undefined} title={refreshHelp || "Загрузить свежие данные Wordstat"} onClick={() => void fetchDemand(true)}>
-            <RefreshCw size={16} aria-hidden="true" />{refreshing ? "Обновляем…" : loading ? "Загрузка…" : "Обновить из Wordstat"}
+          <button className="select-button demand-refresh-button" type="button" disabled={busy || !configured || !canRefresh} aria-describedby={refreshHelp ? refreshHelpId : undefined} title={refreshHelp || (sheetSource ? "Прочитать текущую месячную историю из таблицы" : "Загрузить свежие данные Wordstat")} onClick={() => void fetchDemand(true)}>
+            <RefreshCw size={16} aria-hidden="true" />{refreshing ? "Обновляем…" : loading ? "Загрузка…" : sheetSource ? "Обновить из таблицы" : "Обновить из Wordstat"}
           </button>
           {refreshHelp ? <small id={refreshHelpId}>{refreshHelp}</small> : lastSyncedAt ? <small>Обновлено {lastSyncedAt} МСК</small> : null}
         </div>
@@ -227,7 +228,7 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
               {loading ? <><div className="demand-skeleton demand-skeleton-title" /><div className="demand-skeleton demand-skeleton-copy" /><span className="demand-sr-only">Загружаем данные спроса</span></> : <>
                 <BarChart3 size={26} aria-hidden="true" />
                 <strong>{apiError ? "Данные спроса пока недоступны" : !configured ? "Подключите Wordstat, чтобы увидеть сезонность" : "Помесячные данные ещё не загружены"}</strong>
-                <p>{apiError ? "Повторите загрузку. После успешного обновления здесь появится график." : !configured ? "Здесь появятся реальные данные по запросу «автошкола» для Москвы и Санкт-Петербурга." : "Нажмите «Обновить из Wordstat», чтобы загрузить историю спроса."}</p>
+                <p>{apiError ? "Повторите загрузку. После успешного обновления здесь появится график." : !configured ? "Здесь появятся реальные данные по запросу «автошкола» для Москвы и Санкт-Петербурга." : sheetSource ? "Загрузите месячную историю через меню Wordstat в таблице, затем нажмите «Обновить из таблицы»." : "Нажмите «Обновить из Wordstat», чтобы загрузить историю спроса."}</p>
               </>}
             </div>}
             {hasData && !hasSelectedData && <div className="demand-chart-empty" role="status"><strong>Выберите год для сравнения</strong><p>Нажмите на год над графиком, чтобы показать его линию.</p></div>}
@@ -243,13 +244,14 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
         </div>}
 
         <p className="demand-source-note"><Info size={15} aria-hidden="true" /><span>Широкая частотность: запросы со словом «автошкола» и его словоформами. Это количество запросов, а не уникальных людей. Текущий месяц не включён; пропуски не заменяются нулями.</span></p>
+        {sheetSource && <p className="demand-source-note"><Info size={15} aria-hidden="true" /><span>Источник: <a href={snapshot?.sourceUrl} target="_blank" rel="noreferrer">лист «История спроса»</a>. Новую историю загружайте через меню Wordstat → «Загрузить историю по месяцам» в таблице. Кнопка здесь перечитывает таблицу; выгрузка за последние 30 дней в сезонность не включается.</span></p>}
 
         {hasData && <details className="demand-data-details"><summary>Показать данные по месяцам<ChevronDown size={16} aria-hidden="true" /></summary><div className="demand-data-scroll" role="region" aria-label="Таблица спроса по месяцам" tabIndex={0}>
           <table><caption>Количество запросов «автошкола» · {city === "МСК" ? "Москва" : "Санкт-Петербург"}</caption><thead><tr><th scope="col">Месяц</th>{allSeries.map((series) => <th scope="col" key={series.year}>{series.year}</th>)}</tr></thead><tbody>{MONTH_NAMES.map((month, index) => <tr key={month}><th scope="row">{month}</th>{allSeries.map((series) => <td key={series.year}>{series.values[index] === null ? <span aria-label="Нет данных">—</span> : numberFormat.format(series.values[index] as number)}</td>)}</tr>)}</tbody></table>
         </div><p>«—» означает, что данных за месяц нет. Ноль означает отсутствие запросов в загруженных данных.</p></details>}
       </section>
 
-      {snapshot && !configured && snapshot.status !== "error" && <details className="demand-panel demand-connection-details" open={!records.length}>
+      {snapshot && !sheetSource && !configured && snapshot.status !== "error" && <details className="demand-panel demand-connection-details" open={!records.length}>
         <summary><span>Как подключить Wordstat</span><ChevronDown size={18} aria-hidden="true" /></summary>
         <p>{snapshot?.connectionMessage || "Для автоматической загрузки нужен доступ к Wordstat через Яндекс Облако."}</p>
         <ol><li>Создайте платёжный аккаунт и каталог в Яндекс Облаке, подключите Search API.</li><li>Выдайте сервисному аккаунту доступ к Search API и создайте API-ключ.</li><li>Добавьте API-ключ и ID каталога в защищённые настройки Apps Script, затем нажмите «Проверить подключение».</li></ol>

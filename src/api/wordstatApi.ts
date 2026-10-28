@@ -10,6 +10,8 @@ export interface WordstatDemandRecord {
 }
 
 export interface WordstatDemandSnapshot {
+  source?: "api" | "sheet";
+  sourceUrl?: string;
   phrase: "автошкола";
   records: WordstatDemandRecord[];
   configured: boolean;

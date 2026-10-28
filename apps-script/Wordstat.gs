@@ -1,6 +1,13 @@
 // Wordstat credentials live only in Script Properties. Public responses contain demand data only.
 const WORDSTAT_DEMAND_HEADERS = ['id', 'month', 'city', 'regionId', 'count', 'share', 'updatedAt'];
 const WORDSTAT_DEMAND_SHEET = 'Wordstat_Demand';
+const WORDSTAT_SOURCE_SPREADSHEET_ID = '1lBIgNVVyg7fT7j_rjVybfxUMBZ74NiuWDfPm3BZsIAY';
+const WORDSTAT_HISTORY_SHEET = 'История спроса';
+const WORDSTAT_HISTORY_HEADERS = ['Месяц', 'Город', 'Поисковая фраза', 'Запросов за месяц', 'Обновлено (МСК)'];
+
+function wordstatSourceType_() {
+  return String(PropertiesService.getScriptProperties().getProperty('WORDSTAT_SOURCE_TYPE') || '').trim().toLowerCase() === 'api' ? 'api' : 'sheet';
+}
 
 function wordstatNow_() {
   return new Date();
@@ -27,12 +34,13 @@ function wordstatCredentials_() {
 }
 
 function getWordstatDemand_() {
+  if (wordstatSourceType_() === 'sheet') return wordstatSheetDemand_(false);
   const credentials = wordstatCredentials_();
   const configured = Boolean(credentials.apiKey && credentials.folderId);
   const period = wordstatPeriod_();
   let records = [];
   try {
-    records = wordstatReadRecords_(period.latestAvailableMonth);
+    records = wordstatReadApiRecords_(period.latestAvailableMonth);
   } catch (error) {
     return wordstatSnapshot_(records, configured, period, ['Wordstat: не удалось прочитать сохранённые данные.'], true);
   }
@@ -53,6 +61,7 @@ function getWordstatDemand_() {
 }
 
 function syncWordstatDemand_() {
+  if (wordstatSourceType_() === 'sheet') return wordstatSheetDemand_(true);
   const credentials = wordstatCredentials_();
   if (!credentials.apiKey || !credentials.folderId) {
     throw new Error('Wordstat: сначала подключите Яндекс Облако — задайте API-ключ и ID каталога в настройках сервера.');
@@ -65,7 +74,7 @@ function wordstatRefresh_(credentials, period, force) {
   if (!lock.tryLock(1000)) throw new Error('Wordstat: обновление уже выполняется. Попробуйте позже.');
   const properties = PropertiesService.getScriptProperties();
   try {
-    const existing = wordstatReadRecords_(period.latestAvailableMonth);
+    const existing = wordstatReadApiRecords_(period.latestAvailableMonth);
     // A competing reader may have failed while this execution was waiting for the lock.
     const previousError = String(properties.getProperty('WORDSTAT_LAST_ERROR') || '');
     const attemptedAt = Date.parse(properties.getProperty('WORDSTAT_LAST_ATTEMPT_AT') || '');
@@ -86,7 +95,10 @@ function wordstatRefresh_(credentials, period, force) {
     });
     const records = Object.keys(byId).map(function(id) { return byId[id]; });
     records.sort(wordstatRecordOrder_);
+    // Invalidate provenance first so a failed write/final marker cannot expose mixed-source data.
+    properties.setProperty('WORDSTAT_DEMAND_CACHE_SOURCE', 'updating');
     wordstatWriteRecords_(records);
+    properties.setProperty('WORDSTAT_DEMAND_CACHE_SOURCE', 'api');
     properties.setProperty('WORDSTAT_LAST_SYNCED_AT', updatedAt);
     properties.deleteProperty('WORDSTAT_LAST_ERROR');
     return wordstatSnapshot_(records, true, period, [], false);
@@ -105,7 +117,7 @@ function wordstatNeedsRefresh_(records, period) {
   });
 }
 
-function wordstatSnapshot_(records, configured, period, warnings, failed) {
+function wordstatSnapshot_(records, configured, period, warnings, failed, sourceInfo) {
   let lastSyncedAt = '';
   records.forEach(function(record) {
     if (record.updatedAt > lastSyncedAt) lastSyncedAt = record.updatedAt;
@@ -116,6 +128,8 @@ function wordstatSnapshot_(records, configured, period, warnings, failed) {
     configured: configured,
     connectionMessage: failed
       ? (warnings[0] || 'Wordstat: не удалось обновить данные. Сохранённая история не изменена.')
+      : sourceInfo && sourceInfo.source === 'sheet'
+        ? 'Источник — лист «История спроса». Отчёт читает обновлённую выгрузку при открытии вкладки.'
       : configured
         ? 'Яндекс Wordstat подключён. Данные обновляются после завершения месяца.'
         : 'Для загрузки спроса подключите Яндекс Облако: API-ключ Search API и ID каталога.',
@@ -123,7 +137,104 @@ function wordstatSnapshot_(records, configured, period, warnings, failed) {
     lastSyncedAt: lastSyncedAt,
     status: !configured ? 'not_configured' : failed ? 'error' : records.length ? 'ready' : 'empty',
     warnings: warnings,
+    source: sourceInfo && sourceInfo.source || 'api',
+    sourceUrl: sourceInfo && sourceInfo.sourceUrl || 'https://wordstat.yandex.ru/',
   };
+}
+
+function wordstatSheetDemand_(persist) {
+  const period = wordstatPeriod_();
+  let info = { source: 'sheet', sourceUrl: 'https://docs.google.com/spreadsheets/d/' + WORDSTAT_SOURCE_SPREADSHEET_ID + '/edit' };
+  let spreadsheetId = '';
+  try {
+    spreadsheetId = String(PropertiesService.getScriptProperties().getProperty('WORDSTAT_SOURCE_SPREADSHEET_ID') || WORDSTAT_SOURCE_SPREADSHEET_ID).trim();
+    if (!/^[a-zA-Z0-9_-]{20,120}$/.test(spreadsheetId)) throw wordstatSafeError_('Wordstat: некорректная настройка таблицы спроса. Сохранённая история не изменена.');
+    info = { source: 'sheet', sourceUrl: 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/edit' };
+    // The user updates this source through its own extension; reading never calls Yandex API.
+    const records = wordstatReadHistorySheet_(spreadsheetId, period.latestAvailableMonth);
+    if (persist) {
+      const lock = LockService.getScriptLock();
+      if (!lock.tryLock(1000)) throw wordstatSafeError_('Wordstat: обновление уже выполняется. Попробуйте позже.');
+      try {
+        // Both city series have been validated before changing the shared cache.
+        PropertiesService.getScriptProperties().setProperty('WORDSTAT_DEMAND_CACHE_SOURCE', 'updating');
+        wordstatWriteRecords_(records);
+        PropertiesService.getScriptProperties().setProperty('WORDSTAT_DEMAND_CACHE_SOURCE', 'sheet:' + spreadsheetId);
+      } finally {
+        lock.releaseLock();
+      }
+    }
+    return wordstatSnapshot_(records, true, period, [], false, info);
+  } catch (error) {
+    const message = error && error.wordstatSafe ? error.message : 'Wordstat: не удалось прочитать таблицу спроса. Сохранённая история не изменена.';
+    if (persist) throw wordstatSafeError_(message);
+    let cached = [];
+    const cacheSource = PropertiesService.getScriptProperties().getProperty('WORDSTAT_DEMAND_CACHE_SOURCE');
+    if (/^[a-zA-Z0-9_-]{20,120}$/.test(spreadsheetId) && cacheSource === 'sheet:' + spreadsheetId) {
+      try { cached = wordstatReadRecords_(period.latestAvailableMonth); } catch (ignore) {}
+    }
+    return wordstatSnapshot_(cached, true, period, [message], true, info);
+  }
+}
+
+function wordstatReadHistorySheet_(spreadsheetId, latestAvailableMonth) {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = spreadsheet.getSheetByName(WORDSTAT_HISTORY_SHEET);
+  const rowCount = sheet ? sheet.getLastRow() : 0;
+  if (rowCount < 2 || rowCount > 1000) throw wordstatSafeError_('Wordstat: лист «История спроса» пуст или имеет неподдерживаемый размер. Сохранённая история не изменена.');
+  const values = sheet.getRange(1, 1, rowCount, 5).getValues();
+  const headers = values.shift().map((value) => String(value || '').replace(/\s+/g, ' ').trim());
+  const columns = WORDSTAT_HISTORY_HEADERS.map((header) => headers.indexOf(header));
+  if (columns.some((column) => column < 0) || new Set(headers).size !== 5) throw wordstatSafeError_('Wordstat: изменились заголовки листа «История спроса». Сохранённая история не изменена.');
+  const byMonthCity = Object.create(null);
+  const monthsByCity = { 'МСК': Object.create(null), 'СПБ': Object.create(null) };
+  values.forEach((row, index) => {
+    if (row.every((value) => value === '' || value === null)) return;
+    const month = wordstatHistoryMonth_(row[columns[0]]);
+    const cityText = String(row[columns[1]] || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const city = ['москва', 'мск'].indexOf(cityText) >= 0 ? 'МСК' : ['санкт-петербург', 'санкт петербург', 'спб'].indexOf(cityText) >= 0 ? 'СПБ' : '';
+    const phrase = String(row[columns[2]] || '').trim().toLowerCase();
+    if (!month || !city || phrase !== 'автошкола') throw wordstatSafeError_('Wordstat: неверный месяц, город или поисковая фраза в строке ' + (index + 2) + '. Сохранённая история не изменена.');
+    // Current/future months can be unfinished in the source and stay out of seasonal comparisons.
+    if (month > latestAvailableMonth) return;
+    const rawCount = row[columns[3]];
+    const count = wordstatCount_(typeof rawCount === 'string' ? rawCount.replace(/[\s\u00a0\u202f]+/g, '') : rawCount);
+    const updatedAt = wordstatHistoryTimestamp_(row[columns[4]]);
+    if (count === null || !updatedAt) throw wordstatSafeError_('Wordstat: неверная частотность или время обновления в строке ' + (index + 2) + '. Сохранённая история не изменена.');
+    const key = city + ':' + month;
+    const previous = byMonthCity[key];
+    if (previous && previous.count !== count) throw wordstatSafeError_('Wordstat: в истории есть противоречивые значения города и месяца. Сохранённая история не изменена.');
+    if (!previous || updatedAt > previous.updatedAt) byMonthCity[key] = { month: month, city: city, regionId: city === 'МСК' ? '213' : '2', count: count, share: null, updatedAt: updatedAt };
+    monthsByCity[city][month] = true;
+  });
+  const moscowMonths = Object.keys(monthsByCity['МСК']).sort();
+  const petersburgMonths = Object.keys(monthsByCity['СПБ']).sort();
+  if (!moscowMonths.length || moscowMonths.join('|') !== petersburgMonths.join('|')) throw wordstatSafeError_('Wordstat: история Москвы и Санкт-Петербурга должна содержать одинаковые месяцы. Сохранённая история не изменена.');
+  return Object.keys(byMonthCity).map((key) => byMonthCity[key]).sort(wordstatRecordOrder_);
+}
+
+function wordstatHistoryMonth_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]') return Number.isFinite(value.getTime()) ? Utilities.formatDate(value, 'Europe/Moscow', 'yyyy-MM') : '';
+  const text = String(value || '').trim();
+  const ru = /^(0[1-9]|1[0-2])\.([1-9]\d{3})$/.exec(text);
+  if (ru) return ru[2] + '-' + ru[1];
+  return /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(text) ? text : '';
+}
+
+function wordstatHistoryTimestamp_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]') return Number.isFinite(value.getTime()) ? value.toISOString() : '';
+  const match = /^(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || '').trim());
+  if (!match) return '';
+  const local = match[3] + '-' + match[2].padStart(2, '0') + '-' + match[1].padStart(2, '0') + 'T' + match[4].padStart(2, '0') + ':' + match[5] + ':' + (match[6] || '00');
+  const date = new Date(local + '+03:00');
+  return Number.isFinite(date.getTime()) && new Date(date.getTime() + 10800000).toISOString().slice(0, 19) === local ? date.toISOString() : '';
+}
+
+function wordstatReadApiRecords_(latestAvailableMonth) {
+  const cacheSource = PropertiesService.getScriptProperties().getProperty('WORDSTAT_DEMAND_CACHE_SOURCE');
+  // Unmarked legacy caches belonged to the original API implementation.
+  if (cacheSource && cacheSource !== 'api') return [];
+  return wordstatReadRecords_(latestAvailableMonth);
 }
 
 function wordstatFetchCity_(credentials, period, city, regionId, updatedAt) {
