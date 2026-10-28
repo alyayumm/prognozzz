@@ -230,7 +230,7 @@ function ConversionTable({ title, rows, dimension, brandSources, nested = false 
     });
   }
   return <div className={`lead-conversion-table-scroll${nested ? " lead-conversion-nested-table" : ""}`} tabIndex={0} role="region" aria-label={title}>
-    <table className="lead-conversion-table"><caption className="lead-conversion-sr-only">{title}. CR — доля переходов, ставших лидами.</caption><thead><tr>
+    <table className={`lead-conversion-table${dimension === "brand" ? " lead-conversion-brand-table" : ""}`}><caption className="lead-conversion-sr-only">{title}. CR — доля переходов, ставших лидами.</caption><thead><tr>
       {columns.map((column) => <th key={column.key} scope="col" aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}>
         <button type="button" onClick={() => changeSort(column.key)} title={`Сортировать: ${column.label}`}>
           {column.label}{sort.key !== column.key ? <ArrowUpDown size={12} /> : sort.direction === "desc" ? <ArrowDown size={12} /> : <ArrowUp size={12} />}

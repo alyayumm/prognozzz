@@ -41,7 +41,11 @@
 .lead-conversion-table td:last-child, .lead-conversion-table thead th:last-child { padding-right: 18px; }
 .lead-conversion-table .lead-conversion-rate-cell { color: var(--blue-dark); font-weight: 800; }
 .lead-conversion-table tbody tr:hover { background: #f1f5ff; }
-.lead-conversion-brand-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.lead-conversion-brand-table { table-layout: fixed; }
+.lead-conversion-brand-table > thead > tr > th:first-child { width: 40%; }
+.lead-conversion-brand-table > tbody > tr > th { min-width: 0; }
+.lead-conversion-brand-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; min-height: 32px; padding: 0; border: 0; background: transparent; text-align: left; white-space: normal; cursor: pointer; }
+.lead-conversion-brand-toggle > strong { min-width: 0; }
 .lead-conversion-brand-toggle > svg { flex: 0 0 auto; color: var(--blue-dark); transform: rotate(-90deg); transition: transform .18s ease-out; }
 .lead-conversion-brand-toggle[aria-expanded="true"] > svg { transform: rotate(0); }
 .lead-conversion-brand-toggle:hover strong { color: var(--blue-dark); }
