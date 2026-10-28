@@ -46,7 +46,7 @@ test('a failed PS read preserves both saved city sales and amo qualification fac
 });
 
 test('PS refresh is protected by the same report password as other shared writes', () => {
-  const modules = ['Wordstat.gs', 'PsSales.gs'].map(file => readFileSync(new URL('../apps-script/' + file, import.meta.url), 'utf8')).join('\n');
+  const modules = ['Wordstat.gs', 'PsSales.gs', 'LeadConversion.gs'].map(file => readFileSync(new URL('../apps-script/' + file, import.meta.url), 'utf8')).join('\n');
   const api = runInNewContext(`${source}\n${modules}
     let writes = 0;
     ensureServiceSheets_ = () => {};
