@@ -176,6 +176,7 @@ function leadConversionReadRecords_() {
   return values.slice(1).filter((row) => row.some((value) => value !== '' && value !== null)).map((row) => {
     const record = {};
     LEAD_CONVERSION_HEADERS.forEach((header) => { record[header] = row[columns[header]]; });
+    ['id', 'brand', 'domain', 'source', 'rawSource'].forEach((key) => { record[key] = String(record[key] === undefined || record[key] === null ? '' : record[key]); });
     record.date = leadConversionDate_(record.date);
     if (!record.date || !record.id) throw new Error('Некорректная дата или ID кэша конверсии.');
     record.visits = leadConversionCount_(record.visits); record.leads = leadConversionCount_(record.leads);
@@ -191,7 +192,8 @@ function leadConversionWriteRecords_(records) {
   const oldRows = sheet.getLastRow();
   const values = [LEAD_CONVERSION_HEADERS].concat(records.map((record) => LEAD_CONVERSION_HEADERS.map((key) => {
     const value = record[key] === undefined ? '' : record[key];
-    return typeof value === 'string' && value.charAt(0) === '=' ? "'" + value : value;
+    // Keep provider labels and dates literal; Sheets otherwise also coerces numeric labels.
+    return typeof value === 'string' ? "'" + value : value;
   })));
   while (values.length < oldRows) values.push(LEAD_CONVERSION_HEADERS.map(() => ''));
   if (values.length > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), values.length - sheet.getMaxRows());

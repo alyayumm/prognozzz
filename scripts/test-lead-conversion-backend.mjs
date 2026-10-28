@@ -32,7 +32,7 @@ function fixture({ values = [], properties = { ROISTAT_API_KEY: 'secret-key' }, 
         assert.ok(requests.length, 'no cache writes before provider response'); writes.push(plain(next));
         for (let i = 0; i < next.length; i++) { cells[r - 1 + i] ||= []; for (let j = 0; j < next[i].length; j++) {
           const value = next[i][j];
-          cells[r - 1 + i][c - 1 + j] = typeof value === 'string' && value.startsWith("'=") ? value.slice(1) : value;
+          cells[r - 1 + i][c - 1 + j] = typeof value === 'string' && value.startsWith("'") ? value.slice(1) : value;
         } }
       },
     }),
@@ -93,6 +93,20 @@ test('provider source text beginning with equals stays literal in Sheets and rou
   assert.equal(f.writes[0][1][headers.indexOf('rawSource')], "'=raw");
   assert.equal(result.records[0].source, '=1+1');
   assert.equal(result.records[0].rawSource, '=raw');
+});
+
+test('numeric-looking source labels remain text and older coerced cache cells normalize to strings', () => {
+  const data = report('2026-10-01', '2026-10-02', [row('autodrive.msk.ru', '00123', 10, 2, '00123')]);
+  const f = fixture({ response: data });
+  const result = plain(f.api.sync({ fromDate: '2026-10-01', toDate: '2026-10-02' }));
+  assert.equal(f.writes[0][1][headers.indexOf('source')], "'00123");
+  assert.equal(result.records[0].source, '00123');
+  const cached = cacheRow();
+  cached[headers.indexOf('source')] = 582830582830;
+  cached[headers.indexOf('rawSource')] = 582830582830;
+  const older = plain(fixture({ values: [headers, cached] }).api.get({ monthKey: '2026-09' }));
+  assert.equal(older.records[0].source, '582830582830');
+  assert.equal(older.records[0].rawSource, '582830582830');
 });
 
 test('partial, malformed, missing-metric or failed provider responses preserve all saved rows and coverage', () => {
