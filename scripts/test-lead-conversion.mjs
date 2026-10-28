@@ -110,11 +110,12 @@ test('audited provider codes map to useful source groups without guessing ambigu
   const cases = new Map([
     ['Яндекс Карты', ['ya', 'yk', 'ykart_msk', 'ykarty_spb', 'ykar2', 'Яндекс Карты', 'geoadv_maps', 'geoadv_yandex_maps', 'geoadv_organization_list', 'hermesspb_ykart_all', 'autodrivespb_ykart_all']],
     ['Гугл Карты', ['go', 'gkart_spb', 'Google Maps', 'Гугл Карты', 'izidrivespb_gkart_all', 'avtosityspb_gkart_all']],
-    ['2ГИС', ['2gis', '2gis_msk', 'spb_2gis_all', '2ГИС']],
+    ['2ГИС', ['2gis', '2gis_msk', 'spb_2gis_all', '2ГИС', '2dqc', ':utm:2dqc', 'utm:2dqc']],
     ['Директ', ['geoadv_direct', 'direct8', 'direct9', 'direct17', 'yandex.direct', 'Яндекс Директ', 'Директ']],
     ['Сайт', ['SEO', 'google / organic', 'yandex / organic', 'yandex', ':utm:yandex', 'site', 'сайт', 'Визиты с сайтов', 'referals', 'referrals']],
-    ['Справочники', ['yell.ru', ':utm:yell.ru', 'spravker', ':utm:spravker']],
+    ['Справочники', ['yell.ru', ':utm:yell.ru', 'spravker', ':utm:spravker', 'autoschool-firmika.ru', ':autoschool-firmika.ru', ':utm:autoschool-firmika.ru', 'jsprav', 'jsprav.ru', ':utm:jsprav', ':utm:jsprav.ru']],
     ['Нейросети', ['perplexity', ':utm:perplexity', 'chatgpt.com', ':utm:chatgpt.com']],
+    ['Инстаграм', ['ig', ':utm:ig', 'utm:ig']],
     ['Прямые визиты', ['Прямые\u00a0визиты', 'Direct visits', 'Direct traffic', 'Direct visits/traffic']],
     ['Мессенджеры', ['Telegram', 'WhatsApp', 'Viber', 'messengers', 'Мессенджеры', 'tg', 'wa']],
     ['ВКонтакте', ['VK', 'msk_vk', 'ВКонтакте']],
@@ -133,16 +134,22 @@ test('confirmed website, directory and AI labels leave unknown without changing 
     record('ai2', 70, 1, { source: 'perplexity', city: 'СПБ' }),
     record('unknown-city', 20, 2, { source: ':utm:perplexity', city: 'Не определён' }),
     record('still-unknown', 10, 1, { source: 'ad' }),
+    record('firmika', 10, 1, { source: ':autoschool-firmika.ru' }),
+    record('jsprav', 10, 1, { source: 'jsprav.ru', rawSource: ':utm:jsprav' }),
+    record('instagram', 20, 2, { source: 'ig' }),
+    record('2gis-typo', 30, 3, { source: '2dqc', rawSource: 'utm:2dqc' }),
   ];
   const report = buildLeadConversionReport(input, filters);
-  assert.equal(report.totals.visits, 310); assert.equal(report.totals.leads, 13);
+  assert.equal(report.totals.visits, 380); assert.equal(report.totals.leads, 20);
   for (const dimension of ['bySource', 'byBrand', 'byBrandSource']) {
-    assert.equal(report[dimension].reduce((n, row) => n + row.visits, 0), 310);
-    assert.equal(report[dimension].reduce((n, row) => n + row.leads, 0), 13);
+    assert.equal(report[dimension].reduce((n, row) => n + row.visits, 0), 380);
+    assert.equal(report[dimension].reduce((n, row) => n + row.leads, 0), 20);
   }
   const directories = report.bySource.find(row => row.label === 'Справочники');
-  assert.equal(directories.visits, 100); assert.equal(directories.leads, 3);
-  assert.equal(directories.conversionRate, 3);
+  assert.equal(directories.visits, 120); assert.equal(directories.leads, 5);
+  assert.equal(directories.conversionRate, 5 / 120 * 100);
+  assert.equal(report.bySource.find(row => row.label === 'Инстаграм').leads, 2);
+  assert.equal(report.bySource.find(row => row.label === '2ГИС').leads, 3);
   const neural = report.bySource.find(row => row.label === 'Нейросети');
   assert.equal(neural.visits, 100); assert.equal(neural.leads, 4); assert.equal(neural.conversionRate, 4);
   assert.ok(neural.sourceLabels.includes(':utm:chatgpt.com'));
