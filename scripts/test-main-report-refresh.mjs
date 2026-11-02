@@ -6,6 +6,9 @@ import ts from 'typescript';
 
 const gs = readFileSync(new URL('../apps-script/AppsScript.gs', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const periodsSource = readFileSync(new URL('../src/api/reportSyncPeriods.ts', import.meta.url), 'utf8');
+const periodsJs = ts.transpileModule(periodsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+const { buildReportSyncPeriods } = await import(`data:text/javascript;base64,${Buffer.from(periodsJs).toString('base64')}`);
 const tree = ts.createSourceFile('App.tsx', app, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function appFunction(name) {
   let declaration;
@@ -21,6 +24,7 @@ test('amo import refreshes the shared daily facts before reporting success', asy
   const calls = [];
   const sync = runInNewContext(`${appFunction('syncAmoCrmLeads')}; syncAmoCrmLeads;`, {
     apiConfigured: true, writePassword: 'test',
+    buildReportSyncPeriods, formatDay: value => value.slice(5),
     setIsSavingDaily: value => calls.push(value ? 'loading' : 'idle'),
     setSavedMessage: message => { if (message.includes('done')) calls.push('success'); },
     callReportApi: async () => { calls.push('api'); return { message: 'done' }; },
@@ -28,18 +32,19 @@ test('amo import refreshes the shared daily facts before reporting success', asy
     getErrorMessage: error => error.message,
   });
   await sync('2026-10-01', '2026-10-21');
-  assert.deepEqual(calls, ['loading', 'api', 'fresh-daily-facts', 'success', 'idle']);
+  assert.deepEqual(calls, ['loading', 'api', 'api', 'api', 'fresh-daily-facts', 'success', 'idle']);
 });
 
-test('a failed amo import cannot appear successful to the refresh button', async () => {
+test('a failed amo import rereads saved facts and cannot appear successful to the refresh button', async () => {
   const calls = [];
   const sync = runInNewContext(`${appFunction('syncAmoCrmLeads')}; syncAmoCrmLeads;`, {
     apiConfigured: true, writePassword: 'test', setIsSavingDaily: () => {}, setSavedMessage: () => {},
+    buildReportSyncPeriods, formatDay: value => value.slice(5),
     callReportApi: async () => { throw new Error('amo unavailable'); },
     refreshMainReportSnapshot: async () => calls.push('refresh'), getErrorMessage: error => error.message,
   });
   await assert.rejects(sync('2026-10-01', '2026-10-21'), /amo unavailable/);
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ['refresh']);
 });
 
 test('post-import refresh requires the shared service data and rejects an empty snapshot', async () => {

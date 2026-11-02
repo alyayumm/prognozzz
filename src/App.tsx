@@ -28,6 +28,7 @@ import {
   seedEvents,
 } from "./data/dashboardMock";
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
+import { buildReportSyncPeriods, type ReportSyncPeriod } from "./api/reportSyncPeriods";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import DemandView from "./features/demand/DemandView";
 import LeadConversionView from "./features/lead-conversion/LeadConversionView";
@@ -800,14 +801,48 @@ export default function App() {
       return;
     }
 
+    const periods = buildReportSyncPeriods(fromDate, toDate);
+    const periodLabel = (period: ReportSyncPeriod) => `${formatDay(period.fromDate)}–${formatDay(period.toDate)}`;
+    const requestedLabel = periodLabel({ fromDate, toDate });
+    let activePeriod = periods[0];
+    let completedPeriods = 0;
+    let lastCompletedPeriod: ReportSyncPeriod | null = null;
+    let lastServerMessage = "";
+    let snapshotReadStarted = false;
+    const warnings = new Set<string>();
+    const serverNote = () => {
+      const last = lastCompletedPeriod && lastServerMessage ? ` Последний завершённый период ${periodLabel(lastCompletedPeriod)}: ${lastServerMessage}` : "";
+      const extraWarnings = [...warnings].filter((warning) => !lastServerMessage.includes(warning));
+      return last + (extraWarnings.length ? ` Предупреждения: ${extraWarnings.join(" | ")}` : "");
+    };
+
     setIsSavingDaily(true);
-    setSavedMessage("Обновляю отчёт: лиды и квалы — amoCRM, продажи — ПС...");
     try {
-      const result = await callReportApi<AmoCrmSyncResult>("syncAmoCrmLeads", { fromDate, toDate }, writePassword);
+      for (const [index, period] of periods.entries()) {
+        activePeriod = period;
+        setSavedMessage(`Обновляю отчёт: ${index + 1}/${periods.length} · ${periodLabel(period)}. Лиды и квалы — amoCRM, продажи — ПС.`);
+        const result = await callReportApi<AmoCrmSyncResult & { warnings?: string[] }>("syncAmoCrmLeads", period, writePassword);
+        if (result.status === "error") throw new Error(result.message || "Сервер не завершил обновление периода.");
+        completedPeriods += 1;
+        lastCompletedPeriod = period;
+        lastServerMessage = result.message || "";
+        if (result.status === "warning" && Array.isArray(result.warnings)) result.warnings.forEach((warning) => { if (warning) warnings.add(warning); });
+      }
+      snapshotReadStarted = true;
       await refreshMainReportSnapshot();
-      setSavedMessage(`${result.message} Данные отчёта обновлены на экране.`);
+      setSavedMessage(`Отчёт за ${requestedLabel} обновлён и перечитан на экране.${serverNote()}`);
     } catch (error) {
-      setSavedMessage(`Отчёт не обновился: ${getErrorMessage(error)}`);
+      if (snapshotReadStarted) {
+        setSavedMessage(`Данные за ${requestedLabel} сохранены, но перечитать отчёт не удалось: ${getErrorMessage(error)}.${serverNote()}`);
+      } else {
+        let readMessage = " Уже сохранённые данные перечитаны на экране.";
+        try {
+          await refreshMainReportSnapshot();
+        } catch (readError) {
+          readMessage = ` Уже сохранённые данные пока не перечитаны: ${getErrorMessage(readError)}.`;
+        }
+        setSavedMessage(`Обновление остановлено на периоде ${periodLabel(activePeriod)}: ${getErrorMessage(error)}. Успешно завершено ${completedPeriods}/${periods.length} периодов.${readMessage}${serverNote()}`);
+      }
       throw error;
     } finally {
       setIsSavingDaily(false);
