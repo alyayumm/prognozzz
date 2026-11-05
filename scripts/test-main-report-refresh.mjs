@@ -32,7 +32,7 @@ test('amo import refreshes the shared daily facts before reporting success', asy
     getErrorMessage: error => error.message,
   });
   await sync('2026-10-01', '2026-10-21');
-  assert.deepEqual(calls, ['loading', 'api', 'api', 'api', 'fresh-daily-facts', 'success', 'idle']);
+  assert.deepEqual(calls, ['loading', ...Array(11).fill('api'), 'fresh-daily-facts', 'success', 'idle']);
 });
 
 test('a failed amo import rereads saved facts and cannot appear successful to the refresh button', async () => {

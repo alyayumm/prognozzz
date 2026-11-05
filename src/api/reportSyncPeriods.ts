@@ -1,7 +1,7 @@
 export type ReportSyncPeriod = { fromDate: string; toDate: string };
 
 const dayMilliseconds = 86400000;
-const maxPeriodDays = 7;
+const maxPeriodDays = 2;
 
 function dateTimestamp(value: string): number {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("Дата обновления должна быть в формате ГГГГ-ММ-ДД.");
@@ -10,7 +10,7 @@ function dateTimestamp(value: string): number {
   return timestamp;
 }
 
-/** Seven calendar days bound each Apps Script execution while avoiding overlapping imports. */
+/** Two calendar days bound each amoCRM import, including its updated-deal stream. */
 export function buildReportSyncPeriods(fromDate: string, toDate: string): ReportSyncPeriod[] {
   const start = dateTimestamp(fromDate);
   const end = dateTimestamp(toDate);
