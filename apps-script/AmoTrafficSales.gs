@@ -31,20 +31,32 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
     const id = String(record.leadId || '').trim();
     if (id) byLead[id] = record;
   });
+  const hasHistoricalFacts = Object.keys(historicalFacts).length > 0;
   Object.keys(byLead).forEach((id) => {
     const record = byLead[id];
+    const won = String(record.statusId || '').trim() === '142';
+    if (!won && !hasHistoricalFacts) return;
+    const saleCity = salesAmoCity_(record.pipelineName);
+    // Qualification retains the cached city; only a legacy Chat exclusion restores it from its pipeline.
+    const factCity = salesValidCachedCity_(record.city)
+      || (record.excludeReason === 'closedLostChat' ? saleCity : '');
+    const cachedDate = salesCachedDateOnlyString_(record.createdDate);
+    // Most cached leads belong to untouched history. Avoid full normalization for them.
+    if (cachedDate && !(won && targets[cachedDate + '|' + saleCity])
+      && !historicalFacts[cachedDate + '|' + factCity]) return;
     const lead = salesAmoLeadFromCachedRecord_(record);
     if (!lead) return;
-    const normalized = salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, { periodMode: 'all' });
-    const oldFacts = normalized && historicalFacts[normalized.createdDate + '|' + normalized.city];
-    if (oldFacts && !normalized.exclude) {
+    const historicalKey = (lead.cachedNormalized || {}).createdDate + '|' + factCity;
+    const oldFacts = historicalFacts[historicalKey];
+    const normalized = oldFacts ? salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, { periodMode: 'all' }) : null;
+    if (oldFacts && normalized && !normalized.exclude) {
       oldFacts.leads += 1;
       if (normalized.isQualified) {
         if (normalized.isOmQualified) oldFacts.omQualified += 1;
         else oldFacts.qualified += 1;
       }
     }
-    if (String(record.statusId || '').trim() !== '142') return;
+    if (!won) return;
     const city = salesAmoCity_(lead.pipeline_name || (lead.cachedNormalized || {}).pipeline);
     const date = (lead.cachedNormalized || {}).createdDate;
     const target = targets[date + '|' + city];
@@ -67,7 +79,7 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
       comment: current.comment || '', trafficSales: target.count,
       paidSales: optionalSalesCount_(current.paidSales),
     });
-  });
+  }).filter((row) => optionalSalesCount_((currentById[row.id] || {}).trafficSales) !== row.trafficSales);
   const historicalMonths = {};
   Object.keys(historicalFacts).forEach((key) => {
     const target = targets[key];

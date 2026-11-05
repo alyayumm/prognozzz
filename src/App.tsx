@@ -6125,7 +6125,7 @@ function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
     <section className="analytics-panel recommendation-panel">
       <PanelHead
         title="График по рекомендациям"
-        description="Рекомендации показаны отдельно. Из продаж ПС они не вычитаются: в итог входят все заказы."
+        description="Рекомендации показаны отдельно и не вычитаются из общего числа продаж."
       />
       <div className="recommendation-grid">
         {metrics.map((metric) => (

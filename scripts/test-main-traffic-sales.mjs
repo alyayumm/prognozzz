@@ -72,6 +72,78 @@ test('refreshing November recomputes confirmed October cohorts from the complete
   assert.deepEqual(plain(snapshot.historicalMonths), ['2026-10']);
 });
 
+test('historical leads and qualification retain their cached city while won sales follow the city pipeline', () => {
+  const date = '2026-10-31';
+  const f = fixture([
+    lead('missing-pipeline-name', date, { statusId: '41892613', stageName: 'Брифинг', pipelineName: '' }),
+    lead('different-cached-city', date, { statusId: '41892613', stageName: 'Брифинг', city: 'СПБ' }),
+    lead('won-other-pipeline', date, { category: 'A+B', pipelineName: 'СПБ АШ' }),
+  ], [sale(date, 'МСК', { trafficSales: 0 }), sale(date, 'СПБ', { trafficSales: 0 })]);
+  const rows = f.api.read('2026-11-05', '2026-11-05').rows;
+  const fact = (city, metric) => rows.find(row => row.date === date && row.city === city && row.metric === metric);
+  assert.equal(fact('МСК', 'Лиды').fact, 2);
+  assert.equal(fact('МСК', 'Квалы').fact, 2);
+  assert.equal(fact('СПБ', 'Лиды').fact, 1);
+  assert.equal(fact('СПБ', 'Квалы').fact, 1);
+  assert.equal(fact('МСК', 'Продажи'), undefined);
+  assert.equal(fact('СПБ', 'Продажи').trafficSales, 2);
+});
+
+test('a reopened legacy Chat exclusion restores its city from the pipeline for historical qualification', () => {
+  const date = '2026-10-31';
+  const f = fixture([lead('reopened-chat', date, { statusId: '41892613', stageName: 'Брифинг',
+    city: '', excludeReason: 'closedLostChat', lossReasonId: '23625702' })],
+  [sale(date, 'МСК', { trafficSales: 0 })]);
+  const rows = f.api.read('2026-11-05', '2026-11-05').rows;
+  assert.equal(rows.find(row => row.date === date && row.metric === 'Лиды').fact, 1);
+  assert.equal(rows.find(row => row.date === date && row.metric === 'Квалы').fact, 1);
+  assert.equal(rows.find(row => row.date === date && row.metric === 'Продажи'), undefined);
+});
+
+test('unchanged confirmed historical and requested sales are not rewritten while requested totals stay complete', () => {
+  const oldDate = '2026-10-31';
+  const currentDate = '2026-11-01';
+  const oldSale = sale(oldDate, 'МСК', { trafficSales: 2 });
+  const currentSale = sale(currentDate, 'МСК', { trafficSales: 1 });
+  const f = fixture([
+    lead('old-won', oldDate, { category: 'A+B' }),
+    lead('current-won', currentDate),
+  ], [oldSale, currentSale,
+    { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0 },
+    { id: `${oldDate}-МСК-Квалы`, date: oldDate, city: 'МСК', metric: 'Квалы', fact: 1, omQualified: 0 },
+  ]);
+  const snapshot = f.api.read(currentDate, currentDate);
+  assert.equal(snapshot.rows.some(row => row.id === oldSale.id || row.id === currentSale.id), false);
+  assert.deepEqual(plain(snapshot.byCity), { 'МСК': 1, 'СПБ': 0 });
+  assert.equal(snapshot.count, 1);
+  assert.deepEqual(plain(snapshot.historicalMonths), []);
+  f.api.write(snapshot);
+  assert.ok(f.writes.every(write => write.rows.every(row => row.id !== oldSale.id && row.id !== currentSale.id)));
+});
+
+test('newly confirmed zero and changed older sales still write while a confirmed zero is skipped', () => {
+  const oldDate = '2026-10-31';
+  const currentDate = '2026-11-01';
+  const oldSale = sale(oldDate, 'МСК', { trafficSales: 2 });
+  const newZero = sale(currentDate, 'МСК', { trafficSales: '' });
+  const knownZero = sale(currentDate, 'СПБ', { trafficSales: 0 });
+  const f = fixture([lead('old-won-single-category', oldDate)], [oldSale, newZero, knownZero]);
+  const snapshot = f.api.read(currentDate, currentDate);
+  const salesRows = snapshot.rows.filter(row => row.metric === 'Продажи');
+  assert.equal(salesRows.length, 2);
+  assert.equal(salesRows.find(row => row.id === oldSale.id).trafficSales, 1);
+  const confirmed = salesRows.find(row => row.id === newZero.id);
+  assert.equal(confirmed.trafficSales, 0);
+  assert.equal(confirmed.paidSales, newZero.paidSales);
+  assert.equal(confirmed.fact, newZero.fact);
+  assert.equal(salesRows.some(row => row.id === knownZero.id), false);
+  assert.equal(snapshot.count, 0);
+  f.api.write(snapshot);
+  const cells = f.writes[0].cells.find(row => row[0] === newZero.id);
+  assert.equal(cells[14], 0);
+  assert.equal(cells[15], newZero.paidSales);
+});
+
 test('zero is confirmed only inside imported cohorts; unavailable paid history stays blank', () => {
   const f = fixture([], [sale('2026-10-31', 'МСК', { trafficSales: '', paidSales: '' })]);
   const snapshot = f.api.read('2026-11-01', '2026-11-02');
