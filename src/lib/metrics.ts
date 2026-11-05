@@ -1,11 +1,12 @@
-import type { City, DailyRecord, EventItem, Metric, MonthConfig, WeekSummary } from "../types";
+import type { City, DailyRecord, EventItem, Metric, MetricAggregate, MonthConfig, WeekSummary } from "../types";
 import { getMonthDates } from "../utils/date";
 import { buildWeeklySummary } from "../utils/report";
 import { hasActualRecord, isPendingPsSale, isPsSale } from "./psSales";
+import { isCitySale, selectedSalesCount, selectedSalesFactsAvailable } from "./salesDateBasis";
 
 export type ReportScope = "Все" | "МСК" | "СПБ";
 export type TrafficMode = "op" | "marketing";
-export type MetricTotal = { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number };
+export type MetricTotal = MetricAggregate;
 export type MetricTotals = Record<Metric, MetricTotal>;
 export type ConversionKey = "leadToQualified" | "qualifiedToSale" | "leadToSale";
 
@@ -45,6 +46,7 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
       forecast: total(metricRecords, "forecast"),
       recommendations: total(metricRecords, "recommendations"),
       omQualified: total(metricRecords, "omQualified"),
+      ...selectedSalesAvailability(metricRecords),
     };
     return acc;
   }, {} as MetricTotals);
@@ -77,6 +79,8 @@ export function buildConversions(totals: MetricTotals, trafficMode: TrafficMode 
   const sales = totals["Продажи"]?.fact ?? 0;
 
   return {
+    salesAvailable: totals["Продажи"]?.factAvailable !== false,
+    salesDateBasis: totals["Продажи"]?.salesDateBasis,
     leadToQualified: percent(qualified, leads),
     qualifiedToSale: percent(sales, qualified),
     leadToSale: percent(sales, leads),
@@ -183,9 +187,16 @@ export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" 
 }
 
 export function netFact(record: DailyRecord): number {
+  if (record.salesDateBasis && isCitySale(record)) return selectedSalesCount(record) ?? 0;
   if (isPendingPsSale(record)) return 0;
   if (isPsSale(record)) return Math.max(0, Number(record.fact || 0));
   return Math.max(0, Number(record.fact || 0) - recommendationValue(record));
+}
+
+export function selectedSalesAvailability(records: DailyRecord[]): Pick<MetricAggregate, "factAvailable" | "salesDateBasis" | "salesObservationPresent"> {
+  const selected = records.filter((record) => record.salesDateBasis && isCitySale(record));
+  if (!selected.length) return {};
+  return { factAvailable: selectedSalesFactsAvailable(selected), salesDateBasis: selected[0].salesDateBasis, salesObservationPresent: selected.some(hasActualRecord) };
 }
 
 export function recommendationValue(record: DailyRecord): number {

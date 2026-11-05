@@ -3,12 +3,10 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { test } from 'node:test';
 import ts from 'typescript';
+import { createReportModelLoader } from './helpers/report-model.mjs';
 
-const source = readFileSync(new URL('../src/lib/psSales.ts', import.meta.url), 'utf8');
-const js = ts.transpileModule(source, {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-}).outputText;
-const psExports = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+const loadModel = createReportModelLoader();
+const psExports = loadModel('src/lib/psSales.ts');
 const { hasActualRecord, isPendingPsSale, psSalesFactAvailable, getPsSalesCoverage } = psExports;
 
 const record = (date, fact, city = 'МСК', comment = '[SALES_SOURCE=PS] [PS_COVERED_TO=2026-10-25]') => ({
@@ -57,10 +55,7 @@ test('malformed coverage cannot claim an imported zero or an impossible date', (
   }
 });
 
-const metricsSource = readFileSync(new URL('../src/lib/metrics.ts', import.meta.url), 'utf8');
-const metricsJs = ts.transpileModule(metricsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-const metricsExports = {};
-runInNewContext(metricsJs, { exports: metricsExports, require: (name) => name === './psSales' ? psExports : {} });
+const metricsExports = loadModel('src/lib/metrics.ts');
 
 test('all PS orders remain in sales even when legacy recommendation counts are retained', () => {
   assert.equal(metricsExports.netFact({ ...record('2026-10-25', 10), recommendations: 3 }), 10);

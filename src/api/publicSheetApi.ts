@@ -13,6 +13,7 @@ import type {
   PlanByCity,
 } from "../types";
 import { eventMapSpreadsheetId, loadEventMapSnapshot, mergeEventMapEvents } from "./eventMapApi";
+import { optionalSalesCount } from "../lib/salesDateBasis";
 
 const spreadsheetId = "1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s";
 const sourceYear = 2026;
@@ -349,6 +350,8 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
         omQualified: metric === "Квалы" ? toNumber(row.omQualified || "") || parseOmQualifiedFromComment(comment) : 0,
         comment: stripOmQualifiedFromComment(comment),
         updatedAt: row.updatedAt || "",
+        trafficSales: optionalSalesCount(row.trafficSales),
+        paidSales: optionalSalesCount(row.paidSales),
       };
       return record;
     })

@@ -1,4 +1,5 @@
 import type { DailyRecord } from "../types";
+import { getSelectedSalesCoverage, isCitySale, selectedSalesCount } from "./salesDateBasis";
 
 export function isPsSale(record: DailyRecord): boolean {
   return record.metric === "Продажи" && record.channel === "Город" &&
@@ -13,6 +14,7 @@ function coveredTo(record: DailyRecord): string | null {
 }
 
 export function isPendingPsSale(record: DailyRecord): boolean {
+  if (record.salesDateBasis && isCitySale(record)) return selectedSalesCount(record) === undefined;
   if (!isPsSale(record)) return false;
   const coverage = coveredTo(record);
   return /\[PS_PENDING=1\]/.test(record.comment ?? "") || !coverage || record.date > coverage;
@@ -20,6 +22,7 @@ export function isPendingPsSale(record: DailyRecord): boolean {
 
 /** Imported PS zeros are real observations; unavailable dates must not lower a forecast average. */
 export function hasActualRecord(record: DailyRecord): boolean {
+  if (record.salesDateBasis && isCitySale(record)) return selectedSalesCount(record) !== undefined;
   if (isPendingPsSale(record)) return false;
   if (isPsSale(record)) return true;
   return Number(record.fact || 0) > 0 || Number(record.recommendations || 0) > 0 || Number(record.omQualified || 0) > 0;
@@ -31,6 +34,7 @@ export function psSalesFactAvailable(records: DailyRecord[]): boolean {
 }
 
 export function getPsSalesCoverage(records: DailyRecord[]): { fromDate: string; toDate: string } | null {
+  if (records.some((record) => record.salesDateBasis && isCitySale(record))) return getSelectedSalesCoverage(records);
   const psRecords = records.filter(isPsSale);
   const coverageByCity = new Map<string, string>();
   let fromDate = "";

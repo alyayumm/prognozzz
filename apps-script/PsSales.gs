@@ -1,5 +1,5 @@
-// City sales follow the order-count formulas in «Динамика»: A+B adds one unit.
-// Read only the four scalar columns needed for this metric; no customer data.
+// Count city orders by the PS payment date; A+B adds one unit.
+// Creation dates establish export coverage only and never replace payment dates.
 function readMainPsSalesSnapshot_(fromDate, toDate) {
   const range = psSalesRange_({ fromDate: fromDate, toDate: toDate });
   const spreadsheet = SpreadsheetApp.openById(SALES_DEPARTMENT_CONFIG.dynamicsSpreadsheetId);
@@ -18,6 +18,7 @@ function readMainPsSalesSnapshot_(fromDate, toDate) {
   const orderIds = column(['Номер заказа'], 'Номер заказа');
   const cities = column(['Город'], 'Город');
   const createdDates = column(['Дата создания'], 'Дата создания');
+  const paymentDates = column(['Дата оплаты'], 'Дата оплаты');
   const doubleFlags = column(['A+B', 'А+Б', 'А+В'], 'A+B');
   const orders = Object.create(null);
   const warnings = [];
@@ -28,18 +29,22 @@ function readMainPsSalesSnapshot_(fromDate, toDate) {
     const city = psSalesCity_(cities[index] && cities[index][0]);
     if (!city) continue;
     const orderId = String(orderIds[index] && orderIds[index][0] || '').trim();
-    const date = psSalesDate_(createdDates[index] && createdDates[index][0]);
+    const createdDate = psSalesDate_(createdDates[index] && createdDates[index][0]);
+    const paymentValue = String(paymentDates[index] && paymentDates[index][0] || '').trim();
+    const unpaid = !paymentValue || paymentValue === '-' || paymentValue === '—';
+    const date = unpaid ? '' : psSalesDate_(paymentValue);
     const doubleDeal = psSalesDoubleFlag_(doubleFlags[index] && doubleFlags[index][0]);
-    if (!orderId || orderId === '-' || orderId === '—' || !date || doubleDeal === null) {
+    if (!orderId || orderId === '-' || orderId === '—' || !createdDate || doubleDeal === null) {
       throw new Error('ПС: некорректные ID, дата создания или A+B в строке ' + (index + 2) + '. Сохранённые продажи не изменены.');
     }
-    const signature = city + '|' + date + '|' + doubleDeal;
+    if (!unpaid && !date) throw new Error('ПС: некорректная дата оплаты в строке ' + (index + 2) + '. Сохранённые продажи не изменены.');
+    const signature = city + '|' + createdDate + '|' + date + '|' + doubleDeal;
     if (orders[orderId]) {
       if (orders[orderId].signature !== signature) throw new Error('ПС: конфликт повторяющегося заказа. Сохранённые продажи не изменены.');
       duplicateCount += 1;
       continue;
     }
-    orders[orderId] = { date: date, city: city, doubleDeal: doubleDeal, signature: signature };
+    orders[orderId] = { date: date, createdDate: createdDate, city: city, doubleDeal: doubleDeal, signature: signature };
     accepted += 1;
   }
   if (!accepted) throw new Error('ПС: выгрузка не содержит корректных заказов Москвы или СПб. Сохранённые продажи не изменены.');
@@ -48,12 +53,13 @@ function readMainPsSalesSnapshot_(fromDate, toDate) {
   const result = { source: 'PS', fromDate: range.fromDate, toDate: range.toDate, byDay: {}, coverageByMonth: {}, deals: 0, doubleDeals: 0, count: 0, warnings: warnings };
   Object.keys(orders).forEach((orderId) => {
     const order = orders[orderId];
-    const month = order.date.slice(0, 7);
-    if (month >= range.fromDate.slice(0, 7) && month <= range.toDate.slice(0, 7)) {
+    [order.createdDate, order.date].filter(Boolean).forEach((date) => {
+      const month = date.slice(0, 7);
+      if (month < range.fromDate.slice(0, 7) || month > range.toDate.slice(0, 7)) return;
       const coverage = result.coverageByMonth[month];
-      if (!coverage || order.date > coverage.toDate) result.coverageByMonth[month] = { fromDate: month + '-01', toDate: order.date };
-    }
-    if (order.date < range.fromDate || order.date > range.toDate) return;
+      if (!coverage || date > coverage.toDate) result.coverageByMonth[month] = { fromDate: month + '-01', toDate: date };
+    });
+    if (!order.date || order.date < range.fromDate || order.date > range.toDate) return;
     const byCity = result.byDay[order.date] || (result.byDay[order.date] = {});
     const day = byCity[order.city] || (byCity[order.city] = { deals: 0, doubleDeals: 0, count: 0 });
     const extra = order.doubleDeal ? 1 : 0;
@@ -113,11 +119,12 @@ function syncMainPsSales_(payload, snapshot) {
       const day = source.byDay[date] && source.byDay[date][city];
       const fact = pending || !day ? 0 : Number(day.count);
       if (!Number.isSafeInteger(fact) || fact < 0) throw new Error('ПС: некорректное число продаж. Сохранённые продажи не изменены.');
-      const userComment = String(current.comment || '').replace(/\[(?:SALES_SOURCE|PS_COVERED_FROM|PS_COVERED_TO|PS_PENDING)=[^\]]*\]/g, '').trim();
-      const marker = '[SALES_SOURCE=PS] [PS_COVERED_FROM=' + coverage.fromDate + '] [PS_COVERED_TO=' + coverage.toDate + ']' + (pending ? ' [PS_PENDING=1]' : '');
+      const userComment = String(current.comment || '').replace(/\[(?:SALES_SOURCE|PS_DATE_BASIS|PS_COVERED_FROM|PS_COVERED_TO|PS_PENDING)=[^\]]*\]/g, '').trim();
+      const marker = '[SALES_SOURCE=PS] [PS_DATE_BASIS=payment] [PS_COVERED_FROM=' + coverage.fromDate + '] [PS_COVERED_TO=' + coverage.toDate + ']' + (pending ? ' [PS_PENDING=1]' : '');
       rows.push({
         id: id, date: date, month: month, week: weekOfMonth_(date), city: city, channel: 'Город', metric: 'Продажи',
-        plan: Number(current.plan || 0), fact: fact,
+        plan: Number(current.plan || 0), fact: fact, paidSales: pending ? '' : fact,
+        trafficSales: current.trafficSales !== undefined && current.trafficSales !== null ? current.trafficSales : '',
         forecast: current.forecast !== undefined && current.forecast !== '' ? Number(current.forecast || 0) : Number(current.plan || 0),
         comment: (userComment && userComment !== 'amoCRM' ? userComment + ' ' : '') + marker,
         recommendations: Number(current.recommendations || 0), omQualified: 0,
@@ -136,7 +143,7 @@ function syncMainPsSales_(payload, snapshot) {
     source: 'PS', updated: updated, months: months,
     sales: { deals: source.deals, doubleDeals: source.doubleDeals, count: source.count, byDay: source.byDay },
     coverageByMonth: source.coverageByMonth, warnings: warnings, status: warnings.length ? 'warning' : 'success',
-    message: 'Продажи обновлены из ПС: ' + source.count + '. А+Б = 2; дата создания заказа.',
+    message: 'Продажи обновлены по дате оплаты ПС: ' + source.count + '. А+Б = 2.',
     fromDate: range.fromDate, toDate: range.toDate, updatedAt: new Date().toISOString(),
   };
 }

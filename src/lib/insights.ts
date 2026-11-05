@@ -8,12 +8,13 @@ export function buildAttentionItems(totals: MetricTotals, events: EventItem[]): 
   const leadsPct = metricCompletion(totals, "Лиды");
   const qualifiedPct = metricCompletion(totals, "Квалы");
   const salesPct = metricCompletion(totals, "Продажи");
+  const canDiagnoseSales = conversions.salesAvailable && conversions.salesDateBasis !== "payment";
 
-  if (salesPct < 90 && qualifiedPct < 90) {
+  if (canDiagnoseSales && salesPct < 90 && qualifiedPct < 90) {
     items.push("Продажи ниже плана, при этом КВАЛ тоже ниже. Сначала проверьте объем и качество КВАЛ.");
   }
 
-  if (qualifiedPct >= 90 && salesPct < 90) {
+  if (canDiagnoseSales && qualifiedPct >= 90 && salesPct < 90) {
     items.push("КВАЛ близок к плану, но продажи ниже. Проверьте конверсию КВАЛ -> продажа.");
   }
 
@@ -21,7 +22,7 @@ export function buildAttentionItems(totals: MetricTotals, events: EventItem[]): 
     items.push("Лиды выполняют план, но КВАЛ ниже. Проверьте качество трафика и обработку обращений.");
   }
 
-  if (conversions.qualifiedToSale < 30) {
+  if (canDiagnoseSales && conversions.qualifiedToSale < 30) {
     items.push("Конверсия КВАЛ -> продажа ниже ожидаемой. Нужна проверка этапа продаж.");
   }
 

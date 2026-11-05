@@ -1,17 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import { test } from 'node:test';
-import ts from 'typescript';
+import { createReportModelLoader } from './helpers/report-model.mjs';
 
-const source = readFileSync(new URL('../src/lib/metrics.ts', import.meta.url), 'utf8');
-const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-const psSource = readFileSync(new URL('../src/lib/psSales.ts', import.meta.url), 'utf8');
-const psJs = ts.transpileModule(psSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-const psExports = {};
-runInNewContext(psJs, { exports: psExports });
-const exports = {};
-runInNewContext(js, { exports, require: (name) => name === './psSales' ? psExports : {} });
+const exports = createReportModelLoader()('src/lib/metrics.ts');
 const totals = (fact, forecast, plan = 100) => ({ Лиды: { fact, forecast, plan, recommendations: 0, omQualified: 0 } });
 
 test('status compares fact with forecast independently of plan', () => {

@@ -13,6 +13,8 @@ function integration(failPs = false) {
     salesFetchAmoLeadsForDateRange_ = () => { capture('amo-fetch'); return [{ id: 1 }]; };
     amoCrmLeadRecord_ = lead => lead;
     upsertRowsById_ = () => { capture('raw-write'); return { updated: 1 }; };
+    readMainAmoTrafficSalesSnapshot_ = () => { capture('cohort-read'); return {}; };
+    syncMainAmoTrafficSales_ = () => { capture('cohort-write'); return { updated: 52, count: 470 }; };
     syncAmoCrmMainReportFacts_ = () => { capture('qualification-write'); return {
       updated: 104, months: ['2026-10'], amoSalesAudit: { count: 999 } }; };
     syncMainPsSales_ = (payload, snapshot) => { capture(snapshot.source === 'PS' ? 'ps-write' : 'missing-snapshot');
@@ -31,11 +33,12 @@ function integration(failPs = false) {
 test('main refresh validates PS before writes and returns PS sales instead of amo audit counts', () => {
   const { sync, calls } = integration();
   const result = sync({ fromDate: '2026-10-01', toDate: '2026-10-26' });
-  assert.deepEqual(calls, ['ps-read', 'amo-fetch', 'raw-write', 'qualification-write', 'ps-write']);
+  assert.deepEqual(calls, ['ps-read', 'amo-fetch', 'raw-write', 'cohort-read', 'qualification-write', 'cohort-write', 'ps-write']);
   assert.equal(result.mainReportSales.count, 484);
   assert.equal(result.mainReportAmoSalesAudit.count, 999);
   assert.equal(result.salesSource, 'PS');
-  assert.equal(result.mainReportRows, 156);
+  assert.equal(result.mainReportRows, 208);
+  assert.equal(result.mainReportTrafficSales.count, 470);
   assert.equal(result.salesCoverageByMonth['2026-10'].toDate, '2026-10-25');
 });
 

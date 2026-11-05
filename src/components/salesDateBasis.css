@@ -1,0 +1,12 @@
+.sales-date-basis-panel { margin: 0 0 20px; padding: 18px 20px; border: 1px solid var(--line, #dce2ec); border-radius: 12px; background: white; }
+.sales-date-basis-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.sales-date-basis-heading p, .sales-date-basis-note { margin: 6px 0 0; font-size: 12px; color: var(--muted-strong); line-height: 1.5; }
+.sales-date-basis-heading label { display: grid; gap: 5px; font-size: 12px; color: var(--muted-strong); }
+.sales-date-basis-heading select { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #17243a; max-width: 100%; }
+.sales-date-basis-figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.sales-date-basis-figures article { display: grid; align-content: start; gap: 5px; }
+.sales-date-basis-figures article.selected strong { color: var(--blue-dark); }
+.sales-date-basis-figures span { font-size: 12px; font-weight: 600; color: #334155; }
+.sales-date-basis-figures strong { font-size: 26px; font-variant-numeric: tabular-nums; color: #17243a; }
+.sales-date-basis-figures small { font-size: 12px; line-height: 1.5; color: var(--muted-strong); overflow-wrap: anywhere; }
+@media (max-width: 680px) { .sales-date-basis-heading { flex-direction: column; } .sales-date-basis-heading label { width: 100%; } .sales-date-basis-figures { grid-template-columns: 1fr; } .sales-date-basis-panel { padding: 14px; } }

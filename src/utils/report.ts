@@ -1,5 +1,5 @@
 import type { DailyRecord, EventItem, Metric, WeekSummary } from "../types";
-import { netFact, omQualifiedValue, recommendationValue } from "../lib/metrics";
+import { netFact, omQualifiedValue, recommendationValue, selectedSalesAvailability } from "../lib/metrics";
 import { getWeekOfMonth } from "./date";
 
 const metrics: Metric[] = ["Лиды", "Квалы", "Продажи"];
@@ -23,6 +23,7 @@ export function buildWeeklySummary(records: DailyRecord[], events: EventItem[]):
           forecast: sum(metricRecords, "forecast"),
           recommendations: sum(metricRecords, "recommendations"),
           omQualified: sum(metricRecords, "omQualified"),
+          ...selectedSalesAvailability(metricRecords),
         };
         return acc;
       }, {} as WeekSummary["totals"]);

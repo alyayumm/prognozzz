@@ -33,6 +33,8 @@ import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { isEventMapEvent, mergeEventMapEvents } from "./api/eventMapApi";
 import DemandView from "./features/demand/DemandView";
 import LeadConversionView from "./features/lead-conversion/LeadConversionView";
+import SalesDateBasisPanel from "./components/SalesDateBasisPanel";
+import { optionalSalesCount, selectSalesDateBasis, salesSourceLabel } from "./lib/salesDateBasis";
 import {
   legacyBrandRecordsToPerformance,
   loadBrandAnalyticsSnapshot,
@@ -75,6 +77,7 @@ import {
   recommendationValue,
   reportScopes,
   shouldShowForecastForWeek,
+  selectedSalesAvailability,
   total,
   type MetricTotals,
   type ReportScope,
@@ -86,6 +89,7 @@ import type {
   DailyRecord,
   DailyRecordCity,
   DailyValueUpdate,
+  SalesDateBasis,
   Effect,
   EventCity,
   EventGroup,
@@ -420,6 +424,7 @@ export default function App() {
   const [selectedMonthKey, setSelectedMonthKey] = useState(initialState.selectedMonthKey);
   const [selectedScope, setSelectedScope] = useState<ReportScope>("Все");
   const [trafficMode, setTrafficMode] = useState<TrafficMode>("op");
+  const [salesDateBasis, setSalesDateBasis] = useState<SalesDateBasis>("traffic");
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [adminTab, setAdminTab] = useState<AdminTab>("day");
   const [eventGroupFilter, setEventGroupFilter] = useState<EventGroupFilter>("all");
@@ -470,7 +475,7 @@ export default function App() {
     () => getActiveLeadSources(currentMonthAllRecords),
     [currentMonthAllRecords],
   );
-  const reportRecords = useMemo(() => filterRecordsByScope(records, selectedScope), [records, selectedScope]);
+  const reportRecords = useMemo(() => selectSalesDateBasis(filterRecordsByScope(records, selectedScope), salesDateBasis), [records, selectedScope, salesDateBasis]);
   const reportEvents = useMemo(() => filterEventsByScope(allEvents, selectedScope), [allEvents, selectedScope]);
   const currentMonthRecords = useMemo(
     () => reportRecords.filter((record) => record.date.startsWith(selectedMonthConfig.monthKey)),
@@ -1028,6 +1033,8 @@ export default function App() {
 
         {eventMapWarning && mode !== "demand" && mode !== "leadConversion" && <section className="notice" role="status">{eventMapWarning}</section>}
 
+        {["allMonths", "month", "monthDaily", "week"].includes(mode) && <SalesDateBasisPanel records={filterRecordsByScope(currentMonthAllRecords, selectedScope)} basis={salesDateBasis} onChange={setSalesDateBasis} monthLabel={selectedMonthConfig.label} />}
+
         <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "leadConversion" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
             {mode === "allMonths" && (
@@ -1356,7 +1363,7 @@ function Topbar({
             type="button"
             disabled={isRefreshing || !canRefreshAmo}
             onClick={onRefreshAmo}
-            title="Лиды и квалы — amoCRM; продажи — ПС"
+            title="Лиды, квалы и продажи от трафика — amoCRM; продажи по оплате — ПС"
             aria-busy={isRefreshing}
           >
             <RefreshCw size={17} />
@@ -1364,7 +1371,7 @@ function Topbar({
           </button>
         )}
         {showReportFilters && showFactStatus && <span className="updated-pill">{latestFactDate ? `${salesSourceLabel ? "Лиды и квалы" : "Факт"} по ${formatDay(latestFactDate)}` : "Факта пока нет"}</span>}
-        {salesSourceLabel && <span className="updated-pill" title="Продажи по дате создания заказа в ПС; А+Б считается как две продажи">{salesSourceLabel}</span>}
+        {salesSourceLabel && <span className="updated-pill" title="Выбранный способ учёта продаж; А+Б считается как две продажи">{salesSourceLabel}</span>}
         <button className="select-button" type="button" onClick={onExport}>
           <Download size={16} />
           Экспорт
@@ -1752,13 +1759,13 @@ function MonthDailyDashboard({
         {summaries.map((summary) => (
           <article key={summary.metric} className="daily-kpi-card">
             <span>{summary.metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : summary.metric}</span>
-            <strong>{formatNumber(summary.fact)}</strong>
+            <strong>{totals[summary.metric].factAvailable === false ? "—" : formatNumber(summary.fact)}</strong>
             <div>
               <small>Optima {summary.forecast === null ? "скрыт" : formatNumber(summary.forecast)}</small>
-              <small>{summary.completion}% плана</small>
+              <small>{totals[summary.metric].factAvailable === false ? "нет данных" : `${summary.completion}% плана`}</small>
             </div>
             <em className={summary.deltaAbs >= 0 ? "positive" : "negative"}>
-              {summary.deltaAbs >= 0 ? "+" : ""}{formatNumber(summary.deltaAbs)} к плану
+              {totals[summary.metric].factAvailable === false ? "факт не загружен" : `${summary.deltaAbs >= 0 ? "+" : ""}${formatNumber(summary.deltaAbs)} к плану`}
             </em>
           </article>
         ))}
@@ -5745,14 +5752,14 @@ function MetricKpiStrip({
         return (
           <article key={metric} className="kpi">
             <span>{metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : metric}</span>
-            <strong>{formatNumber(item.fact)}</strong>
+            <strong>{item.factAvailable === false ? "—" : formatNumber(item.fact)}</strong>
             <div className="kpi-row">
               <small>План {formatNumber(item.plan)}</small>
-              <small>{completion}%</small>
+              <small>{item.factAvailable === false ? "нет данных" : `${completion}%`}</small>
             </div>
             <div className="progress"><i style={{ width: `${Math.min(completion, 130)}%` }} /></div>
             <div className="kpi-foot">
-              <small>{deltaAbs >= 0 ? "+" : ""}{formatNumber(deltaAbs)} к плану</small>
+              <small>{item.factAvailable === false ? "факт не загружен" : `${deltaAbs >= 0 ? "+" : ""}${formatNumber(deltaAbs)} к плану`}</small>
               <small>{forecastValue === null ? "прогноз скрыт" : `Optima ${formatNumber(forecastValue)}`}</small>
             </div>
           </article>
@@ -5785,17 +5792,17 @@ function MonthEndForecastPanel({
           return (
             <article key={metric}>
               <span>{metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : metric}</span>
-              <strong>{formatNumber(item.projected)}</strong>
+              <strong>{projection.isClosed && item.factAvailable === false ? "—" : formatNumber(item.projected)}</strong>
               <div className="forecast-progress">
                 <i style={{ width: `${Math.min(item.completion, 130)}%` }} />
               </div>
               <div>
-                <small>Факт сейчас: {formatNumber(item.fact)}</small>
+                <small>Факт сейчас: {item.factAvailable === false ? "—" : formatNumber(item.fact)}</small>
                 <small>Средний день: {formatNumber(item.baseDaily)}</small>
                 <small>План: {formatNumber(item.plan)}</small>
               </div>
               <em className={item.delta >= 0 ? "positive" : "negative"}>
-                {item.completion}% · {item.delta >= 0 ? "+" : ""}{formatNumber(item.delta)} к плану
+                {projection.isClosed && item.factAvailable === false ? "факт не загружен" : `${item.completion}% · ${item.delta >= 0 ? "+" : ""}${formatNumber(item.delta)} к плану`}
               </em>
             </article>
           );
@@ -5814,8 +5821,9 @@ function PlanCompletionWidget({
   periodLabel: string;
   trafficMode?: TrafficMode;
 }) {
+  const availableMetrics = planRingItems.filter((item) => totals[item.metric].factAvailable !== false);
   const averageCompletion = Math.round(
-    planRingItems.reduce((sum, item) => sum + percent(totals[item.metric].fact, totals[item.metric].plan), 0) / planRingItems.length,
+    availableMetrics.reduce((sum, item) => sum + percent(totals[item.metric].fact, totals[item.metric].plan), 0) / Math.max(availableMetrics.length, 1),
   );
 
   return (
@@ -5850,7 +5858,7 @@ function PlanCompletionWidget({
             })}
           </svg>
           <div className="plan-rings-center">
-            <strong>{formatNumber(totals["Продажи"].fact)}</strong>
+            <strong>{totals["Продажи"].factAvailable === false ? "—" : formatNumber(totals["Продажи"].fact)}</strong>
             <span>факт продаж</span>
           </div>
         </div>
@@ -5862,8 +5870,8 @@ function PlanCompletionWidget({
               <div key={item.metric}>
                 <i className={item.className} />
                 <span>{item.metric === "Квалы" ? (trafficMode === "marketing" ? "КВАЛ маркетинг" : "КВАЛ ОП") : item.label}</span>
-                <strong>{completion}%</strong>
-                <small>{formatNumber(totals[item.metric].fact)} из {formatNumber(totals[item.metric].plan)}</small>
+                <strong>{totals[item.metric].factAvailable === false ? "—" : `${completion}%`}</strong>
+                <small>{totals[item.metric].factAvailable === false ? "нет данных" : formatNumber(totals[item.metric].fact)} из {formatNumber(totals[item.metric].plan)}</small>
               </div>
             );
           })}
@@ -5874,6 +5882,7 @@ function PlanCompletionWidget({
 }
 
 function FunnelOverview({ totals, conversions }: { totals: MetricTotals; conversions: ReturnType<typeof buildConversions> }) {
+  const isPayment = conversions.salesDateBasis === "payment";
   const stages: Array<{ metric: Metric; label: string }> = [
     { metric: "Лиды", label: "Лиды" },
     { metric: "Квалы", label: "КВАЛ" },
@@ -5882,14 +5891,14 @@ function FunnelOverview({ totals, conversions }: { totals: MetricTotals; convers
 
   return (
     <section className="funnel-panel">
-      <PanelHead title="Воронка" description="Связка лиды → КВАЛ → продажи показывает, где теряется результат." />
+      <PanelHead title={isPayment ? "Лиды, КВАЛ и оплаты периода" : "Воронка"} description={isPayment ? "Оплаты относятся к отдельному периоду и не образуют одну когорту с лидами и КВАЛ." : "Связка лиды → КВАЛ → продажи показывает, где теряется результат."} />
       <div className="funnel-flow">
         {stages.map((stage, index) => (
           <div key={stage.metric} className="funnel-stage">
-            <span>{stage.label}</span>
-            <strong>{formatNumber(totals[stage.metric].fact)}</strong>
-            {index < stages.length - 1 && (
-              <em>{index === 0 ? conversions.leadToQualified : conversions.qualifiedToSale}%</em>
+            <span>{isPayment && stage.metric === "Продажи" ? "Продажи по оплате" : stage.label}</span>
+            <strong>{totals[stage.metric].factAvailable === false ? "—" : formatNumber(totals[stage.metric].fact)}</strong>
+            {index < stages.length - 1 && !(isPayment && index === 1) && (
+              <em>{index === 0 ? `${conversions.leadToQualified}%` : conversions.salesAvailable ? `${conversions.qualifiedToSale}%` : "—"}</em>
             )}
           </div>
         ))}
@@ -5916,9 +5925,9 @@ function ConversionCards({
           <small>{isMarketing ? `ОП отдельно: ${conversions.opLeadToQualified}%` : `Маркетинг: ${conversions.marketingLeadToQualified}%`}</small>
         </article>
         <article>
-          <span>КВАЛ → продажа</span>
-          <strong>{conversions.qualifiedToSale}%</strong>
-          <small>{isMarketing ? "с учетом ОМ КВАЛ" : "по квалам ОП"}</small>
+          <span>{conversions.salesDateBasis === "payment" ? "Оплаты / КВАЛ периода" : "КВАЛ → продажа"}</span>
+          <strong>{conversions.salesAvailable ? `${conversions.qualifiedToSale}%` : "—"}</strong>
+          <small>{conversions.salesDateBasis === "payment" ? "разные когорты, не конверсия" : isMarketing ? "с учетом ОМ КВАЛ" : "по квалам ОП"}</small>
         </article>
         <article className="secondary">
           <span>{isMarketing ? "ОМ КВАЛ сверху" : "ОМ КВАЛ отдельно"}</span>
@@ -6206,6 +6215,7 @@ function MonthlyTrendChart({
       month,
       plan,
       fact,
+      factAvailable: totals[metric].factAvailable !== false,
       opFact,
       omQualified,
       delta,
@@ -6229,13 +6239,13 @@ function MonthlyTrendChart({
       </div>
       {values.map((item, index) => {
         const barTone = item.fact <= 0 ? "inactive" : item.trend;
-        const deltaLabel = formatPercentDelta(item.delta, item.trend);
+        const deltaLabel = item.factAvailable ? formatPercentDelta(item.delta, item.trend) : "нет факта";
         const showOmSegment = metric === "Квалы" && trafficMode === "marketing" && item.omQualified > 0 && item.fact > 0;
         return (
           <div
             key={item.month.config.monthKey}
             className={`trend-week month-trend-item ${tooltipEdgeClass(index, values.length)}`}
-            data-tooltip={`${item.label}\nФакт: ${formatNumber(item.fact)}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
+            data-tooltip={`${item.label}\nФакт: ${item.factAvailable ? formatNumber(item.fact) : "—"}\nПрогноз Optima: ${formatNumber(item.plan)}\nДинамика: ${deltaLabel}`}
           >
             <div className="trend-plot" style={{ height: chartHeight }}>
               {showOmSegment ? (
@@ -6253,7 +6263,7 @@ function MonthlyTrendChart({
                 />
               )}
             </div>
-            <strong>{formatNumber(item.fact)}</strong>
+            <strong>{item.factAvailable ? formatNumber(item.fact) : "—"}</strong>
             <small>{item.shortLabel}</small>
             <EventDots events={item.month.events} />
             <em className={item.trend}>{deltaLabel}</em>
@@ -6425,7 +6435,7 @@ function MonthMatrix({
                 <div key={metric}>
                   <span>{metric}</span>
                   <b className="matrix-value">
-                    {percent(totals[metric].fact, totals[metric].plan)}%
+                    {totals[metric].factAvailable === false ? "—" : `${percent(totals[metric].fact, totals[metric].plan)}%`}
                     <MatrixTrendArrow trend={getMonthMetricTrend(totals, previousTotals, metric)} />
                   </b>
                 </div>
@@ -6438,10 +6448,10 @@ function MonthMatrix({
                 </b>
               </div>
               <div>
-                <span>Квал → продажа</span>
+                <span>{conversions.salesDateBasis === "payment" ? "Оплаты / КВАЛ периода" : "Квал → продажа"}</span>
                 <b className="matrix-value">
-                  {conversions.qualifiedToSale}%
-                  <MatrixTrendArrow trend={getValueTrend(conversions.qualifiedToSale, previousConversions?.qualifiedToSale ?? null)} />
+                  {conversions.salesAvailable ? `${conversions.qualifiedToSale}%` : "—"}
+                  {conversions.salesAvailable && <MatrixTrendArrow trend={getValueTrend(conversions.qualifiedToSale, previousConversions?.salesAvailable ? previousConversions.qualifiedToSale : null)} />}
                 </b>
               </div>
             </article>
@@ -7082,7 +7092,7 @@ function DailyWeekEditor({
                 const value = metricFactFromRecords(dayRecords, metric, trafficMode);
                 return (
                   <label key={metric} className="compact-input">
-                    <input type={available ? "number" : "text"} value={available ? value : "—"} readOnly title={available ? "Чтобы изменить неделю, отредактируйте значения конкретных дней." : "Продажи ПС за эту дату ещё не загружены"} />
+                    <input type={available ? "number" : "text"} value={available ? value : "—"} readOnly title={available ? "Чтобы изменить неделю, отредактируйте значения конкретных дней." : "Продажи за эту дату в выбранном разрезе ещё не загружены"} />
                   </label>
                 );
               })}
@@ -7472,7 +7482,7 @@ function buildMonthEndForecast(
     isClosed: isClosedMonth,
     lastFactDate,
     remainingDatesCount: remainingDates.length,
-    metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>>((acc, metric) => {
+    metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number; factAvailable?: boolean }>>((acc, metric) => {
       const metricRecords = records.filter((record) => record.metric === metric);
       const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients, trafficMode, todayIso);
       const fact = forecastParts.fact;
@@ -7486,9 +7496,10 @@ function buildMonthEndForecast(
         completion: percent(projected, plan),
         delta: projected - plan,
         baseDaily: Math.round(forecastParts.baseDaily),
+        factAvailable: selectedSalesAvailability(metricRecords).factAvailable,
       };
       return acc;
-    }, {} as Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>),
+    }, {} as Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number; factAvailable?: boolean }>),
   };
 }
 
@@ -7568,6 +7579,8 @@ function getLastFactDate(records: DailyRecord[]): string | null {
 }
 
 function psSalesSourceLabel(records: DailyRecord[], showRange = false): string | null {
+  const selectedLabel = salesSourceLabel(records, showRange);
+  if (selectedLabel) return selectedLabel;
   const coverage = getPsSalesCoverage(records);
   if (!coverage) return null;
   const period = showRange && coverage.fromDate <= coverage.toDate
@@ -7610,6 +7623,13 @@ function mergeTotals(weeks: WeekSummary[]): MetricTotals {
       }),
       { plan: 0, fact: 0, forecast: 0, recommendations: 0, omQualified: 0 },
     );
+    const selected = weeks.map((week) => week.totals[metric]).filter((item) => item.salesDateBasis);
+    if (selected.length) {
+      const observed = selected.filter((item) => item.salesObservationPresent);
+      acc[metric].factAvailable = observed.length > 0 && observed.every((item) => item.factAvailable !== false);
+      acc[metric].salesDateBasis = selected[0].salesDateBasis;
+      acc[metric].salesObservationPresent = observed.length > 0;
+    }
     return acc;
   }, {} as MetricTotals);
 }
@@ -7796,6 +7816,7 @@ function getMetricDisplayTitle(metric: Metric, trafficMode: TrafficMode = "op"):
 
 function getMonthMetricTrend(current: MetricTotals, previous: MetricTotals | null, metric: Metric): "up" | "down" | "flat" {
   if (!previous) return "flat";
+  if (current[metric].factAvailable === false || previous[metric].factAvailable === false) return "flat";
 
   const currentCompletion = percent(current[metric].fact, current[metric].plan);
   const previousCompletion = percent(previous[metric].fact, previous[metric].plan);
@@ -7992,7 +8013,7 @@ function trendClass(delta: number, isFirstWeek = false): "positive" | "negative"
 }
 
 function isFutureWeekWithoutFact(week: WeekSummary, metric: Metric, todayIso: string): boolean {
-  return week.startDate > todayIso && week.totals[metric].fact <= 0;
+  return week.totals[metric].factAvailable === false || (week.startDate > todayIso && week.totals[metric].fact <= 0);
 }
 
 function formatPercentDelta(delta: number, trend: "positive" | "negative" | "warning"): string {
@@ -9582,6 +9603,8 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
       plan,
       forecast,
       omQualified,
+      trafficSales: value.trafficSales ?? current?.trafficSales,
+      paidSales: value.paidSales ?? current?.paidSales,
       comment: encodeOmQualifiedInComment(manualPsFact ? comment.replace(/\[(?:SALES_SOURCE|PS_COVERED_FROM|PS_COVERED_TO|PS_PENDING)=[^\]]*\]/g, "").trim() : comment, omQualified),
     };
   });
@@ -9595,6 +9618,8 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
     forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
     recommendations: value.recommendations === undefined ? undefined : Math.max(0, Number(value.recommendations) || 0),
     omQualified: value.omQualified === undefined ? undefined : Math.max(0, Number(value.omQualified) || 0),
+    trafficSales: optionalSalesCount(value.trafficSales),
+    paidSales: optionalSalesCount(value.paidSales),
   };
 }
 
@@ -9622,6 +9647,8 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
     recommendations: value.recommendations ?? previous?.recommendations ?? 0,
     omQualified: value.metric === "Квалы" ? value.omQualified ?? previous?.omQualified ?? 0 : 0,
+    trafficSales: value.trafficSales ?? previous?.trafficSales,
+    paidSales: value.paidSales ?? previous?.paidSales,
     comment: stripOmQualifiedFromComment(value.comment ?? previous?.comment ?? ""),
     updatedAt: new Date().toISOString(),
   };
@@ -9636,6 +9663,8 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
     omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) || parseOmQualifiedFromComment(comment) : 0,
+    trafficSales: optionalSalesCount(record.trafficSales),
+    paidSales: optionalSalesCount(record.paidSales),
     comment: stripOmQualifiedFromComment(comment),
     updatedAt: record.updatedAt ?? "",
   };

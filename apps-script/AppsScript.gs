@@ -165,6 +165,8 @@ const HEADERS = {
     'updatedAt',
     'recommendations',
     'omQualified',
+    'trafficSales',
+    'paidSales',
   ],
   Month_Config: [
     'monthKey',
@@ -1270,7 +1272,7 @@ function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionarie
   const byId = {};
   const pipelineIds = salesTargetPipelineIds_(dictionaries);
   const pipelineNames = pipelineIds.map((pipelineId) => dictionaries.pipelines[pipelineId] || pipelineId);
-  const stats = { created: 0, closed: 0 };
+  const stats = { created: 0, closed: 0, updated: 0 };
 
   if (!pipelineIds.length) {
     const available = Object.keys(dictionaries.pipelines || {}).map((pipelineId) => dictionaries.pipelines[pipelineId]).filter(Boolean).slice(0, 12);
@@ -1297,9 +1299,20 @@ function salesFetchAmoLeadsForDateRange_(fromDate, toDate, warnings, dictionarie
       warnings.push('amoCRM: фильтр по дате завершения не сработал для воронки ' + (dictionaries.pipelines[pipelineId] || pipelineId) + ', продажи считаются по сделкам из периода создания.');
       throw error;
     }
+
+    // Reopened older leads may have closed_at cleared; only updated_at reveals
+    // their current status so previously confirmed arrival cohorts can decrease.
+    try {
+      const updatedRows = fetchAmoCrmLeadsByDateField_(fromDate, toDate, 'updated_at', pipelineId, 80, warnings);
+      stats.updated += updatedRows.length;
+      addRows(updatedRows);
+    } catch (error) {
+      warnings.push('amoCRM: неполная выгрузка изменений для воронки ' + (dictionaries.pipelines[pipelineId] || pipelineId) + '; сохранённые факты не изменены.');
+      throw error;
+    }
   });
 
-  warnings.push('amoCRM: воронки отчета: ' + pipelineNames.join(', ') + '. Загружено созданных: ' + stats.created + ', завершенных: ' + stats.closed + ', уникальных: ' + Object.keys(byId).length + '.');
+  warnings.push('amoCRM: воронки отчета: ' + pipelineNames.join(', ') + '. Загружено созданных: ' + stats.created + ', завершенных: ' + stats.closed + ', изменённых: ' + stats.updated + ', уникальных: ' + Object.keys(byId).length + '.');
 
   return Object.keys(byId).map((key) => byId[key]);
 }
@@ -1554,9 +1567,26 @@ function salesTimestampFromCachedDate_(value) {
   return Number.isFinite(millis) ? Math.floor(millis / 1000) : '';
 }
 
+function salesAmoIsClosedLostChat_(stageName, lead) {
+  const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
+  const closedLost = statusId ? statusId === '143'
+    : salesNormalizeLabel_(stageName).indexOf(salesNormalizeLabel_('Закрыто и не реализовано')) === 0;
+  if (!closedLost) return false;
+  const lossReasonId = String((lead && (lead.loss_reason_id || lead.lossReasonId)) || '').trim();
+  if (lossReasonId) return lossReasonId === '23625702';
+  const parenthetical = String(stageName || '').match(/\(([^)]*)\)/);
+  const lossReasonName = parenthetical ? parenthetical[1] : salesAmoLossReasonName_(lead);
+  return salesNormalizeText_(lossReasonName) === 'чат';
+}
+
 function salesNormalizeAmoLead_(lead, dictionaries, config) {
   if (lead && lead.cachedNormalized) {
     const cached = lead.cachedNormalized;
+    // Re-evaluate this exclusion so a reopened or won lead is counted again.
+    if (cached.excludeReason === 'closedLostChat') {
+      cached.excludeReason = '';
+      cached.city = cached.city || salesAmoCity_(cached.pipeline);
+    }
     if (cached.excludeReason || !cached.city) {
       return {
         exclude: true,
@@ -1565,6 +1595,10 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
         stage: cached.stage,
         typeLabel: cached.typeLabel,
       };
+    }
+    if (salesAmoIsClosedLostChat_(cached.stage, lead)) {
+      return { exclude: true, excludeReason: 'closedLostChat', city: cached.city, pipeline: cached.pipeline,
+        stage: cached.stage, typeLabel: cached.typeLabel };
     }
     cached.createdInMonth = salesDateInReportPeriod_(cached.createdDate, config);
     cached.closedInMonth = salesDateInReportPeriod_(cached.closedDate, config);
@@ -1592,6 +1626,10 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
       stage: stage,
       typeLabel: typeLabel,
     };
+  }
+  if (salesAmoIsClosedLostChat_(stage, lead)) {
+    return { exclude: true, excludeReason: 'closedLostChat', city: city, pipeline: pipeline,
+      stage: stage, typeLabel: typeLabel };
   }
 
   const manager = salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
@@ -4075,7 +4113,9 @@ function syncAmoCrmLeads_(payload) {
   const upsertResult = records.length
     ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
     : { updated: 0 };
+  const trafficSnapshot = readMainAmoTrafficSalesSnapshot_(fromDate, toDate);
   const mainReportResult = syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings);
+  const trafficResult = syncMainAmoTrafficSales_(trafficSnapshot);
   const psResult = syncMainPsSales_({ fromDate: fromDate, toDate: toDate }, psSnapshot);
   warnings.push.apply(warnings, psResult.warnings || []);
   const result = {
@@ -4083,14 +4123,15 @@ function syncAmoCrmLeads_(payload) {
     fromDate: fromDate,
     toDate: toDate,
     status: psResult.status === 'warning' ? 'warning' : 'success',
-    message: 'Отчет обновлен: лиды и КВАЛ из amoCRM, продажи из ПС. ' + psResult.message,
+    message: 'Отчет обновлен: лиды, КВАЛ и продажи от трафика — по дате прихода в amoCRM; оплаты — по дате оплаты ПС. ' + psResult.message,
     rows: upsertResult.updated,
-    mainReportRows: mainReportResult.updated + psResult.updated,
+    mainReportRows: mainReportResult.updated + trafficResult.updated + psResult.updated,
     salesSource: 'PS',
     mainReportSales: psResult.sales,
+    mainReportTrafficSales: trafficResult,
     mainReportAmoSalesAudit: mainReportResult.amoSalesAudit,
     salesCoverageByMonth: psResult.coverageByMonth,
-    monthsRebuilt: unique_((mainReportResult.months || []).concat(psResult.months || [])),
+    monthsRebuilt: unique_((mainReportResult.months || []).concat(psResult.months || [], trafficResult.months || [])),
     warnings: warnings,
     updatedAt: new Date(),
   };
@@ -4185,7 +4226,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: обновлены только лиды и КВАЛ по дате создания; продажи основного отчета загружаются из ПС. ОМ КВАЛ: целевые лиды на «Технический»/«Системный», целевые дубли и указанные целевые отказы на РОП; из КВАЛ ОП они исключены.');
+    warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода, включая успешно реализованные сделки. Закрытые и нереализованные с причиной «Чат» исключены из трафика. Продажи от трафика считаются отдельно от оплат ПС. Правила КВАЛ ОП и ОМ КВАЛ сохранены.');
   }
   return { updated: upsertResult.updated, months: rebuiltMonths, amoSalesAudit: sales };
 }
@@ -5139,6 +5180,8 @@ function dailyRow_(record) {
     new Date(),
     Number(record.recommendations || 0),
     record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
+    record.metric === 'Продажи' ? optionalSalesCount_(record.trafficSales) : '',
+    record.metric === 'Продажи' ? optionalSalesCount_(record.paidSales) : '',
   ];
 }
 
@@ -5285,6 +5328,8 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
           comment: current.comment || '',
           recommendations: current.recommendations || 0,
           omQualified: metric === 'Квалы' ? Number(current.omQualified || 0) : 0,
+          trafficSales: optionalSalesCount_(current.trafficSales),
+          paidSales: optionalSalesCount_(current.paidSales),
         });
         if (rowById[id]) {
           sheet.getRange(rowById[id], 1, 1, values.length).setValues([values]);
@@ -5316,6 +5361,8 @@ function normalizeDailyUpdate_(record) {
     comment: record.comment !== undefined ? record.comment : (current ? current.comment : ''),
     recommendations: record.recommendations !== undefined ? record.recommendations : (current ? current.recommendations : 0),
     omQualified: metric === 'Квалы' ? (record.omQualified !== undefined ? record.omQualified : (current ? current.omQualified : 0)) : 0,
+    trafficSales: current ? optionalSalesCount_(current.trafficSales) : '',
+    paidSales: current ? optionalSalesCount_(current.paidSales) : '',
   };
 }
 
@@ -5352,6 +5399,8 @@ function normalizeDailyForClient_(record) {
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
     omQualified: record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
+    trafficSales: optionalSalesCount_(record.trafficSales) === '' ? undefined : optionalSalesCount_(record.trafficSales),
+    paidSales: optionalSalesCount_(record.paidSales) === '' ? undefined : optionalSalesCount_(record.paidSales),
     comment: record.comment || '',
   };
 }

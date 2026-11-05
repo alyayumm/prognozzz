@@ -2,6 +2,8 @@ export type City = "МСК" | "СПБ" | "сообщения";
 export type SourceRecordCity = "источники";
 export type DailyRecordCity = City | "Все" | SourceRecordCity;
 export type Metric = "Лиды" | "Квалы" | "Продажи";
+export type SalesDateBasis = "traffic" | "payment";
+export type MetricAggregate = { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number; factAvailable?: boolean; salesDateBasis?: SalesDateBasis; salesObservationPresent?: boolean };
 export type PlanByCity = Record<City, Record<Metric, number>>;
 export type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 export type ForecastCoefficients = Record<City, Record<Metric, Record<WeekdayCoefficientKey, number>>>;
@@ -31,6 +33,10 @@ export interface DailyRecord {
   omQualified: number;
   comment?: string;
   updatedAt?: string;
+  trafficSales?: number;
+  paidSales?: number;
+  /** Only report views set this; raw persisted facts retain the legacy payment slot. */
+  salesDateBasis?: SalesDateBasis;
 }
 
 export interface MonthConfig {
@@ -57,6 +63,8 @@ export interface DailyValueUpdate {
   recommendations?: number;
   omQualified?: number;
   comment?: string;
+  trafficSales?: number;
+  paidSales?: number;
 }
 
 export type DailyFactDraft = PlanByCity;
@@ -66,12 +74,12 @@ export interface WeeklyAggregates {
   week: number;
   startDate: string;
   endDate: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
+  totals: Record<Metric, MetricAggregate>;
 }
 
 export interface MonthlyAggregates {
   monthKey: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
+  totals: Record<Metric, MetricAggregate>;
 }
 
 export interface CreateMonthPayload {
@@ -102,7 +110,7 @@ export interface WeekSummary {
   week: number;
   startDate: string;
   endDate: string;
-  totals: Record<Metric, { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number }>;
+  totals: Record<Metric, MetricAggregate>;
   open: number;
   high: number;
   low: number;
