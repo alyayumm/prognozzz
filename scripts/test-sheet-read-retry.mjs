@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 const source = readFileSync(new URL('../src/api/publicSheetApi.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-const reader = request => runInNewContext(`${js}; loadGvizSheetOnce = request; loadGvizSheet;`, { exports: {}, request });
+const reader = request => runInNewContext(`${js}; loadGvizSheetOnce = request; loadGvizSheet;`, { exports: {}, require: () => ({}), request });
 
 test('a transient Sheets read retries the same sheet and returns the fresh response', async () => {
   const calls = [];

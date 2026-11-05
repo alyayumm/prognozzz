@@ -30,6 +30,7 @@ import {
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
 import { buildReportSyncPeriods, type ReportSyncPeriod } from "./api/reportSyncPeriods";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
+import { isEventMapEvent, mergeEventMapEvents } from "./api/eventMapApi";
 import DemandView from "./features/demand/DemandView";
 import LeadConversionView from "./features/lead-conversion/LeadConversionView";
 import {
@@ -426,6 +427,7 @@ export default function App() {
   const [highlightedDailyEventId, setHighlightedDailyEventId] = useState<string | null>(null);
   const [brandData, setBrandData] = useState<BrandAnalyticsBundle>(emptyBrandAnalyticsBundle);
   const [brandLoadMessage, setBrandLoadMessage] = useState("Бренды загружаются из Google Sheets...");
+  const [eventMapWarning, setEventMapWarning] = useState("");
   const [auth, setAuth] = useState(loadAdminPassword);
   const [isSavingDaily, setIsSavingDaily] = useState(false);
   const [savedMessage, setSavedMessage] = useState(
@@ -571,7 +573,10 @@ export default function App() {
         setRecords(mergePublicSheetRecords([], snapshot.records));
         if (snapshot.eventsLoaded) {
           setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
+        } else if (snapshot.eventMapEvents) {
+          setEvents((current) => mergeEventMapEvents(current, snapshot.eventMapEvents!).map(normalizeEvent).filter((event) => event.source !== "system"));
         }
+        setEventMapWarning(snapshot.eventsWarning ?? "");
         latestRecordDateRef.current = snapshot.latestActualDate;
         setSavedMessage(
           snapshot.latestActualDate
@@ -707,7 +712,10 @@ export default function App() {
     setRecords(mergePublicSheetRecords([], snapshot.records));
     if (snapshot.eventsLoaded) {
       setEvents(snapshot.events.map(normalizeEvent).filter((event) => event.source !== "system"));
+    } else if (snapshot.eventMapEvents) {
+      setEvents((current) => mergeEventMapEvents(current, snapshot.eventMapEvents!).map(normalizeEvent).filter((event) => event.source !== "system"));
     }
+    setEventMapWarning(snapshot.eventsWarning ?? "");
     latestRecordDateRef.current = snapshot.latestActualDate;
   }
 
@@ -872,6 +880,7 @@ export default function App() {
   }
 
   function addEvent(event: EventItem) {
+    if (isEventMapEvent(event)) return;
     const normalizedEvent = normalizeEvent(event);
     const isUpdate = events.some((item) => item.id === normalizedEvent.id);
     setEvents((current) => [normalizedEvent, ...current.filter((item) => item.id !== normalizedEvent.id)].sort(sortEvents));
@@ -891,7 +900,7 @@ export default function App() {
 
   function deleteEvent(eventId: string) {
     const event = events.find((item) => item.id === eventId);
-    if (!event || event.source === "system") return;
+    if (!event || event.source === "system" || isEventMapEvent(event)) return;
 
     setEvents((current) => current.filter((item) => item.id !== eventId));
     if (!apiConfigured) {
@@ -1016,6 +1025,8 @@ export default function App() {
             ? "Отдел продаж обновляется отдельно: данные берутся из листов «Динамика», планов и PS."
             : savedMessage}
         </section>}
+
+        {eventMapWarning && mode !== "demand" && mode !== "leadConversion" && <section className="notice" role="status">{eventMapWarning}</section>}
 
         <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "leadConversion" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
@@ -1492,6 +1503,7 @@ function MonthDashboard({
     monthDates,
     monthTiming.isClosed,
     forecastCoefficients,
+    todayIso,
     selectedScope === "Все" ? config.plan : undefined,
     trafficMode,
   );
@@ -5761,10 +5773,10 @@ function MonthEndForecastPanel({
     <section className="month-end-forecast-panel">
       <PanelHead
         title="Прогноз на конец месяца"
-        description="FACT пересчитывается в средний базовый день, дальше будущие дни умножаются на свои коэффициенты."
+        description="Средний темп считаем по завершённым дням с фактом. Сегодня и оставшиеся дни прогнозируем с учётом коэффициентов."
       />
       <div className="forecast-meta-row">
-        <span>{projection.isClosed ? "Месяц завершен: показываем итоговый факт" : `FACT внесен до: ${projection.lastFactDate ? formatDay(projection.lastFactDate) : "нет факта"}`}</span>
+        <span>{projection.isClosed ? "Месяц завершен: показываем итоговый факт" : `База прогноза по: ${projection.lastFactDate ? formatDay(projection.lastFactDate) : "нет завершённых дней с фактом"} · сегодня не учитывается`}</span>
         <span>{projection.isClosed ? "Оставшихся дней нет" : `Осталось дней в расчете: ${projection.remainingDatesCount}`}</span>
       </div>
       <div className="month-end-forecast-grid">
@@ -7395,7 +7407,8 @@ function EventCard({
       <p>{event.description}</p>
       <div className="event-card-bottom">
         <small>{eventMonthLabel(event.startDate)} · {formatDay(event.startDate)} - {formatDay(event.endDate)} · {eventMetaLine(event)}</small>
-        {(onEdit || onDelete) && event.source !== "system" && (
+        {isEventMapEvent(event) && <small>Из карты событий · изменения в исходной таблице</small>}
+        {(onEdit || onDelete) && event.source !== "system" && !isEventMapEvent(event) && (
           <span className="event-card-actions">
             {onEdit && (
               <button className="event-edit-button" type="button" onClick={() => onEdit(event)} aria-label={`Редактировать событие ${event.title}`}>
@@ -7448,10 +7461,11 @@ function buildMonthEndForecast(
   monthDates: string[],
   isClosedMonth: boolean,
   coefficients: ForecastCoefficients,
+  todayIso: string,
   planOverride?: Record<Metric, number>,
   trafficMode: TrafficMode = "op",
 ) {
-  const lastFactDate = getLastFactDate(records);
+  const lastFactDate = getLastFactDate(records.filter((record) => isClosedMonth || record.date < todayIso));
   const remainingDates = isClosedMonth ? [] : monthDates.filter((date) => !lastFactDate || date > lastFactDate);
 
   return {
@@ -7460,11 +7474,11 @@ function buildMonthEndForecast(
     remainingDatesCount: remainingDates.length,
     metrics: metrics.reduce<Record<Metric, { plan: number; fact: number; projected: number; completion: number; delta: number; baseDaily: number }>>((acc, metric) => {
       const metricRecords = records.filter((record) => record.metric === metric);
-      const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients, trafficMode);
+      const forecastParts = forecastMetricByFactAverage(metricRecords, metric, monthDates, isClosedMonth, coefficients, trafficMode, todayIso);
       const fact = forecastParts.fact;
       const rawPlan = total(metricRecords, "plan");
       const plan = planOverride?.[metric] ?? rawPlan;
-      const projected = !isClosedMonth && fact === 0 && planOverride?.[metric] !== undefined ? plan : forecastParts.projected;
+      const projected = !isClosedMonth && !forecastParts.hasCompletedFacts && planOverride?.[metric] !== undefined ? plan : forecastParts.projected;
       acc[metric] = {
         plan,
         fact,
@@ -7485,6 +7499,7 @@ function forecastMetricByFactAverage(
   isClosedMonth: boolean,
   coefficients: ForecastCoefficients,
   trafficMode: TrafficMode,
+  todayIso: string,
 ) {
   const recordsByCity = adminCities.map((city) => ({
     city,
@@ -7494,6 +7509,7 @@ function forecastMetricByFactAverage(
   let fact = 0;
   let projected = 0;
   let baseDailyTotal = 0;
+  let hasCompletedFacts = false;
 
   recordsByCity.forEach(({ city, records }) => {
     const factDates = monthDates.filter((date) => {
@@ -7512,20 +7528,26 @@ function forecastMetricByFactAverage(
       return;
     }
 
-    if (!factDates.length) {
+    // Keep partial-day facts visible, but estimate the whole of today from completed observations.
+    fact += cityFact;
+    const completedFactDates = factDates.filter((date) => date < todayIso);
+    if (!completedFactDates.length) {
       projected += cityPlan;
       return;
     }
 
-    const lastFactDate = factDates[factDates.length - 1];
-    const coefficientSum = factDates.reduce((sum, date) => sum + coefficientForCityMetric(city, metric, date, coefficients), 0);
-    const baseDaily = coefficientSum > 0 ? cityFact / coefficientSum : 0;
+    hasCompletedFacts = true;
+    const completedFact = records
+      .filter((record) => completedFactDates.includes(record.date))
+      .reduce((sum, record) => sum + metricFactForTraffic(metric, recordToMetricTotal(record), trafficMode), 0);
+    const lastFactDate = completedFactDates[completedFactDates.length - 1];
+    const coefficientSum = completedFactDates.reduce((sum, date) => sum + coefficientForCityMetric(city, metric, date, coefficients), 0);
+    const baseDaily = coefficientSum > 0 ? completedFact / coefficientSum : 0;
     const futureProjection = monthDates
       .filter((date) => date > lastFactDate)
       .reduce((sum, date) => sum + baseDaily * coefficientForCityMetric(city, metric, date, coefficients), 0);
 
-    fact += cityFact;
-    projected += cityFact + futureProjection;
+    projected += completedFact + futureProjection;
     baseDailyTotal += baseDaily;
   });
 
@@ -7533,6 +7555,7 @@ function forecastMetricByFactAverage(
     fact: Math.round(fact),
     projected: Math.round(projected),
     baseDaily: baseDailyTotal,
+    hasCompletedFacts,
   };
 }
 
@@ -9938,12 +9961,12 @@ function saveLocalState(state: ReturnType<typeof loadInitialState>) {
   }
 }
 
-function getTodayIso(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function getTodayIso(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((value) => value.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function getSalesDepartmentSyncToDate(config: MonthConfig): string | null {

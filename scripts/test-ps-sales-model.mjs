@@ -68,18 +68,21 @@ test('all PS orders remain in sales even when legacy recommendation counts are r
 });
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const appFile = ts.createSourceFile('App.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const testedFunctions = ['recordToMetricTotal', 'forecastMetricByFactAverage', 'sumNullable', 'buildMetricDailyChartData', 'prepareDailyValuesForRemote'];
+const testedFunctions = ['recordToMetricTotal', 'buildMonthEndForecast', 'forecastMetricByFactAverage', 'getLastFactDate', 'getTodayIso', 'sumNullable', 'buildMetricDailyChartData', 'prepareDailyValuesForRemote'];
 const functionSource = appFile.statements
   .filter((statement) => ts.isFunctionDeclaration(statement) && testedFunctions.includes(statement.name?.text))
   .map((statement) => statement.getText(appFile)).join('\n');
-const appJs = ts.transpileModule(`${functionSource}\nexports.forecast = forecastMetricByFactAverage; exports.chart = buildMetricDailyChartData; exports.prepare = prepareDailyValuesForRemote;`, {
+const appJs = ts.transpileModule(`${functionSource}\nexports.forecast = forecastMetricByFactAverage; exports.monthForecast = buildMonthEndForecast; exports.today = getTodayIso; exports.chart = buildMetricDailyChartData; exports.prepare = prepareDailyValuesForRemote;`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 const app = {};
 runInNewContext(appJs, {
   exports: app, ...psExports, ...metricsExports,
   adminCities: ['МСК', 'СПБ', 'сообщения'],
-  coefficientForCityMetric: () => 1,
+  metrics: ['Лиды', 'Квалы', 'Продажи'],
+  total: (rows, key) => rows.reduce((sum, row) => sum + (row[key] ?? 0), 0),
+  percent: (value, plan) => plan ? value / plan * 100 : 0,
+  coefficientForCityMetric: (city, metric, date, coefficients) => coefficients[city]?.[date] ?? 1,
   findDailyRecord: rows => rows[0],
   encodeOmQualifiedInComment: comment => comment,
 });
@@ -95,10 +98,73 @@ test('an intentional manual sales fact clears PS pending while plan-only edits r
 
 test('sales projection includes the covered zero day but excludes unavailable days from the daily average', () => {
   const rows = [record('2026-10-24', 10), record('2026-10-25', 0), record('2026-10-26', 0)];
-  const result = app.forecast(rows, 'Продажи', ['2026-10-24', '2026-10-25', '2026-10-26', '2026-10-27'], false, {}, 'op');
+  const result = app.forecast(rows, 'Продажи', ['2026-10-24', '2026-10-25', '2026-10-26', '2026-10-27'], false, {}, 'op', '2026-10-26');
   assert.equal(result.fact, 10);
   assert.equal(result.baseDaily, 5);
   assert.equal(result.projected, 20);
+});
+
+test('today stays visible in facts but cannot lower or inflate the month projection', () => {
+  const dates = ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'];
+  for (const metric of ['Лиды', 'Квалы', 'Продажи']) {
+    for (const partialToday of [0, 1, 100]) {
+      const rows = [10, 10, partialToday, 0].map((fact, index) => ({
+        ...record(dates[index], fact, 'МСК', '[SALES_SOURCE=PS] [PS_COVERED_TO=2026-11-03]'), metric,
+      }));
+      const result = app.forecast(rows, metric, dates, false, {}, 'op', '2026-11-03');
+      assert.equal(result.fact, 20 + partialToday);
+      assert.equal(result.baseDaily, 10);
+      assert.equal(result.projected, 40);
+    }
+  }
+});
+
+test('forecast coefficients use completed observations separately for both cities and OP/marketing', () => {
+  const dates = ['2026-11-01', '2026-11-02', '2026-11-03'];
+  const rows = [
+    { ...record(dates[0], 20, 'МСК', ''), metric: 'Квалы', omQualified: 10 },
+    { ...record(dates[1], 1, 'МСК', ''), metric: 'Квалы', omQualified: 1 },
+    { ...record(dates[0], 5, 'СПБ', ''), metric: 'Квалы', omQualified: 5 },
+    { ...record(dates[1], 1, 'СПБ', ''), metric: 'Квалы', omQualified: 1 },
+  ];
+  const coefficients = { 'МСК': { [dates[0]]: 2, [dates[1]]: 1, [dates[2]]: 1 } };
+  assert.equal(app.forecast(rows, 'Квалы', dates, false, coefficients, 'op', dates[1]).projected, 55);
+  assert.equal(app.forecast(rows, 'Квалы', dates, false, coefficients, 'marketing', dates[1]).projected, 90);
+});
+
+test('first-day partial facts retain the monthly plan until a completed observation exists', () => {
+  const dates = ['2026-11-01', '2026-11-02'];
+  const rows = [{ ...record(dates[0], 1, 'МСК', '[SALES_SOURCE=PS] [PS_COVERED_TO=2026-11-01]'), plan: 0 }];
+  const result = app.monthForecast(rows, dates, false, {}, dates[0], { 'Лиды': 0, 'Квалы': 0, 'Продажи': 100 });
+  assert.equal(result.metrics['Продажи'].fact, 1);
+  assert.equal(result.metrics['Продажи'].projected, 100);
+  assert.equal(result.lastFactDate, null);
+  assert.equal(result.remainingDatesCount, 2);
+});
+
+test('a covered completed zero is a real baseline; today and pending days stay in the projection', () => {
+  const dates = ['2026-10-25', '2026-10-26', '2026-10-27'];
+  const result = app.monthForecast([record(dates[0], 0), record(dates[1], 1)], dates, false, {}, dates[1], { 'Лиды': 0, 'Квалы': 0, 'Продажи': 100 });
+  assert.equal(result.metrics['Продажи'].fact, 0);
+  assert.equal(result.metrics['Продажи'].projected, 0);
+  assert.equal(result.lastFactDate, dates[0]);
+  assert.equal(result.remainingDatesCount, 2);
+});
+
+test('at the next Moscow day the previous day joins the baseline, and closed months keep all facts', () => {
+  const dates = ['2026-11-01', '2026-11-02', '2026-11-03'];
+  const rows = [10, 20, 1].map((fact, index) => record(dates[index], fact, 'МСК', '[SALES_SOURCE=PS] [PS_COVERED_TO=2026-11-03]'));
+  assert.equal(app.forecast(rows, 'Продажи', dates, false, {}, 'op', dates[1]).projected, 30);
+  assert.equal(app.forecast(rows, 'Продажи', dates, false, {}, 'op', dates[2]).projected, 45);
+  const closed = app.forecast(rows, 'Продажи', dates, true, {}, 'op', dates[2]);
+  assert.equal(closed.fact, 31);
+  assert.equal(closed.projected, 31);
+});
+
+test('report date changes at Moscow midnight regardless of the viewer timezone', () => {
+  assert.equal(app.today(new Date('2026-11-04T20:59:59Z')), '2026-11-04');
+  assert.equal(app.today(new Date('2026-11-04T21:00:00Z')), '2026-11-05');
+  assert.equal(app.today(new Date('2026-12-31T21:00:00Z')), '2027-01-01');
 });
 
 test('daily sales curve shows zero for a covered day and a gap for the next unavailable day', () => {

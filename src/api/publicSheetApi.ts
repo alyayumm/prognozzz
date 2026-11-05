@@ -12,6 +12,7 @@ import type {
   MonthConfig,
   PlanByCity,
 } from "../types";
+import { eventMapSpreadsheetId, loadEventMapSnapshot, mergeEventMapEvents } from "./eventMapApi";
 
 const spreadsheetId = "1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s";
 const sourceYear = 2026;
@@ -84,6 +85,8 @@ export type PublicSheetSnapshot = {
   records: DailyRecord[];
   events: EventItem[];
   eventsLoaded: boolean;
+  eventsWarning?: string;
+  eventMapEvents?: EventItem[];
   monthConfigs: MonthConfig[];
   latestActualDate: string | null;
 };
@@ -132,15 +135,20 @@ async function loadServiceSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Pr
     loadGvizSheet(serviceSheets.plans),
     loadGvizSheet(serviceSheets.daily),
   ]);
-  const eventTable = await loadOptionalGvizSheet(serviceSheets.events);
+  const [eventTable, eventMap] = await Promise.all([
+    loadOptionalGvizSheet(serviceSheets.events),
+    loadEventMapSnapshot((sheetName) => loadGvizSheet(sheetName, eventMapSpreadsheetId, "select A,B,C")),
+  ]);
   const planRows = rowsToObjects(planTable);
   const records = parseServiceDailySheet(dailyTable);
   const monthConfigs = parseServiceMonthConfigs(monthTable, planRows, fallbackMonthConfigs);
 
   return {
     records,
-    events: eventTable ? parseServiceEventSheet(eventTable) : [],
+    events: mergeEventMapEvents(eventTable ? parseServiceEventSheet(eventTable) : [], eventMap.events),
     eventsLoaded: Boolean(eventTable),
+    eventsWarning: [eventTable ? "" : "Сохранённые события отчёта пока не загрузились.", eventMap.warning].filter(Boolean).join(" ") || undefined,
+    eventMapEvents: eventMap.available ? eventMap.events : undefined,
     monthConfigs,
     latestActualDate: getLatestActualDate(records),
   };
@@ -154,15 +162,15 @@ async function loadOptionalGvizSheet(sheetName: string): Promise<GvizTable | nul
   }
 }
 
-async function loadGvizSheet(sheetName: string): Promise<GvizTable> {
+async function loadGvizSheet(sheetName: string, sourceId = spreadsheetId, query = "select *"): Promise<GvizTable> {
   try {
-    return await loadGvizSheetOnce(sheetName);
+    return await loadGvizSheetOnce(sheetName, sourceId, query);
   } catch {
-    return loadGvizSheetOnce(sheetName);
+    return loadGvizSheetOnce(sheetName, sourceId, query);
   }
 }
 
-function loadGvizSheetOnce(sheetName: string): Promise<GvizTable> {
+function loadGvizSheetOnce(sheetName: string, sourceId = spreadsheetId, query = "select *"): Promise<GvizTable> {
   return new Promise((resolve, reject) => {
     if (typeof document === "undefined") {
       reject(new Error("Browser document is not available"));
@@ -197,8 +205,8 @@ function loadGvizSheetOnce(sheetName: string): Promise<GvizTable> {
       reject(new Error(`Cannot load Google Sheet: ${sheetName}`));
     };
     script.src =
-      `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?` +
-      `tqx=out:json;responseHandler:${callbackName}&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent("select *")}&_=${Date.now()}`;
+      `https://docs.google.com/spreadsheets/d/${sourceId}/gviz/tq?` +
+      `tqx=out:json;responseHandler:${callbackName}&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent(query)}&_=${Date.now()}`;
     document.head.appendChild(script);
   });
 }
