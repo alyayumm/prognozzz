@@ -4114,7 +4114,11 @@ function syncAmoCrmLeads_(payload) {
     ? upsertRowsById_(CONFIG.sheets.amoCrmRawLeads, HEADERS.AmoCRM_Raw_Leads, records, amoCrmLeadRow_)
     : { updated: 0 };
   const trafficSnapshot = readMainAmoTrafficSalesSnapshot_(fromDate, toDate);
-  const mainReportResult = syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings);
+  const factRecords = new Map();
+  (trafficSnapshot.cohortRecords || []).concat(records).forEach((record) => {
+    factRecords.set(String(record.leadId || record.id || '').trim(), record);
+  });
+  const mainReportResult = syncAmoCrmMainReportFacts_(Array.from(factRecords.values()), fromDate, toDate, warnings);
   const trafficResult = syncMainAmoTrafficSales_(trafficSnapshot);
   const psResult = syncMainPsSales_({ fromDate: fromDate, toDate: toDate }, psSnapshot);
   warnings.push.apply(warnings, psResult.warnings || []);

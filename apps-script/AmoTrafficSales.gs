@@ -32,19 +32,28 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
     if (id) byLead[id] = record;
   });
   const hasHistoricalFacts = Object.keys(historicalFacts).length > 0;
+  const cohortRecords = [];
   Object.keys(byLead).forEach((id) => {
     const record = byLead[id];
+    let lead = null;
+    let cachedDate = salesCachedDateOnlyString_(record.createdDate);
+    if (!cachedDate) {
+      lead = salesAmoLeadFromCachedRecord_(record);
+      if (!lead) return;
+      cachedDate = (lead.cachedNormalized || {}).createdDate;
+    }
+    // Custom arrival can be inside this period even when every native API date is outside.
+    if (cachedDate >= fromDate && cachedDate <= toDate) cohortRecords.push(record);
     const won = String(record.statusId || '').trim() === '142';
     if (!won && !hasHistoricalFacts) return;
     const saleCity = salesAmoCity_(record.pipelineName);
     // Qualification retains the cached city; only a legacy Chat exclusion restores it from its pipeline.
     const factCity = salesValidCachedCity_(record.city)
       || (record.excludeReason === 'closedLostChat' ? saleCity : '');
-    const cachedDate = salesCachedDateOnlyString_(record.createdDate);
     // Most cached leads belong to untouched history. Avoid full normalization for them.
     if (cachedDate && !(won && targets[cachedDate + '|' + saleCity])
       && !historicalFacts[cachedDate + '|' + factCity]) return;
-    const lead = salesAmoLeadFromCachedRecord_(record);
+    lead = lead || salesAmoLeadFromCachedRecord_(record);
     if (!lead) return;
     const historicalKey = (lead.cachedNormalized || {}).createdDate + '|' + factCity;
     const oldFacts = historicalFacts[historicalKey];
@@ -99,7 +108,7 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
       historicalMonths[target.date.slice(0, 7)] = true;
     });
   });
-  return { rows: rows, fromDate: fromDate, toDate: toDate, byCity: byCity, count: byCity['МСК'] + byCity['СПБ'], historicalMonths: Object.keys(historicalMonths).sort() };
+  return { rows: rows, fromDate: fromDate, toDate: toDate, byCity: byCity, count: byCity['МСК'] + byCity['СПБ'], historicalMonths: Object.keys(historicalMonths).sort(), cohortRecords: cohortRecords };
 }
 
 function syncMainAmoTrafficSales_(snapshot) {
