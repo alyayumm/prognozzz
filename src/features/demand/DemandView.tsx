@@ -8,6 +8,7 @@ import {
   type WordstatDemandSnapshot,
 } from "../../api/wordstatApi";
 import { buildDemandYearSeries, MONTH_LABELS } from "../../lib/wordstatDemand";
+import DemandComparison from "./DemandComparison";
 import "./demand.css";
 
 type DemandViewProps = { writePassword: string; canRefresh: boolean };
@@ -71,6 +72,7 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [analysisMode, setAnalysisMode] = useState<"comparison" | "seasonality">("comparison");
   const [city, setCity] = useState<DemandCity>("МСК");
   const [hiddenYears, setHiddenYears] = useState<number[]>([]);
   const [activeMonth, setActiveMonth] = useState<number | null>(null);
@@ -133,7 +135,10 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
     if (forceRefresh) setRefreshing(true); else setLoading(true);
     try {
       const result = await (forceRefresh ? refreshWordstatDemand(writePassword) : loadWordstatDemand());
-      if (id === requestId.current) setSnapshot(result);
+      if (id === requestId.current) {
+        if (result.status === "error" && !result.records.length && snapshot?.records.length) setError(result.connectionMessage || "Не удалось обновить спрос. Сохранена последняя успешная история.");
+        else setSnapshot(result);
+      }
     } catch (reason: unknown) {
       if (id === requestId.current) setError(errorMessage(reason));
     } finally {
@@ -156,6 +161,20 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
 
   return (
     <div className="demand-view" aria-busy={busy}>
+      <div className="demand-view-switch">
+        <div className="demand-city-toggle" role="group" aria-label="Вид анализа спроса">
+          <button type="button" className={analysisMode === "comparison" ? "active" : ""} aria-pressed={analysisMode === "comparison"} onClick={() => setAnalysisMode("comparison")}>Спрос, продажи и сливы</button>
+          <button type="button" className={analysisMode === "seasonality" ? "active" : ""} aria-pressed={analysisMode === "seasonality"} onClick={() => setAnalysisMode("seasonality")}>Сезонность спроса</button>
+        </div>
+        {analysisMode === "comparison" && <div className="demand-refresh-control">
+          <button className="select-button demand-refresh-button" type="button" disabled={busy || !configured || !canRefresh} title={refreshHelp || "Перечитать месячную историю Wordstat"} onClick={() => void fetchDemand(true)}><RefreshCw size={16} aria-hidden="true" />{refreshing ? "Обновляем спрос…" : loading ? "Загрузка спроса…" : "Обновить спрос"}</button>
+          <small>{loading ? "Загружаем месячную историю" : refreshHelp || (lastSyncedAt ? `Спрос обновлён ${lastSyncedAt} МСК` : "")}</small>
+        </div>}
+      </div>
+
+      <div hidden={analysisMode !== "comparison"}><DemandComparison demandRecords={records} writePassword={writePassword} canRefresh={canRefresh} /></div>
+
+      <div className="demand-seasonality-view" hidden={analysisMode !== "seasonality"}>
       <section className="demand-panel demand-controls" aria-label="Настройки спроса">
         <div className="demand-control-copy">
           <strong>Поисковый спрос</strong>
@@ -174,7 +193,7 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
         </div>
       </section>
 
-      {apiError && (
+      {apiError && analysisMode === "seasonality" && (
         <div className="demand-feedback demand-feedback-error" role="alert">
           <TriangleAlert size={18} aria-hidden="true" />
           <div><strong>Не удалось обновить спрос</strong><p>{apiError}{hasData ? " На графике сохранены последние загруженные данные." : ""}</p></div>
@@ -258,6 +277,9 @@ export default function DemandView({ writePassword, canRefresh }: DemandViewProp
         <div className="demand-connection-actions"><button type="button" className="select-button" disabled={busy} onClick={() => void fetchDemand(false)}><RefreshCw size={15} aria-hidden="true" />{loading ? "Проверяем…" : "Проверить подключение"}</button><a href="https://yandex.cloud/ru/docs/search-api/" target="_blank" rel="noreferrer">Инструкция Яндекс Облака<ExternalLink size={14} aria-hidden="true" /></a></div>
         <small>Ключ хранится на сервере. Вводить его в публичном интерфейсе отчёта не нужно.</small>
       </details>}
+      </div>
+
+      {apiError && analysisMode === "comparison" && <div className="demand-feedback demand-feedback-error" role="alert"><TriangleAlert size={18} aria-hidden="true" /><div><strong>Спрос временно недоступен</strong><p>{apiError}{records.length ? " Сохранена последняя загруженная история." : " Продажи и сливы доступны отдельно; сравнение со спросом появится после его загрузки."}</p></div><button type="button" className="select-button" disabled={busy} onClick={() => void fetchDemand(false)}>Повторить</button></div>}
 
       {warnings.length > 0 && <div className="demand-feedback" role="status"><Info size={18} aria-hidden="true" /><div>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
     </div>

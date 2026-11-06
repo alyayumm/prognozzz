@@ -4,6 +4,9 @@
   min-width: 0;
 }
 
+.demand-view-switch { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; }
+.demand-seasonality-view:not([hidden]) { display: grid; gap: 16px; min-width: 0; }
+
 .demand-panel {
   min-width: 0;
   padding: 20px;
