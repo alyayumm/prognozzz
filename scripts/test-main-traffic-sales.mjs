@@ -109,7 +109,7 @@ test('unchanged confirmed historical and requested sales are not rewritten while
     lead('old-won', oldDate, { category: 'A+B' }),
     lead('current-won', currentDate),
   ], [oldSale, currentSale,
-    { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0 },
+    { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0, omLeads: 0 },
     { id: `${oldDate}-МСК-Квалы`, date: oldDate, city: 'МСК', metric: 'Квалы', fact: 1, omQualified: 0 },
   ]);
   const snapshot = f.api.read(currentDate, currentDate);

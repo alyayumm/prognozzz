@@ -1,5 +1,5 @@
 import type { DailyRecord, EventItem, Metric, WeekSummary } from "../types";
-import { netFact, omQualifiedValue, recommendationValue, selectedSalesAvailability } from "../lib/metrics";
+import { netFact, omLeadsValue, omQualifiedValue, recommendationValue, selectedSalesAvailability } from "../lib/metrics";
 import { getWeekOfMonth } from "./date";
 
 const metrics: Metric[] = ["Лиды", "Квалы", "Продажи"];
@@ -23,6 +23,7 @@ export function buildWeeklySummary(records: DailyRecord[], events: EventItem[]):
           forecast: sum(metricRecords, "forecast"),
           recommendations: sum(metricRecords, "recommendations"),
           omQualified: sum(metricRecords, "omQualified"),
+          omLeads: sum(metricRecords, "omLeads"),
           ...selectedSalesAvailability(metricRecords),
         };
         return acc;
@@ -49,11 +50,12 @@ export function buildWeeklySummary(records: DailyRecord[], events: EventItem[]):
     });
 }
 
-function sum(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified"): number {
+function sum(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified" | "omLeads"): number {
   return records.reduce((total, record) => {
     if (key === "fact") return total + netFact(record);
     if (key === "recommendations") return total + recommendationValue(record);
     if (key === "omQualified") return total + omQualifiedValue(record);
+    if (key === "omLeads") return total + omLeadsValue(record);
     return total + Number(record[key] || 0);
   }, 0);
 }

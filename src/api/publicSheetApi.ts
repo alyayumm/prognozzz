@@ -352,6 +352,7 @@ function parseServiceDailySheet(table: GvizTable): DailyRecord[] {
         updatedAt: row.updatedAt || "",
         trafficSales: optionalSalesCount(row.trafficSales),
         paidSales: optionalSalesCount(row.paidSales),
+        omLeads: metric === "Лиды" ? optionalSalesCount(row.omLeads) : undefined,
       };
       return record;
     })

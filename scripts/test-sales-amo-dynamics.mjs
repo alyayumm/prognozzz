@@ -118,7 +118,8 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
     assert.equal(qualified.plan, 40);
     assert.equal(qualified.forecast, 44);
     assert.equal(qualified.recommendations, 2);
-    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 2);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 2);
     assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
   }
 });

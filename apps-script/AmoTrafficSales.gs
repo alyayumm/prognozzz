@@ -25,7 +25,7 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
   const historicalFacts = {};
   Object.keys(targets).forEach((key) => {
     const target = targets[key];
-    if (target.date < fromDate || target.date > toDate) historicalFacts[key] = { leads: 0, qualified: 0, omQualified: 0 };
+    if (target.date < fromDate || target.date > toDate) historicalFacts[key] = { leads: 0, qualified: 0, omQualified: 0, omLeads: 0 };
   });
   cachedRecords.forEach((record) => {
     const id = String(record.leadId || '').trim();
@@ -59,11 +59,8 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
     const oldFacts = historicalFacts[historicalKey];
     const normalized = oldFacts ? salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, { periodMode: 'all' }) : null;
     if (oldFacts && normalized && !normalized.exclude) {
-      oldFacts.leads += 1;
-      if (normalized.isQualified) {
-        if (normalized.isOmQualified) oldFacts.omQualified += 1;
-        else oldFacts.qualified += 1;
-      }
+      const counts = salesAmoTrafficCounts_(normalized);
+      Object.keys(counts).forEach((metric) => { oldFacts[metric] += counts[metric]; });
     }
     if (!won) return;
     const city = salesAmoCity_(lead.pipeline_name || (lead.cachedNormalized || {}).pipeline);
@@ -98,10 +95,12 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
       const current = currentById[id] || {};
       const fact = metric === 'Лиды' ? facts.leads : facts.qualified;
       const omQualified = metric === 'Квалы' ? facts.omQualified : 0;
-      if (current.id && Number(current.fact || 0) === fact && Number(current.omQualified || 0) === omQualified) return;
+      const omLeads = metric === 'Лиды' ? facts.omLeads : '';
+      if (current.id && Number(current.fact || 0) === fact && Number(current.omQualified || 0) === omQualified
+        && (metric !== 'Лиды' || optionalSalesCount_(current.omLeads) === omLeads)) return;
       rows.push(Object.assign({}, current, {
         id: id, date: target.date, month: target.date.slice(0, 7), week: weekOfMonth_(target.date),
-        city: target.city, channel: 'Город', metric: metric, fact: fact, omQualified: omQualified,
+        city: target.city, channel: 'Город', metric: metric, fact: fact, omQualified: omQualified, omLeads: omLeads,
         plan: Number(current.plan || 0), forecast: current.forecast !== undefined && current.forecast !== '' ? Number(current.forecast) : Number(current.plan || 0),
         comment: current.comment || 'amoCRM', recommendations: Number(current.recommendations || 0),
       }));
@@ -116,12 +115,4 @@ function syncMainAmoTrafficSales_(snapshot) {
   const result = rows.length ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, rows, dailyRow_) : { updated: 0 };
   (snapshot.historicalMonths || []).forEach(rebuildWeeklySummary_);
   return { updated: result.updated, count: snapshot.count, byCity: snapshot.byCity, months: snapshot.historicalMonths || [] };
-}
-
-/** Blank means unavailable; zero is an observed count. */
-function optionalSalesCount_(value) {
-  if (value === undefined || value === null || String(value).trim() === '') return '';
-  const count = Number(value);
-  if (!Number.isSafeInteger(count) || count < 0) throw new Error('Некорректное сохранённое число продаж.');
-  return count;
 }

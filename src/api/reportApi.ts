@@ -39,6 +39,8 @@ type ApiAction =
   | "syncLeadConversion"
   | "getWordstatDemand"
   | "syncWordstatDemand"
+  | "getDemandOutcomes"
+  | "syncDemandOutcomes"
   | "verifyPassword";
 
 export function isReportApiConfigured(): boolean {

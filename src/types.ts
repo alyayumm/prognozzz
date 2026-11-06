@@ -3,7 +3,7 @@ export type SourceRecordCity = "источники";
 export type DailyRecordCity = City | "Все" | SourceRecordCity;
 export type Metric = "Лиды" | "Квалы" | "Продажи";
 export type SalesDateBasis = "traffic" | "payment";
-export type MetricAggregate = { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number; factAvailable?: boolean; salesDateBasis?: SalesDateBasis; salesObservationPresent?: boolean };
+export type MetricAggregate = { plan: number; fact: number; forecast: number; recommendations: number; omQualified: number; omLeads?: number; factAvailable?: boolean; salesDateBasis?: SalesDateBasis; salesObservationPresent?: boolean };
 export type PlanByCity = Record<City, Record<Metric, number>>;
 export type WeekdayCoefficientKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 export type ForecastCoefficients = Record<City, Record<Metric, Record<WeekdayCoefficientKey, number>>>;
@@ -35,6 +35,8 @@ export interface DailyRecord {
   updatedAt?: string;
   trafficSales?: number;
   paidSales?: number;
+  /** Non-referral OM leads excluded from OP traffic and restored in marketing views. */
+  omLeads?: number;
   /** Only report views set this; raw persisted facts retain the legacy payment slot. */
   salesDateBasis?: SalesDateBasis;
 }
@@ -65,6 +67,7 @@ export interface DailyValueUpdate {
   comment?: string;
   trafficSales?: number;
   paidSales?: number;
+  omLeads?: number;
 }
 
 export type DailyFactDraft = PlanByCity;

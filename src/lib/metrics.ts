@@ -46,6 +46,7 @@ export function buildMetricTotals(records: DailyRecord[], metrics: Metric[]): Me
       forecast: total(metricRecords, "forecast"),
       recommendations: total(metricRecords, "recommendations"),
       omQualified: total(metricRecords, "omQualified"),
+      omLeads: total(metricRecords, "omLeads"),
       ...selectedSalesAvailability(metricRecords),
     };
     return acc;
@@ -71,7 +72,10 @@ export function buildOverallMonths(records: DailyRecord[], events: EventItem[], 
 }
 
 export function buildConversions(totals: MetricTotals, trafficMode: TrafficMode = "op") {
-  const leads = totals["Лиды"]?.fact ?? 0;
+  const opLeads = totals["Лиды"]?.fact ?? 0;
+  const omLeads = totals["Лиды"]?.omLeads ?? 0;
+  const marketingLeads = opLeads + omLeads;
+  const leads = trafficMode === "marketing" ? marketingLeads : opLeads;
   const opQualified = totals["Квалы"]?.fact ?? 0;
   const omQualified = totals["Квалы"]?.omQualified ?? 0;
   const marketingQualified = opQualified + omQualified;
@@ -84,11 +88,14 @@ export function buildConversions(totals: MetricTotals, trafficMode: TrafficMode 
     leadToQualified: percent(qualified, leads),
     qualifiedToSale: percent(sales, qualified),
     leadToSale: percent(sales, leads),
-    opLeadToQualified: percent(opQualified, leads),
-    marketingLeadToQualified: percent(marketingQualified, leads),
+    opLeadToQualified: percent(opQualified, opLeads),
+    marketingLeadToQualified: percent(marketingQualified, marketingLeads),
     opQualified,
     marketingQualified,
     omQualified,
+    opLeads,
+    marketingLeads,
+    omLeads,
   };
 }
 
@@ -102,10 +109,10 @@ export function applyTrafficModeToTotals(totals: MetricTotals, trafficMode: Traf
 }
 
 export function metricTotalForTraffic(metric: Metric, totalValue: MetricTotal, trafficMode: TrafficMode): MetricTotal {
-  if (metric !== "Квалы" || trafficMode !== "marketing") return totalValue;
+  if (trafficMode !== "marketing" || (metric !== "Квалы" && metric !== "Лиды")) return totalValue;
   return {
     ...totalValue,
-    fact: totalValue.fact + totalValue.omQualified,
+    fact: totalValue.fact + (metric === "Квалы" ? totalValue.omQualified : totalValue.omLeads ?? 0),
   };
 }
 
@@ -182,7 +189,7 @@ export function percent(value: number, base: number): number {
   return Math.round((value / base) * 100);
 }
 
-export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified"): number {
+export function total(records: DailyRecord[], key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified" | "omLeads"): number {
   return records.reduce((sum, record) => sum + recordMetricValue(record, key), 0);
 }
 
@@ -207,10 +214,15 @@ export function omQualifiedValue(record: DailyRecord): number {
   return record.metric === "Квалы" ? Math.max(0, Number(record.omQualified || 0)) : 0;
 }
 
-function recordMetricValue(record: DailyRecord, key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified"): number {
+export function omLeadsValue(record: DailyRecord): number {
+  return record.metric === "Лиды" ? Math.max(0, Number(record.omLeads || 0)) : 0;
+}
+
+function recordMetricValue(record: DailyRecord, key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified" | "omLeads"): number {
   if (key === "fact") return netFact(record);
   if (key === "recommendations") return recommendationValue(record);
   if (key === "omQualified") return omQualifiedValue(record);
+  if (key === "omLeads") return omLeadsValue(record);
   return Number(record[key] || 0);
 }
 

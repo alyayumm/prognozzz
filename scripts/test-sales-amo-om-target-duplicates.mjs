@@ -134,7 +134,7 @@ test('department OP excludes target duplicates without marking them as refusals'
   const records = [cached(), cached({ leadId: '2', lossReasonId: '11249860', lossReasonName: 'Дубль' }),
     cached({ leadId: '3', stageName: 'Брифинг', statusId: '41892613', lossReasonId: '', lossReasonName: '' })];
   const result = api.department(config, [], records.map(api.cached));
-  assert.equal(result.daily[3].totalTraffic, 3);
+  assert.equal(result.daily[3].totalTraffic, 2);
   assert.equal(result.daily[3].totalQualified, 1);
   assert.equal(result.byManager['Менеджер'].factQualified, 1);
   assert.equal(result.byManager['Менеджер'].refusalLeads, 1);
@@ -169,6 +169,7 @@ test('main report adds target duplicates to OM on creation day and keeps the OP 
   assert.equal(actual.fact, 1);
   assert.equal(actual.omQualified, 3);
   assert.equal(actual.plan, 40);
-  assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
+  assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 1);
+  assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 3);
   assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
 });

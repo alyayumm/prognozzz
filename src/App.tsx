@@ -72,6 +72,7 @@ import {
   getRecordsPeriodStatus,
   metricFactForTraffic,
   netFact,
+  omLeadsValue,
   omQualifiedValue,
   percent,
   recommendationValue,
@@ -6738,7 +6739,7 @@ function AdminDayPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="День" description="КВАЛ ОП и ОМ КВАЛ хранятся отдельно. В режиме маркетинга отчет показывает КВАЛ ОП + ОМ КВАЛ.">
+      <PanelHead title="День" description="КВАЛ ОП и ОМ КВАЛ хранятся отдельно. Рекомендации и кешбэки из amoCRM исключаются при загрузке; поле вычетов — для дополнительных ручных поправок.">
         <label className="admin-date-select">
           <span>Дата</span>
           <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
@@ -6767,7 +6768,7 @@ function AdminDayPanel({
                 <label className="admin-fact-input" key={metric}>
                   <span className={isQualified ? "admin-input-labels three" : "admin-input-labels"}>
                     <b>{isQualified ? "КВАЛ ОП" : "FACT"}</b>
-                    <b>Рекомендации</b>
+                    <b title="Дополнительные ручные вычеты; рекомендации и кешбэки из amoCRM уже исключены">Доп. вычеты</b>
                     {isQualified && <b>ОМ КВАЛ</b>}
                   </span>
                   <span className={isQualified ? "admin-metric-inputs three" : "admin-metric-inputs"}>
@@ -7620,8 +7621,9 @@ function mergeTotals(weeks: WeekSummary[]): MetricTotals {
         forecast: sum.forecast + week.totals[metric].forecast,
         recommendations: sum.recommendations + week.totals[metric].recommendations,
         omQualified: sum.omQualified + week.totals[metric].omQualified,
+        omLeads: sum.omLeads + (week.totals[metric].omLeads ?? 0),
       }),
-      { plan: 0, fact: 0, forecast: 0, recommendations: 0, omQualified: 0 },
+      { plan: 0, fact: 0, forecast: 0, recommendations: 0, omQualified: 0, omLeads: 0 },
     );
     const selected = weeks.map((week) => week.totals[metric]).filter((item) => item.salesDateBasis);
     if (selected.length) {
@@ -7641,6 +7643,7 @@ function recordToMetricTotal(record: DailyRecord) {
     forecast: Number(record.forecast || 0),
     recommendations: recommendationValue(record),
     omQualified: omQualifiedValue(record),
+    omLeads: omLeadsValue(record),
   };
 }
 
@@ -7868,7 +7871,7 @@ function buildMetricDailyChartData(
 
 function sumNullable(
   records: DailyRecord[],
-  key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified",
+  key: "plan" | "fact" | "forecast" | "recommendations" | "omQualified" | "omLeads",
   metric?: Metric,
   trafficMode: TrafficMode = "op",
 ): number | null {
@@ -7878,6 +7881,7 @@ function sumNullable(
     if (key === "fact") return sum + metricFactForTraffic(metric ?? record.metric, recordToMetricTotal(record), trafficMode);
     if (key === "recommendations") return sum + recommendationValue(record);
     if (key === "omQualified") return sum + omQualifiedValue(record);
+    if (key === "omLeads") return sum + omLeadsValue(record);
     const value = Number(record[key]);
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
@@ -8530,8 +8534,8 @@ function getPageCopy(mode: Mode) {
       subtitle: "Визиты, лиды и конверсия по источникам и брендам.",
     },
     demand: {
-      title: "Спрос и сезонность",
-      subtitle: "Запрос «автошкола» в Москве и Санкт-Петербурге. Сравнение лет по одинаковым месяцам.",
+      title: "Спрос, продажи и сливы",
+      subtitle: "Связь поискового спроса с договорами и сливами. Помесячная динамика и сравнение с прошлым годом.",
     },
     events: {
       title: "События",
@@ -9581,7 +9585,7 @@ function dailyRecordNetFact(record: DailyRecord | undefined): number {
 
 function validateDailyValueUpdates(values: DailyValueUpdate[]): boolean {
   return values.some((value) => {
-    const checkedValues = [value.plan, value.fact, value.forecast, value.recommendations, value.omQualified].filter((item) => item !== undefined);
+    const checkedValues = [value.plan, value.fact, value.forecast, value.recommendations, value.omQualified, value.omLeads].filter((item) => item !== undefined);
     return checkedValues.some((item) => {
       const numericValue = Number(item);
       return !Number.isFinite(numericValue) || numericValue < 0;
@@ -9603,6 +9607,7 @@ function prepareDailyValuesForRemote(values: DailyValueUpdate[], currentRecords:
       plan,
       forecast,
       omQualified,
+      omLeads: value.metric === "Лиды" ? value.omLeads ?? current?.omLeads : undefined,
       trafficSales: value.trafficSales ?? current?.trafficSales,
       paidSales: value.paidSales ?? current?.paidSales,
       comment: encodeOmQualifiedInComment(manualPsFact ? comment.replace(/\[(?:SALES_SOURCE|PS_COVERED_FROM|PS_COVERED_TO|PS_PENDING)=[^\]]*\]/g, "").trim() : comment, omQualified),
@@ -9618,6 +9623,7 @@ function sanitizeDailyValueUpdate(value: DailyValueUpdate): DailyValueUpdate {
     forecast: value.forecast === undefined ? undefined : Math.max(0, Number(value.forecast) || 0),
     recommendations: value.recommendations === undefined ? undefined : Math.max(0, Number(value.recommendations) || 0),
     omQualified: value.omQualified === undefined ? undefined : Math.max(0, Number(value.omQualified) || 0),
+    omLeads: optionalSalesCount(value.omLeads),
     trafficSales: optionalSalesCount(value.trafficSales),
     paidSales: optionalSalesCount(value.paidSales),
   };
@@ -9647,6 +9653,7 @@ function mergeDailyRecord(previous: DailyRecord | undefined, value: DailyValueUp
     forecast: value.forecast ?? previous?.forecast ?? value.fact ?? previous?.fact ?? 0,
     recommendations: value.recommendations ?? previous?.recommendations ?? 0,
     omQualified: value.metric === "Квалы" ? value.omQualified ?? previous?.omQualified ?? 0 : 0,
+    omLeads: value.metric === "Лиды" ? value.omLeads ?? previous?.omLeads : undefined,
     trafficSales: value.trafficSales ?? previous?.trafficSales,
     paidSales: value.paidSales ?? previous?.paidSales,
     comment: stripOmQualifiedFromComment(value.comment ?? previous?.comment ?? ""),
@@ -9663,6 +9670,7 @@ function normalizeDailyRecord(record: DailyRecord): DailyRecord {
     forecast: Number(record.forecast || 0),
     recommendations: Number(record.recommendations || 0),
     omQualified: record.metric === "Квалы" ? Number(record.omQualified || 0) || parseOmQualifiedFromComment(comment) : 0,
+    omLeads: record.metric === "Лиды" ? optionalSalesCount(record.omLeads) : undefined,
     trafficSales: optionalSalesCount(record.trafficSales),
     paidSales: optionalSalesCount(record.paidSales),
     comment: stripOmQualifiedFromComment(comment),
@@ -9788,6 +9796,7 @@ function mergePublicSheetRecords(currentRecords: DailyRecord[], publicRecords: D
       ...record,
       recommendations: current?.recommendations ?? record.recommendations,
       omQualified: current?.omQualified ?? record.omQualified,
+      omLeads: record.omLeads ?? current?.omLeads,
       comment: current?.comment ?? record.comment,
     });
   });
@@ -9925,8 +9934,8 @@ function normalizeForecastCoefficients(value: unknown): ForecastCoefficients {
 function sanitizeStoredRecords(records: DailyRecord[], todayIso: string): DailyRecord[] {
   return records.map((record) => {
     const normalized = normalizeDailyRecord(record);
-    if (normalized.date > todayIso && (normalized.fact > 0 || normalized.recommendations > 0 || normalized.omQualified > 0)) {
-      return { ...normalized, fact: 0, recommendations: 0, omQualified: 0 };
+    if (normalized.date > todayIso && (normalized.fact > 0 || normalized.recommendations > 0 || normalized.omQualified > 0 || (normalized.omLeads ?? 0) > 0)) {
+      return { ...normalized, fact: 0, recommendations: 0, omQualified: 0, omLeads: 0 };
     }
     return normalized;
   });

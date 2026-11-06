@@ -25,6 +25,7 @@ export function hasActualRecord(record: DailyRecord): boolean {
   if (record.salesDateBasis && isCitySale(record)) return selectedSalesCount(record) !== undefined;
   if (isPendingPsSale(record)) return false;
   if (isPsSale(record)) return true;
+  if (record.metric === "Лиды" && record.omLeads !== undefined) return true;
   return Number(record.fact || 0) > 0 || Number(record.recommendations || 0) > 0 || Number(record.omQualified || 0) > 0;
 }
 

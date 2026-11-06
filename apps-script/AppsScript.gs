@@ -167,6 +167,7 @@ const HEADERS = {
     'omQualified',
     'trafficSales',
     'paidSales',
+    'omLeads',
   ],
   Month_Config: [
     'monthKey',
@@ -391,7 +392,7 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getLeadConversion', 'syncLeadConversion'];
+    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getDemandOutcomes', 'syncDemandOutcomes', 'getLeadConversion', 'syncLeadConversion'];
     if (independentActions.indexOf(action) < 0) {
       ensureServiceSheets_();
     }
@@ -429,6 +430,8 @@ function doPost(e) {
       syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
       getWordstatDemand: getWordstatDemand_,
       syncWordstatDemand: syncWordstatDemand_,
+      getDemandOutcomes: () => getDemandOutcomes_(),
+      syncDemandOutcomes: () => syncDemandOutcomes_(),
       getLeadConversion: getLeadConversion_,
       syncLeadConversion: syncLeadConversion_,
     };
@@ -437,7 +440,7 @@ function doPost(e) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncPsSales', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand', 'syncLeadConversion'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncPsSales', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand', 'syncDemandOutcomes', 'syncLeadConversion'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -1063,7 +1066,7 @@ function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
     const manager = canonicalManager || managerName || 'Без ответственного';
     const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
 
-    if (normalized && !normalized.exclude && normalized.createdInMonth) {
+    if (normalized && !normalized.exclude && !normalized.isReferral && !normalized.isOmQualified && normalized.createdInMonth) {
       debug.createdInMonth += 1;
       item.totalTraffic += 1;
       if (normalized.city === 'МСК') item.mskTraffic += 1;
@@ -1491,6 +1494,7 @@ function salesAmoLeadFromCachedRecord_(record) {
     budget: Number(record.budget || record.price || 0) || 0,
     leadType: String(record.leadType || ''),
     typeLabel: String(record.typeLabel || ''),
+    source: String(record.source || ''),
     url: '',
     excludeReason: String(record.excludeReason || (!city ? 'noCity' : '')),
     lossReasonId: String(record.lossReasonId || '').trim(),
@@ -1506,6 +1510,7 @@ function salesAmoLeadFromCachedRecord_(record) {
     status_name: record.statusName || '',
     responsible_user_id: record.responsibleUserId || '',
     responsible_user_name: record.responsibleUserName || '',
+    source_name: record.source || '',
     loss_reason_id: cachedNormalized.lossReasonId,
     loss_reason: cachedNormalized.lossReasonName ? { name: cachedNormalized.lossReasonName } : null,
     created_at: salesTimestampFromCachedDate_(createdAt),
@@ -1606,6 +1611,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     cached.isQualified = salesAmoIsQualified_(cached.stage, lead);
     cached.isOmQualified = cached.isQualified && (salesAmoIsOmRefusal_(cached.stage, lead)
       || salesAmoIsTechnicalOwner_(lead, dictionaries, cached.manager));
+    cached.isReferral = salesAmoIsReferralSource_(cached.source);
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
   }
@@ -1646,6 +1652,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
   const format = salesAmoField_(fields, ['формат']);
   const vip = salesAmoField_(fields, ['вип пакет', 'vip пакет']);
   const budget = Number(lead.price || salesAmoField_(fields, ['бюджет']) || 0) || 0;
+  const source = amoCrmLeadSource_(lead, lead.custom_fields_values || []);
 
   return {
     id: 'amocrm-lead-' + String(lead.id || ''),
@@ -1672,6 +1679,8 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     budget: budget,
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
+    source: source,
+    isReferral: salesAmoIsReferralSource_(source),
     lossReasonId: String(lead.loss_reason_id || '').trim(),
     lossReasonName: salesAmoLossReasonName_(lead),
     url: '',
@@ -1695,6 +1704,24 @@ function salesAmoFieldMap_(customFields) {
     }).filter((value) => value !== '').join(', ');
   });
   return result;
+}
+
+/** Only the confirmed referral/cashback source, never arbitrary advertising labels. */
+function salesAmoIsReferralSource_(source) {
+  return salesNormalizeLabel_(source).replace(/э/g, 'е') === 'реккешбек';
+}
+
+function salesAmoTrafficCounts_(normalized) {
+  const counts = { leads: 0, qualified: 0, omQualified: 0, omLeads: 0 };
+  if (!normalized || normalized.exclude || normalized.isReferral) return counts;
+  if (normalized.isOmQualified) {
+    counts.omLeads = 1;
+    counts.omQualified = normalized.isQualified ? 1 : 0;
+  } else {
+    counts.leads = 1;
+    counts.qualified = normalized.isQualified ? 1 : 0;
+  }
+  return counts;
 }
 
 function salesAmoField_(fields, names) {
@@ -4149,6 +4176,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const metrics = ['Лиды', 'Квалы'];
   const aggregated = {};
   const omQualified = {};
+  const omLeads = {};
   const sales = { deals: 0, doubleDeals: 0, count: 0, byDay: {} };
 
   dates.forEach((date) => {
@@ -4166,7 +4194,12 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
     periodEnd: toDate,
   };
 
+  const uniqueRecords = new Map();
   (records || []).forEach((record) => {
+    const id = String(record.leadId || '').trim();
+    if (id) uniqueRecords.set(id, record);
+  });
+  Array.from(uniqueRecords.values()).forEach((record) => {
     const lead = salesAmoLeadFromCachedRecord_(record);
     const sale = salesAmoSalesFacts_(lead, { users: {}, pipelines: {} }, reportConfig);
     if (sale && sale.closedInMonth) {
@@ -4184,12 +4217,13 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
     if (!normalized || normalized.exclude || (cities.indexOf(normalized.city) < 0)) return;
 
     if (normalized.createdDate >= fromDate && normalized.createdDate <= toDate) {
-      aggregated[normalized.createdDate + '|' + normalized.city + '|Лиды'] = (aggregated[normalized.createdDate + '|' + normalized.city + '|Лиды'] || 0) + 1;
-      if (normalized.isQualified) {
-        const key = normalized.createdDate + '|' + normalized.city + '|Квалы';
-        if (normalized.isOmQualified) omQualified[key] = (omQualified[key] || 0) + 1;
-        else aggregated[key] = (aggregated[key] || 0) + 1;
-      }
+      const counts = salesAmoTrafficCounts_(normalized);
+      const leadKey = normalized.createdDate + '|' + normalized.city + '|Лиды';
+      const qualifiedKey = normalized.createdDate + '|' + normalized.city + '|Квалы';
+      aggregated[leadKey] = (aggregated[leadKey] || 0) + counts.leads;
+      aggregated[qualifiedKey] = (aggregated[qualifiedKey] || 0) + counts.qualified;
+      omQualified[qualifiedKey] = (omQualified[qualifiedKey] || 0) + counts.omQualified;
+      omLeads[leadKey] = (omLeads[leadKey] || 0) + counts.omLeads;
     }
 
   });
@@ -4219,6 +4253,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
           comment: current.comment || 'amoCRM',
           recommendations: Number(current.recommendations || 0),
           omQualified: metric === 'Квалы' ? Number(omQualified[date + '|' + city + '|' + metric] || 0) : 0,
+          omLeads: metric === 'Лиды' ? Number(omLeads[date + '|' + city + '|' + metric] || 0) : '',
         });
       });
     });
@@ -4230,7 +4265,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода, включая успешно реализованные сделки. Закрытые и нереализованные с причиной «Чат» исключены из трафика. Продажи от трафика считаются отдельно от оплат ПС. Правила КВАЛ ОП и ОМ КВАЛ сохранены.');
+    warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода. Из трафика ОП исключены РЕК/КЭШБЕК, ОМ КВАЛ и закрытые отказы «Чат». Маркетинговый трафик возвращает ОМ без рек/кешбэка. Все успешные продажи от трафика и оплаты ПС сохраняются независимо от этих вычетов.');
   }
   return { updated: upsertResult.updated, months: rebuiltMonths, amoSalesAudit: sales };
 }
@@ -5186,7 +5221,16 @@ function dailyRow_(record) {
     record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
     record.metric === 'Продажи' ? optionalSalesCount_(record.trafficSales) : '',
     record.metric === 'Продажи' ? optionalSalesCount_(record.paidSales) : '',
+    record.metric === 'Лиды' ? optionalSalesCount_(record.omLeads) : '',
   ];
+}
+
+/** Blank means unavailable; zero is an observed derived count. */
+function optionalSalesCount_(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '';
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) throw new Error('Некорректное сохранённое число.');
+  return count;
 }
 
 function eventRow_(event) {
@@ -5334,6 +5378,7 @@ function ensureDailyRowsForMonth_(monthKey, year, monthIndex, daysInMonth, plans
           omQualified: metric === 'Квалы' ? Number(current.omQualified || 0) : 0,
           trafficSales: optionalSalesCount_(current.trafficSales),
           paidSales: optionalSalesCount_(current.paidSales),
+          omLeads: metric === 'Лиды' ? optionalSalesCount_(current.omLeads) : '',
         });
         if (rowById[id]) {
           sheet.getRange(rowById[id], 1, 1, values.length).setValues([values]);
@@ -5367,6 +5412,7 @@ function normalizeDailyUpdate_(record) {
     omQualified: metric === 'Квалы' ? (record.omQualified !== undefined ? record.omQualified : (current ? current.omQualified : 0)) : 0,
     trafficSales: current ? optionalSalesCount_(current.trafficSales) : '',
     paidSales: current ? optionalSalesCount_(current.paidSales) : '',
+    omLeads: metric === 'Лиды' && current ? optionalSalesCount_(current.omLeads) : '',
   };
 }
 
@@ -5405,6 +5451,7 @@ function normalizeDailyForClient_(record) {
     omQualified: record.metric === 'Квалы' ? Number(record.omQualified || 0) : 0,
     trafficSales: optionalSalesCount_(record.trafficSales) === '' ? undefined : optionalSalesCount_(record.trafficSales),
     paidSales: optionalSalesCount_(record.paidSales) === '' ? undefined : optionalSalesCount_(record.paidSales),
+    omLeads: record.metric === 'Лиды' && optionalSalesCount_(record.omLeads) !== '' ? optionalSalesCount_(record.omLeads) : undefined,
     comment: record.comment || '',
   };
 }
