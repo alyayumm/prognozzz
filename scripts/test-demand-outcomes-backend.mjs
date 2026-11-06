@@ -21,8 +21,15 @@ function lossesBlock() {
     ['Среднее / итог', 1155, 770, 385, 770 / 1155, 385 / 1155]];
 }
 
+const cityLossHeaders = ['Месяц', 'Всего заявок', 'Москва: заявки', 'Доля Москвы', 'СПб: заявки', 'Доля СПб', 'Москва: сливы', 'Слив Москвы', 'СПб: сливы', 'Слив СПб', 'Общие сливы', 'Общий % сливов', 'Вклад Москвы в общий слив', 'Вклад СПб в общий слив', 'Расхождение заявок'];
+function cityLossesBlock() {
+  const labels = [...months.slice(10), ...months.slice(0, 8)];
+  return [[...cityLossHeaders], ...labels.map((month, index) => [month, 100 + index, 60, 0.6, 40 + index, 0.4, 20, 0.2, 10 + index, 0.1, 30 + index, 0.3, 0.2, 0.1, 0]),
+    Array(15).fill(''), Array(15).fill('')];
+}
+
 function fixture({ lockAvailable = true } = {}) {
-  const blocks = { moscow: salesBlock('Москва', 0), petersburg: salesBlock('Питер', 100), losses: lossesBlock() };
+  const blocks = { moscow: salesBlock('Москва', 0), petersburg: salesBlock('Питер', 100), losses: lossesBlock(), cityLosses: cityLossesBlock() };
   const props = {};
   const sourceErrors = new Set();
   const replacedSheetIds = new Map();
@@ -59,7 +66,7 @@ function fixture({ lockAvailable = true } = {}) {
     },
   };
   const nativeSheet = (bookId, sheetId) => ({
-    getName: () => sheetId === 1815158623 ? 'Договоры' : sheetId === 104 ? 'Сводка по месяцам' : 'Лист1',
+    getName: () => sheetId === 1815158623 ? 'Договоры' : sheetId === 104 ? 'Сводка по месяцам' : sheetId === 105 ? 'Распределение потока' : 'Лист1',
     getSheetId: () => replacedSheetIds.get(sheetId) ?? sheetId,
     getRange: (...args) => {
       const [row, column, height, width] = parseRange(args);
@@ -69,12 +76,13 @@ function fixture({ lockAvailable = true } = {}) {
       if (bookId === salesId && sheetId === 1815158623 && row === 1 && column === 1 && height === 8 && width === 13) values = blocks.moscow;
       else if (bookId === salesId && sheetId === 1815158623 && row === 11 && column === 1 && height === 8 && width === 13) values = blocks.petersburg;
       else if (bookId === lossesId && sheetId === 104 && row === 1 && column === 1 && height === 14 && width === 6) values = blocks.losses;
+      else if (bookId === lossesId && sheetId === 105 && row === 15 && column === 1 && height === 13 && width === 15) values = blocks.cityLosses;
       else if (bookId === lossesId && sheetId === 0 && row === 1 && column === 1 && height === 1 && width === 1) values = [[period]];
       else throw Error(`Unbounded or unexpected source read ${key}`);
       return { getValues: () => clone(values), getDisplayValues: () => clone(values), setValues: values => { sourceWrites.push(values); throw Error('Source sheets are read only'); } };
     },
   });
-  const api = runInNewContext(`${source}\n({ get: getDemandOutcomes_, sync: syncDemandOutcomes_ });`, {
+  const api = runInNewContext(`${source}\n({ get: getDemandOutcomes_, sync: syncDemandOutcomes_, checksum: demandOutcomesChecksum_ });`, {
     PropertiesService: { getScriptProperties: () => ({
       getProperty: key => props[key] ?? null,
       setProperty: (key, value) => {
@@ -90,10 +98,10 @@ function fixture({ lockAvailable = true } = {}) {
         getSheetById: sheetId => nativeSheet(id, sheetId),
         getSheetByName: name => {
           if (id === salesId) { assert.equal(name, 'Договоры'); return nativeSheet(id, 1815158623); }
-          assert.ok(['Сводка по месяцам', 'Лист1'].includes(name));
-          return nativeSheet(id, name === 'Лист1' ? 0 : 104);
+          assert.ok(['Сводка по месяцам', 'Распределение потока', 'Лист1'].includes(name));
+          return nativeSheet(id, name === 'Лист1' ? 0 : name === 'Распределение потока' ? 105 : 104);
         },
-        getSheets: () => id === salesId ? [nativeSheet(id, 1815158623)] : [nativeSheet(id, 104), nativeSheet(id, 0)],
+        getSheets: () => id === salesId ? [nativeSheet(id, 1815158623)] : [nativeSheet(id, 104), nativeSheet(id, 105), nativeSheet(id, 0)],
       };
     } },
     getWeeklyReportSpreadsheet_: () => ({
@@ -123,8 +131,8 @@ test('public reads use only approved bounded source ranges and never write cache
   const f = fixture();
   const result = read(f);
   assert.equal(result.status, 'ready');
-  assert.equal(result.records.length, 175);
-  assert.equal(f.sourceReads.length, 4);
+  assert.equal(result.records.length, 195);
+  assert.equal(f.sourceReads.length, 5);
   assert.equal(f.cacheWrites.length, 0);
   assert.equal(f.propertyWrites.length, 0);
   assert.equal(f.sourceWrites.length, 0);
@@ -156,7 +164,7 @@ test('sales preserve historical years, genuine zeroes, provenance and blank futu
 
 test('loss months cross the explicit 2025–2026 year boundary and omit totals and unreported October', () => {
   const result = read(fixture());
-  const losses = series(result, 'losses');
+  const losses = series(result, 'losses').filter(row => row.city === 'Все');
   assert.equal(losses.length, 11);
   assert.equal(losses.find(row => row.month === '2025-11').count, 30);
   assert.equal(losses.find(row => row.month === '2025-12').sourceRow, 3);
@@ -171,6 +179,7 @@ test('blank monthly cells stay unknown while native numeric zero is reported for
   const f = fixture();
   for (const block of [f.blocks.moscow, f.blocks.petersburg]) block[7][10] = '';
   f.blocks.losses[2] = ['Декабрь', 70, 70, 0, 1, 0];
+  f.blocks.cityLosses[2][6] = 0; f.blocks.cityLosses[2][8] = 0; f.blocks.cityLosses[2][10] = 0;
   f.blocks.losses[13][1] -= 31;
   f.blocks.losses[13][3] -= 31;
   const result = read(f);
@@ -196,7 +205,7 @@ for (const [label, alter] of [
     assert.notEqual(result.status, 'ready');
     assert.equal(sourceState(result, 'sales').status, 'cached');
     assert.equal(series(result, 'sales').length, 164);
-    assert.equal(series(result, 'losses').length, 11);
+    assert.equal(series(result, 'losses').length, 31);
     assert.equal(sourceState(result, 'losses').status, 'ready');
   });
 }
@@ -217,7 +226,7 @@ for (const [label, alter] of [
     const result = read(f);
     assert.notEqual(result.status, 'ready');
     assert.equal(sourceState(result, 'losses').status, 'cached');
-    assert.equal(series(result, 'losses').length, 11);
+    assert.equal(series(result, 'losses').length, 31);
     assert.equal(series(result, 'sales').length, 164);
     assert.equal(sourceState(result, 'sales').status, 'ready');
   });
@@ -245,6 +254,7 @@ test('a failed source reuses only its last committed generation while successful
   f.sourceErrors.add(salesId);
   f.blocks.losses[1][1] = 101;
   f.blocks.losses[1][3] = 31;
+  f.blocks.cityLosses[1][10] = 31;
   f.blocks.losses[13][1] += 1;
   f.blocks.losses[13][3] += 1;
   const result = clone(f.api.sync());
@@ -302,7 +312,7 @@ test('an edited cached count invalidates only that source’s committed generati
   f.sourceErrors.add(lossesId);
   const result = read(f);
   assert.deepEqual(series(result, 'sales'), []);
-  assert.equal(series(result, 'losses').length, 11);
+  assert.equal(series(result, 'losses').length, 31);
   assert.equal(sourceState(result, 'sales').status, 'error');
   assert.equal(sourceState(result, 'losses').status, 'cached');
 });
@@ -326,6 +336,7 @@ for (const failure of ['append', 'commit']) {
     f.blocks.moscow[1][1] = 555;
     f.blocks.losses[1][1] = 171;
     f.blocks.losses[1][3] = 101;
+    f.blocks.cityLosses[1][10] = 101;
     f.blocks.losses[13][1] += 71;
     f.blocks.losses[13][3] += 71;
     if (failure === 'append') f.failCache(true); else f.failCommit(true);
@@ -350,4 +361,114 @@ test('a busy explicit sync never writes and does not release another execution�
   assert.equal(f.cacheWrites.length, 0);
   assert.equal(f.propertyWrites.length, 0);
   assert.equal(f.sourceWrites.length, 0);
+});
+
+test('losses preserve native city counts and per-sheet provenance without inventing missing September', () => {
+  const f = fixture();
+  const result = read(f);
+  const losses = series(result, 'losses');
+  assert.equal(losses.length, 31);
+  assert.deepEqual(losses.find(row => row.month === '2025-11' && row.city === 'МСК'),
+    { month: '2025-11', city: 'МСК', metric: 'losses', count: 20, sourceRow: 16, sourceColumn: 'G' });
+  assert.equal(losses.find(row => row.month === '2026-08' && row.city === 'СПБ').sourceRow, 25);
+  assert.equal(losses.find(row => row.month === '2026-08' && row.city === 'СПБ').sourceColumn, 'I');
+  assert.equal(losses.find(row => row.month === '2026-09' && row.city === 'Все').count, 40);
+  assert.equal(losses.some(row => row.month === '2026-09' && row.city !== 'Все'), false);
+  assert.deepEqual(sourceState(result, 'losses').breakdown, { url: `https://docs.google.com/spreadsheets/d/${lossesId}/edit?gid=105`,
+    sheetName: 'Распределение потока', sheetId: 105, fromMonth: '2025-11', toMonth: '2026-08' });
+});
+
+test('city and application discrepancies are visible without redistributing counts, also after cache fallback', () => {
+  const f = fixture();
+  f.blocks.losses[3] = ['Январь', 700, 526, 174, 0.75, 0.25];
+  f.blocks.losses[4] = ['Февраль', 733, 526, 207, 0.72, 0.28];
+  f.blocks.losses[13][1] += (700 - 102) + (733 - 103);
+  f.blocks.losses[13][2] += (526 - 70) * 2;
+  f.blocks.losses[13][3] += (174 - 32) + (207 - 33);
+  Object.assign(f.blocks.cityLosses[3], { 1: 700, 2: 400, 4: 300, 6: 90, 8: 75, 10: 174 });
+  Object.assign(f.blocks.cityLosses[4], { 1: 733, 2: 424, 4: 389, 6: 123, 8: 84, 10: 207 });
+  const fresh = clone(f.api.sync());
+  assert.equal(sourceState(fresh, 'losses').status, 'ready');
+  for (const result of [fresh, (() => { f.sourceErrors.add(lossesId); return read(f); })()]) {
+    const january = series(result, 'losses').filter(row => row.month === '2026-01');
+    assert.deepEqual(january.map(row => [row.city, row.count]), [['Все', 174], ['МСК', 90], ['СПБ', 75]]);
+    const warnings = sourceState(result, 'losses').warnings.join(' ');
+    assert.match(warnings, /165.*174.*9/);
+    assert.match(warnings, /813.*733.*80/);
+    assert.match(warnings, /не распределяется/);
+  }
+});
+
+for (const [label, alter] of [
+  ['wrong city sheet ID', f => { f.replacedSheetIds.set(105, 999); }],
+  ['wrong city headers', f => { f.blocks.cityLosses[0][6] = 'Выручка Москвы'; }],
+  ['city sum above common losses', f => { f.blocks.cityLosses[1][6] = 999; }],
+  ['conflicting common total', f => { f.blocks.cityLosses[1][10] = 31; }],
+  ['one city count missing', f => { f.blocks.cityLosses[1][8] = ''; }],
+  ['wrong month sequence', f => { f.blocks.cityLosses[2][0] = 'Январь'; }],
+  ['a hole before a later city month', f => { f.blocks.cityLosses[2] = Array(15).fill(''); }],
+]) {
+  test(`invalid loss breakdown ${label} preserves the complete last successful loss group and refreshes sales independently`, () => {
+    const f = fixture();
+    f.api.sync();
+    alter(f); f.blocks.moscow[7][10] = 777;
+    const result = clone(f.api.sync());
+    assert.equal(sourceState(result, 'losses').status, 'cached');
+    assert.equal(series(result, 'losses').length, 31);
+    assert.equal(series(result, 'losses').find(row => row.month === '2025-11' && row.city === 'МСК').count, 20);
+    assert.equal(sourceState(result, 'sales').status, 'ready');
+    assert.equal(series(result, 'sales').find(row => row.month === '2026-10' && row.city === 'МСК').count, 777);
+    f.sourceErrors.add(lossesId);
+    assert.equal(series(read(f), 'losses').length, 31);
+  });
+}
+
+test('native city zero remains observed while empty trailing slots stay absent', () => {
+  const f = fixture();
+  f.blocks.cityLosses[1][6] = 0;
+  const result = read(f);
+  assert.equal(series(result, 'losses').find(row => row.month === '2025-11' && row.city === 'МСК').count, 0);
+  assert.equal(series(result, 'losses').some(row => row.month === '2026-10'), false);
+});
+
+test('city cache rows carry their actual sheet identity and altered count or provenance invalidates only losses', () => {
+  for (const tamper of [row => { row[8] += 1; }, row => { row[3] = 104; row[4] = 'Сводка по месяцам'; }]) {
+    const f = fixture();
+    f.api.sync();
+    const cityRow = f.cache().find(row => row[1] === 'losses' && row[6] === 'МСК');
+    assert.equal(cityRow[3], 105);
+    assert.equal(cityRow[4], 'Распределение потока');
+    assert.equal(cityRow[10], 'G');
+    const totalRow = f.cache().find(row => row[1] === 'losses' && row[6] === 'Все');
+    assert.equal(totalRow[3], 104);
+    f.editCache(values => tamper(values.find(row => row[1] === 'losses' && row[6] === 'МСК')));
+    f.sourceErrors.add(salesId); f.sourceErrors.add(lossesId);
+    const result = read(f);
+    assert.equal(sourceState(result, 'losses').status, 'error');
+    assert.equal(sourceState(result, 'sales').status, 'cached');
+    assert.equal(series(result, 'losses').length, 0);
+  }
+});
+
+test('a committed legacy All-only loss cache remains readable without a fabricated city breakdown', () => {
+  const f = fixture();
+  const snapshot = clone(f.api.sync());
+  const legacyRecords = series(snapshot, 'losses').filter(row => row.city === 'Все');
+  const index = JSON.parse(f.props.DEMAND_OUTCOMES_CACHE_INDEX);
+  const entry = index.losses;
+  f.editCache(values => {
+    const legacyRows = values.filter(row => row[1] === 'losses' && row[6] === 'Все');
+    values.splice(entry.startRow - 1, entry.rowCount, ...legacyRows);
+  });
+  entry.rowCount = legacyRecords.length;
+  entry.checksum = f.api.checksum(legacyRecords);
+  delete entry.warnings;
+  f.props.DEMAND_OUTCOMES_CACHE_INDEX = JSON.stringify(index);
+  f.replacedSheetIds.set(105, 999);
+  const result = read(f);
+  assert.equal(sourceState(result, 'losses').status, 'cached');
+  assert.equal(series(result, 'losses').length, 11);
+  assert.equal(series(result, 'losses').every(row => row.city === 'Все'), true);
+  assert.equal(sourceState(result, 'losses').breakdown, undefined);
+  assert.equal(sourceState(result, 'sales').status, 'ready');
 });

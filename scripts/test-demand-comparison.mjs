@@ -62,6 +62,44 @@ test('available loss history is visible without fabricating prior-year values', 
   assert.equal(result.correlations.losses.n, 0);
 });
 
+test('city loss observations remain isolated and the explicit all-city summary is authoritative', () => {
+  const records = [outcome('2026-01', 90, 'losses', 'МСК'), outcome('2026-01', 75, 'losses', 'СПБ'), outcome('2026-01', 174, 'losses', 'Все')];
+  assert.equal(model([], records).months[0].losses, 90);
+  assert.equal(model([], records, {city: 'СПБ'}).months[0].losses, 75);
+  assert.equal(model([], records, {city: 'Все'}).months[0].losses, 174, 'do not replace the source total with the city sum of 165');
+  assert.equal(model([], records.filter(row => row.city !== 'Все'), {city: 'Все'}).months[0].losses, null, 'city rows cannot invent a missing all-city observation');
+  assert.equal(model([], records.filter(row => row.city !== 'МСК')).months[0].losses, null, 'do not infer a missing city by subtracting from All');
+});
+
+test('shorter city history preserves an unknown September beside a known all-city September', () => {
+  const records = [outcome('2025-11', 52, 'losses', 'МСК'), outcome('2026-08', 0, 'losses', 'МСК'), outcome('2026-09', 31, 'losses', 'Все')];
+  const moscow = model([], records);
+  assert.equal(moscow.months[7].losses, 0, 'the observed zero extends city coverage');
+  assert.equal(moscow.months[8].losses, null);
+  assert.deepEqual(moscow.lossCoverage.selected, {months: ['2025-11', '2026-08'], fromMonth: '2025-11', toMonth: '2026-08'});
+  assert.equal(moscow.lossCoverage.all.toMonth, '2026-09');
+  assert.equal(model([], records, {city: 'Все'}).months[8].losses, 31);
+  const legacy = model([], records.filter(row => row.city === 'Все'));
+  assert.deepEqual(legacy.lossCoverage.selected, {months: [], fromMonth: '', toMonth: ''}, 'legacy All-only snapshots expose no city coverage');
+});
+
+test('city index correlation uses only its eight available months, while All can use nine', () => {
+  const demands = [];
+  const records = [];
+  for (let index = 1; index <= 9; index += 1) {
+    const month = `2026-${String(index).padStart(2, '0')}`;
+    demands.push(demand(month, 100 + index * 10), demand(month, 50 + index * 5, 'СПБ'));
+    records.push(outcome(month, 200 + index * 20, 'losses', 'Все'));
+    if (index <= 8) records.push(outcome(month, 100 + index * 10, 'losses', 'МСК'), outcome(month, 50 + index * 5, 'losses', 'СПБ'));
+  }
+  const moscow = model(demands, records, {mode: 'index'});
+  assert.equal(moscow.correlations.losses.n, 8);
+  assert.ok(Math.abs(moscow.correlations.losses.r - 1) < 1e-10);
+  assert.equal(moscow.months[8].plotLosses, null);
+  assert.equal(moscow.months[8].plotDemand, 190 / 110 * 100);
+  assert.equal(model(demands, records, {city: 'Все', mode: 'index'}).correlations.losses.n, 9);
+});
+
 test('index mode uses one positive common baseline and gaps remain gaps', () => {
   const result = model([demand('2026-01', 20), demand('2026-02', 100), demand('2026-03', 150), demand('2026-04', 200)], [outcome('2026-02', 10), outcome('2026-03', 20), outcome('2026-04', 30)], {mode: 'index'});
   assert.equal(result.indexBaseMonth, '2026-02');
@@ -92,6 +130,20 @@ test('conflicting duplicate observations become unknown rather than summed or ar
 
 const source = (key, extra = {}) => ({key, url: `https://example.com/${key}`, sheetName: key, sheetId: 1, status: 'ready', readAt: '2026-11-05T00:00:00Z', fromMonth: '2026-01', toMonth: '2026-09', warnings: [], ...extra});
 const snapshot = (records, sources, status = 'ready') => ({records, sources, status, warnings: []});
+
+test('loss source fallback retains all city and All rows together with breakdown provenance', () => {
+  const breakdown = {url: 'https://example.com/city-losses', sheetName: 'Распределение потока', sheetId: 105, fromMonth: '2025-11', toMonth: '2026-08'};
+  const priorLossRows = [outcome('2026-01', 174, 'losses', 'Все'), outcome('2026-01', 90, 'losses', 'МСК'), outcome('2026-01', 75, 'losses', 'СПБ')];
+  const previous = snapshot([outcome('2026-01', 45), ...priorLossRows], [source('sales'), source('losses', {breakdown})]);
+  const failed = snapshot([outcome('2026-01', 46)], [source('sales'), source('losses', {status: 'error', breakdown: undefined})], 'partial');
+  const retained = preserveDemandOutcomeSources(previous, failed);
+  assert.deepEqual(retained.records.filter(row => row.metric === 'losses'), priorLossRows);
+  assert.deepEqual(retained.sources.find(row => row.key === 'losses').breakdown, breakdown);
+  assert.equal(retained.records.find(row => row.metric === 'sales').count, 46, 'a loss failure cannot freeze fresh sales');
+  assert.equal(retained.sources.find(row => row.key === 'losses').status, 'cached');
+  const fresh = snapshot([outcome('2026-01', 47), outcome('2026-01', 180, 'losses', 'Все'), outcome('2026-01', 92, 'losses', 'МСК')], [source('sales'), source('losses', {breakdown})]);
+  assert.deepEqual(preserveDemandOutcomeSources(previous, fresh).records, fresh.records, 'successful source replacement must not resurrect a removed city observation');
+});
 
 test('a partial source failure after a successful GET preserves only its prior rows and provenance', () => {
   const previous = snapshot([outcome('2026-01', 45), outcome('2026-01', 12, 'losses', 'Все')], [source('sales'), source('losses')]);

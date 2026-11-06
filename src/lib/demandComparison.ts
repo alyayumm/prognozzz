@@ -131,8 +131,17 @@ export function buildDemandComparison(
     ? combined(demandCities.get("МСК")?.get(month) ?? null, demandCities.get("СПБ")?.get(month) ?? null)
     : demandCities.get(city)?.get(month) ?? null;
   const outcomeAt = (metric: "sales" | "losses", month: string): Count => {
-    if (metric === "losses") return city === "Все" ? outcomes.get(`losses|Все|${month}`) ?? null : null;
+    // The all-city summary is authoritative and may differ from the city breakdown.
+    if (metric === "losses") return outcomes.get(`losses|${city}|${month}`) ?? null;
     return city === "Все" ? combined(outcomes.get(`sales|МСК|${month}`) ?? null, outcomes.get(`sales|СПБ|${month}`) ?? null) : outcomes.get(`sales|${city}|${month}`) ?? null;
+  };
+  const lossCoverageFor = (lossCity: DemandComparisonCity) => {
+    const prefix = `losses|${lossCity}|`;
+    const available = [...outcomes.entries()].flatMap(([key, value]) => {
+      const month = key.slice(prefix.length);
+      return key.startsWith(prefix) && value !== null && month < currentMonth ? [month] : [];
+    }).sort();
+    return { months: available, fromMonth: available[0] ?? "", toMonth: available[available.length - 1] ?? "" };
   };
   const months: DemandComparisonMonth[] = MONTH_LABELS.map((label, index) => {
     const suffix = String(index + 1).padStart(2, "0");
@@ -170,6 +179,7 @@ export function buildDemandComparison(
   const pairs = (key: "plotSales" | "plotLosses") => months.flatMap((row): [number, number][] => row.plotDemand === null || row[key] === null ? [] : [[row.plotDemand, row[key] as number]]);
   return {
     months, currentMonth, city, year, mode, indexBaseMonth: base?.month ?? null,
+    lossCoverage: { selected: lossCoverageFor(city), all: lossCoverageFor("Все") },
     correlations: { sales: pearsonCorrelation(pairs("plotSales")), losses: pearsonCorrelation(pairs("plotLosses")) },
     salesSummary: summarize(months, "sales"), lossesSummary: summarize(months, "losses"),
   };

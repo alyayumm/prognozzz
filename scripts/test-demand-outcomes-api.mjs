@@ -49,3 +49,20 @@ test('concurrent initial reads share one call and failed reads can be retried', 
   assert.equal((await client.loadDemandOutcomes()).status, 'ready');
   assert.equal(calls, 2);
 });
+
+test('city loss counts keep their separate source coordinates and cannot use another city column', async () => {
+  const value = snapshot();
+  value.records.push({ month: '2026-01', city: 'МСК', metric: 'losses', count: 90, sourceRow: 18, sourceColumn: 'G' },
+    { month: '2026-01', city: 'СПБ', metric: 'losses', count: 75, sourceRow: 18, sourceColumn: 'I' });
+  value.sources[1].breakdown = { url: 'https://docs.google.com/spreadsheets/d/1h0cg9NzgfhN_THJBrelCWeMEYMGCqbSoBMFpVAM01-M/edit?gid=105',
+    sheetName: 'Распределение потока', sheetId: 105, fromMonth: '2025-11', toMonth: '2026-08' };
+  assert.equal((await api(async () => value).loadDemandOutcomes()).records[2].count, 90);
+  value.records[2].sourceColumn = 'I';
+  await assert.rejects(api(async () => value).loadDemandOutcomes(), /неизвестного формата/);
+});
+
+test('city breakdown metadata rejects an unapproved destination', async () => {
+  const value = snapshot();
+  value.sources[1].breakdown = { url: 'javascript:alert(1)', sheetName: 'Распределение потока', sheetId: 105, fromMonth: '2025-11', toMonth: '2026-08' };
+  await assert.rejects(api(async () => value).loadDemandOutcomes(), /неизвестного формата/);
+});
