@@ -31,7 +31,7 @@ function fixture(cache = [], existing = []) {
 test('OP leads exclude the union of referral and OM leads once; marketing keeps non-referral OM', () => {
   const regular = raw('regular');
   const referrals = raw('referral', { source: 'РЕК/КЭШБЕК' });
-  const om = raw('technical', { responsibleUserName: 'Системный' });
+  const om = raw('technical', { responsibleUserName: 'Технический' });
   const both = raw('both', { source: 'РЕК/КЭШБЕК', responsibleUserName: 'Технический' });
   const targetDuplicate = raw('duplicate', { statusId: '143', stageName: 'Закрыто и не реализовано', lossReasonId: '23760226' });
   const chat = raw('chat', { statusId: '143', stageName: 'Закрыто и не реализовано', lossReasonId: '23625702' });
@@ -77,7 +77,7 @@ test('historical cache recalculation applies exclusions while all won sales and 
   const sale = { id: `${date}-МСК-Продажи`, date, city: 'МСК', channel: 'Город', metric: 'Продажи', trafficSales: 2, paidSales: 5, fact: 5 };
   const previousLead = { id: `${date}-МСК-Лиды`, date, city: 'МСК', channel: 'Город', metric: 'Лиды', fact: 4, recommendations: 1, plan: 30, forecast: 31, comment: 'заметка' };
   const f = fixture([raw('regular'), raw('referral', { source: 'РЕК/КЭШБЕК', statusId: '142', category: 'А+Б' }),
-    raw('om', { responsibleUserName: 'Системный' }), raw('both', { source: 'РЕК/КЭШБЕК', responsibleUserName: 'Системный' })], [sale, previousLead]);
+    raw('om', { responsibleUserName: 'Технический' }), raw('both', { source: 'РЕК/КЭШБЕК', responsibleUserName: 'Технический' })], [sale, previousLead]);
   const snapshot = f.api.snapshot('2026-11-01', '2026-11-01');
   const lead = snapshot.rows.find(row => row.id === previousLead.id);
   const qualified = snapshot.rows.find(row => row.metric === 'Квалы' && row.city === 'МСК' && row.date === date);
@@ -90,11 +90,39 @@ test('historical cache recalculation applies exclusions while all won sales and 
 test('department OP traffic uses the same exclusions while won referral and technical sales still count', () => {
   const f = fixture();
   const leads = [raw('regular'), raw('referral', { source: 'РЕК/КЭШБЕК', statusId: '142', category: 'А+Б', closedAt: '2026-10-01T15:00:00Z' }),
-    raw('technical', { responsibleUserName: 'Системный', statusId: '142', closedAt: '2026-10-01T15:00:00Z' })].map(f.api.cached);
+    raw('technical', { responsibleUserName: 'Технический', statusId: '142', closedAt: '2026-10-01T15:00:00Z' })].map(f.api.cached);
   const report = f.api.department({ monthKey: '2026-10', monthYear: 2026, monthIndex: 9, managers: [], restrictManagers: false }, [], leads);
   assert.equal(report.daily[0].totalTraffic, 1);
   assert.equal(report.daily[0].totalQualified, 1);
   assert.equal(report.daily[0].totalDeals, 3);
+});
+
+test('historical September and October cohorts move qualified System owners from OM to OP on creation dates', () => {
+  const dates = ['2026-09-30', '2026-10-01'];
+  const existing = dates.flatMap(date => [
+    { id: `${date}-МСК-Продажи`, date, city: 'МСК', channel: 'Город', metric: 'Продажи', trafficSales: 0, paidSales: 5, fact: 5 },
+    { id: `${date}-МСК-Лиды`, date, city: 'МСК', channel: 'Город', metric: 'Лиды', fact: 0, omLeads: 2, plan: 30, recommendations: 1, comment: 'заметка' },
+    { id: `${date}-МСК-Квалы`, date, city: 'МСК', channel: 'Город', metric: 'Квалы', fact: 0, omQualified: 2, plan: 20, forecast: 22 },
+  ]);
+  const cache = dates.flatMap(date => ['Системный', 'Технический'].map(owner => raw(`${date}-${owner}`, {
+    createdDate: date, updatedAt: '2026-11-09T12:00:00Z', responsibleUserName: owner,
+  })));
+  const snapshot = fixture(cache, existing).api.snapshot('2026-11-01', '2026-11-09');
+  for (const date of dates) {
+    const lead = snapshot.rows.find(row => row.date === date && row.city === 'МСК' && row.metric === 'Лиды');
+    const qualified = snapshot.rows.find(row => row.date === date && row.city === 'МСК' && row.metric === 'Квалы');
+    assert.equal(lead.fact, 1);
+    assert.equal(lead.omLeads, 1);
+    assert.equal(lead.plan, 30);
+    assert.equal(lead.recommendations, 1);
+    assert.equal(lead.comment, 'заметка');
+    assert.equal(qualified.fact, 1);
+    assert.equal(qualified.omQualified, 1);
+    assert.equal(qualified.fact + qualified.omQualified, 2);
+    assert.equal(qualified.plan, 20);
+    assert.equal(qualified.forecast, 22);
+    assert.equal(snapshot.rows.some(row => row.date === date && row.city === 'МСК' && row.metric === 'Продажи'), false);
+  }
 });
 
 test('derived OM leads survive storage and plan edits but cannot be overwritten by stale clients', () => {

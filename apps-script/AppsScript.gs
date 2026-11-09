@@ -1862,7 +1862,7 @@ function salesAmoIsTechnicalOwner_(lead, dictionaries, fallbackManager) {
     || (dictionaries && dictionaries.users && dictionaries.users[String((lead && lead.responsible_user_id) || '')])
     || fallbackManager;
   const normalized = salesNormalizeText_(owner);
-  return normalized === 'технический' || normalized === 'системный';
+  return normalized === 'технический';
 }
 
 function salesAmoQualifiedLossReasonIds_() {

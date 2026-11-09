@@ -33,7 +33,7 @@ test('Dynamics excluded stages stay unqualified even with the Yes field', () => 
 });
 
 test('Dynamics accepts all other stages and only its six exact loss reasons', () => {
-  for (const stage of ['Брифинг', 'Недозвоны целевые', 'Назначить встречу', 'Новый этап встречи', 'Успешно реализовано']) {
+  for (const stage of ['Брифинг', 'Системный', 'Недозвоны целевые', 'Назначить встречу', 'Новый этап встречи', 'Успешно реализовано']) {
     assert.equal(api.qualify(stage, lead()), true, stage);
   }
   for (const reason of ['Передумал учиться', 'Выбрали другую школу', 'Практика', 'Дорого', 'Хотят именно офлайн класс', 'Не выходит на связь ЦЕЛЕВОЙ']) {
@@ -52,17 +52,29 @@ test('cached qualification is re-evaluated from the current stage and reason', (
   assert.equal(normalized.isOmQualified, false);
 });
 
-test('native CRM owner determines OM qualification for fresh and cached leads', () => {
-  for (const owner of ['Технический', '  СИСТЕМНЫЙ  ']) {
+test('native System owners qualify for OP while Technical owners remain OM, fresh and cached', () => {
+  for (const [owner, om] of [['Технический', true], ['  СИСТЕМНЫЙ  ', false]]) {
     const fresh = api.normalize(lead({ responsible_user_name: owner }), dictionaries, config);
-    const cached = api.normalize(api.cached(record({ responsibleUserName: owner, managerName: 'Менеджер' })), dictionaries, config);
+    const stale = api.cached(record({ responsibleUserName: owner, managerName: 'Менеджер' }));
+    stale.cachedNormalized.isOmQualified = true;
+    const cached = api.normalize(stale, dictionaries, config);
     assert.equal(fresh.isQualified, true);
-    assert.equal(fresh.isOmQualified, true);
-    assert.equal(cached.isOmQualified, true);
+    assert.equal(fresh.isOmQualified, om);
+    assert.equal(cached.isQualified, true);
+    assert.equal(cached.isOmQualified, om);
   }
-  assert.equal(api.normalize(lead({ responsible_user_id: 2 }), dictionaries, config).isOmQualified, true);
-  const customOwner = [{ field_name: 'Ответственный', values: [{ value: 'Системный' }] }];
-  assert.equal(api.normalize(lead({ custom_fields_values: customOwner }), dictionaries, config).isOmQualified, false);
+  assert.equal(api.normalize(lead({ responsible_user_id: 2 }), dictionaries, config).isOmQualified, false);
+  const customOwner = [{ field_name: 'Ответственный', values: [{ value: 'Технический' }] }];
+  assert.equal(api.normalize(lead({ responsible_user_id: 2, custom_fields_values: customOwner }), dictionaries, config).isOmQualified, false);
+});
+
+test('System ownership does not qualify excluded stages or unrelated lost reasons', () => {
+  for (const changes of [{ status_name: 'На проверку', status_id: 73650530 },
+    { status_name: 'Закрыто и не реализовано', status_id: 143, loss_reason_id: 11249860 }]) {
+    const normalized = api.normalize(lead({ responsible_user_name: 'Системный', custom_fields_values: yesFlag, ...changes }), dictionaries, config);
+    assert.equal(normalized.isQualified, false);
+    assert.equal(normalized.isOmQualified, false);
+  }
 });
 
 test('embedded API loss reasons survive raw caching and qualify Practice', () => {
@@ -84,12 +96,13 @@ test('CRM refresh requests loss reason names so classification also works for ne
   assert.ok(requested.with.split(',').includes('loss_reason'));
 });
 
-test('department OP qualification excludes technical owners without treating them as refusals', () => {
+test('department counts System owners in OP and excludes Technical owners without treating them as refusals', () => {
   const leads = [record(), record({ leadId: '2', responsibleUserName: 'Системный', managerName: 'Системный' }),
     record({ leadId: '3', responsibleUserName: 'Технический', managerName: 'Технический' })].map(api.cached);
   const result = api.department(config, [], leads);
-  assert.equal(result.daily[0].totalQualified, 1);
-  assert.equal(result.byManager['Системный'].factQualified, 0);
+  assert.equal(result.daily[0].totalQualified, 2);
+  assert.equal(result.daily[0].totalTraffic, 2);
+  assert.equal(result.byManager['Системный'].factQualified, 1);
   assert.equal(result.byManager['Технический'].refusalLeads, 0);
 });
 
@@ -113,13 +126,13 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
   for (let run = 0; run < 2; run++) {
     sync(records, '2026-10-01', '2026-10-01', []);
     const qualified = saved.find(row => row.metric === 'Квалы' && row.city === 'МСК');
-    assert.equal(qualified.fact, 1);
-    assert.equal(qualified.omQualified, 2);
+    assert.equal(qualified.fact, 2);
+    assert.equal(qualified.omQualified, 1);
     assert.equal(qualified.plan, 40);
     assert.equal(qualified.forecast, 44);
     assert.equal(qualified.recommendations, 2);
-    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 2);
-    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 2);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 3);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 1);
     assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
   }
 });

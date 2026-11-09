@@ -85,7 +85,7 @@ test('successful message-type leads count as sales in city pipelines, while the 
   assert.equal(api.facts(lead({ pipeline_id: 9, pipeline_name: 'АШ Сообщения' }), dictionaries, config), null);
 });
 
-test('sales include ROP, both technical owners, and ordinary managers', () => {
+test('sales include ROP, Technical, System, and ordinary managers', () => {
   for (const owner of ['РОП', 'Технический', 'Системный', 'Менеджер']) {
     const sale = api.facts(lead({ responsible_user_name: owner }), dictionaries, config);
     assert.ok(sale, owner);
