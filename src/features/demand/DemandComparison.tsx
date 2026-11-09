@@ -4,6 +4,7 @@ import { loadDemandOutcomes, refreshDemandOutcomes, type DemandOutcomeSnapshot }
 import type { WordstatDemandRecord } from "../../api/wordstatApi";
 import { buildDemandComparison, moscowCurrentMonth, preserveDemandOutcomeSources, type Correlation, type DemandComparisonCity, type DemandComparisonMode } from "../../lib/demandComparison";
 import { MONTH_LABELS } from "../../lib/wordstatDemand";
+import DemandDynamics from "./DemandDynamics";
 import "./demandComparison.css";
 
 type Props = { demandRecords: WordstatDemandRecord[]; writePassword: string; canRefresh: boolean };
@@ -54,6 +55,7 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
   const [city, setCity] = useState<DemandComparisonCity>("Все");
   const [requestedYear, setRequestedYear] = useState<number | null>(null);
   const [mode, setMode] = useState<DemandComparisonMode>("yoy");
+  const [showComparison, setShowComparison] = useState(false);
   const requestId = useRef(0);
   const cityId = useId();
   const yearId = useId();
@@ -106,11 +108,9 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
 
   return <div className="demand-comparison" aria-busy={busy}>
     <section className="demand-panel demand-comparison-controls" aria-label="Настройки сравнения спроса">
-      <div className="demand-comparison-intro"><h2>Спрос, продажи и сливы</h2><p>Сравните изменение спроса с каждым результатом отдельно.</p></div>
+      <div className="demand-comparison-intro"><h2>Количество и отношение к спросу</h2><p>Выберите город, показатель и годы. Спрос, продажи и сливы остаются отдельными величинами.</p></div>
       <div className="demand-comparison-fields">
         <label htmlFor={cityId}>Город<select id={cityId} value={city} onChange={(event) => setCity(event.target.value as DemandComparisonCity)}><option value="Все">Москва + СПб</option><option value="МСК">Москва</option><option value="СПБ">Санкт-Петербург</option></select></label>
-        <label htmlFor={yearId}>Год<select id={yearId} value={year} onChange={(event) => setRequestedYear(Number(event.target.value))}>{(years.length ? years : [currentYear]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label htmlFor={modeId}>Сравнение<select id={modeId} value={mode} onChange={(event) => setMode(event.target.value as DemandComparisonMode)}><option value="yoy">Год к году</option><option value="index">Динамика года</option></select></label>
         <button className="select-button demand-comparison-refresh" type="button" disabled={busy} onClick={() => void reload(canRefresh)}><RefreshCw size={15} aria-hidden="true" />{busy ? "Загрузка…" : canRefresh ? "Обновить таблицы" : "Перечитать данные"}</button>
       </div>
     </section>
@@ -119,6 +119,15 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
 
     {(apiError || sourceWarnings.length > 0) && <div className={`demand-feedback${apiError ? " demand-feedback-error" : ""}`} role={apiError ? "alert" : "status"}><TriangleAlert size={17} aria-hidden="true" /><div>{apiError && <p>{apiError}</p>}{sourceWarnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
 
+    <DemandDynamics demandRecords={demandRecords} outcomeRecords={outcomeRecords} city={city} />
+
+    <details className="demand-comparison-additional" onToggle={(event) => setShowComparison(event.currentTarget.open)}>
+      <summary>Сверка год к году и помесячные данные<ChevronDown size={16} aria-hidden="true" /></summary>
+      {showComparison && <div className="demand-comparison-additional-content">
+        <div className="demand-comparison-fields">
+          <label htmlFor={yearId}>Год для сверки<select id={yearId} value={year} onChange={(event) => setRequestedYear(Number(event.target.value))}>{(years.length ? years : [currentYear]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label htmlFor={modeId}>Способ сверки<select id={modeId} value={mode} onChange={(event) => setMode(event.target.value as DemandComparisonMode)}><option value="yoy">Год к году</option><option value="index">Индекс от базового месяца</option></select></label>
+        </div>
     <section className="demand-panel" aria-label="Сравнение динамики">
       <div className="demand-comparison-heading"><h3>{mode === "yoy" ? `${year} к ${year - 1}` : `Динамика ${year} года`}</h3><p>{mode === "yoy" ? "Тот же календарный месяц прошлого года = 0% изменения." : comparison.indexBaseMonth ? `${monthName(comparison.indexBaseMonth)} = 100 для всех доступных линий.` : "Нужен общий месяц со спросом и результатами больше нуля, чтобы задать базу 100."} Только завершённые месяцы по МСК.</p></div>
       <div className="demand-comparison-legend" aria-label="Линии графика"><span className="demand-comparison-demand">Спрос · Wordstat</span><span className="demand-comparison-sales">Продажи · договоры</span><span className="demand-comparison-losses">Сливы · {city === "Все" ? "сводка" : "город"}</span></div>
@@ -152,5 +161,7 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
         <p>Продажи берутся целиком из листа «Договоры» предоставленной таблицы. Сливы Москвы и СПб берутся из городской разбивки; значение «Москва + СПб» — из общей сводки. Если их суммы расходятся, разница не распределяется между городами. Вычеты из лидов, показатели amoCRM и оплаты ПС здесь не применяются. Эти источники описывают разные совокупности: продажи и сливы не складываются. Проценты год к году не рассчитываются при отсутствии или нулевом значении прошлого года.</p>
       </details>
     </section>
+      </div>}
+    </details>
   </div>;
 }

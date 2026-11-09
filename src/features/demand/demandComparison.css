@@ -1,4 +1,9 @@
 .demand-comparison { display: grid; gap: 16px; min-width: 0; color: var(--navy); }
+.demand-comparison-additional { min-width: 0; border-top: 1px solid var(--line); }
+.demand-comparison-additional > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 2px; list-style: none; color: var(--blue-dark); font-size: 13px; font-weight: 700; cursor: pointer; }
+.demand-comparison-additional > summary::-webkit-details-marker { display: none; }
+.demand-comparison-additional[open] > summary svg { transform: rotate(180deg); }
+.demand-comparison-additional-content { display: grid; gap: 16px; min-width: 0; padding-top: 8px; }
 .demand-comparison :is(button, select, a, summary):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 .demand-comparison ::selection { color: white; background: var(--blue); }
 .demand-comparison-controls { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 20px; }
