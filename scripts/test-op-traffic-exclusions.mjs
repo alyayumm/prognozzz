@@ -28,7 +28,7 @@ function fixture(cache = [], existing = []) {
   return { api, saved: () => saved };
 }
 
-test('OP leads exclude the union of referral and OM leads once; marketing keeps non-referral OM', () => {
+test('all leads include referral and OM once while qualification keeps its separate exclusions', () => {
   const regular = raw('regular');
   const referrals = raw('referral', { source: 'РЕК/КЭШБЕК' });
   const om = raw('technical', { responsibleUserName: 'Технический' });
@@ -40,8 +40,9 @@ test('OP leads exclude the union of referral and OM leads once; marketing keeps 
   f.api.sync([regular, referrals, om, both, targetDuplicate, chat, pending, regular], '2026-10-01', '2026-10-01', []);
   const lead = f.saved().find(row => row.city === 'МСК' && row.metric === 'Лиды');
   const qualified = f.saved().find(row => row.city === 'МСК' && row.metric === 'Квалы');
-  assert.equal(lead.fact, 2);
-  assert.equal(lead.omLeads, 2);
+  assert.equal(lead.fact, 6);
+  assert.equal(lead.omLeads, 0);
+  assert.ok(lead.comment.includes('[AMO_LEADS_ALL=1]'));
   assert.equal(qualified.fact, 1);
   assert.equal(qualified.omQualified, 2);
   assert.equal(lead.recommendations, 0);
@@ -81,23 +82,25 @@ test('historical cache recalculation applies exclusions while all won sales and 
   const snapshot = f.api.snapshot('2026-11-01', '2026-11-01');
   const lead = snapshot.rows.find(row => row.id === previousLead.id);
   const qualified = snapshot.rows.find(row => row.metric === 'Квалы' && row.city === 'МСК' && row.date === date);
-  assert.equal(lead.fact, 1); assert.equal(lead.omLeads, 1);
+  assert.equal(lead.fact, 4); assert.equal(lead.omLeads, 0);
   assert.equal(qualified.fact, 1); assert.equal(qualified.omQualified, 1);
-  for (const key of ['recommendations', 'plan', 'forecast', 'comment']) assert.equal(lead[key], previousLead[key]);
+  for (const key of ['recommendations', 'plan', 'forecast']) assert.equal(lead[key], previousLead[key]);
+  assert.ok(lead.comment.includes(previousLead.comment));
+  assert.ok(lead.comment.includes('[AMO_LEADS_ALL=1]'));
   assert.equal(snapshot.rows.some(row => row.id === sale.id), false, 'unchanged two-count A+B sale is retained');
 });
 
-test('department OP traffic uses the same exclusions while won referral and technical sales still count', () => {
+test('department all-lead traffic includes referral and technical leads while qualification stays separate', () => {
   const f = fixture();
   const leads = [raw('regular'), raw('referral', { source: 'РЕК/КЭШБЕК', statusId: '142', category: 'А+Б', closedAt: '2026-10-01T15:00:00Z' }),
     raw('technical', { responsibleUserName: 'Технический', statusId: '142', closedAt: '2026-10-01T15:00:00Z' })].map(f.api.cached);
   const report = f.api.department({ monthKey: '2026-10', monthYear: 2026, monthIndex: 9, managers: [], restrictManagers: false }, [], leads);
-  assert.equal(report.daily[0].totalTraffic, 1);
+  assert.equal(report.daily[0].totalTraffic, 3);
   assert.equal(report.daily[0].totalQualified, 1);
   assert.equal(report.daily[0].totalDeals, 3);
 });
 
-test('historical September and October cohorts move qualified System owners from OM to OP on creation dates', () => {
+test('historical September and October cohorts include all leads and keep System/Technical qualification split', () => {
   const dates = ['2026-09-30', '2026-10-01'];
   const existing = dates.flatMap(date => [
     { id: `${date}-МСК-Продажи`, date, city: 'МСК', channel: 'Город', metric: 'Продажи', trafficSales: 0, paidSales: 5, fact: 5 },
@@ -111,11 +114,12 @@ test('historical September and October cohorts move qualified System owners from
   for (const date of dates) {
     const lead = snapshot.rows.find(row => row.date === date && row.city === 'МСК' && row.metric === 'Лиды');
     const qualified = snapshot.rows.find(row => row.date === date && row.city === 'МСК' && row.metric === 'Квалы');
-    assert.equal(lead.fact, 1);
-    assert.equal(lead.omLeads, 1);
+    assert.equal(lead.fact, 2);
+    assert.equal(lead.omLeads, 0);
     assert.equal(lead.plan, 30);
     assert.equal(lead.recommendations, 1);
-    assert.equal(lead.comment, 'заметка');
+    assert.ok(lead.comment.includes('заметка'));
+    assert.ok(lead.comment.includes('[AMO_LEADS_ALL=1]'));
     assert.equal(qualified.fact, 1);
     assert.equal(qualified.omQualified, 1);
     assert.equal(qualified.fact + qualified.omQualified, 2);

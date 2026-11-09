@@ -70,6 +70,7 @@ import {
   getMonthTiming,
   getPeriodStatus,
   getRecordsPeriodStatus,
+  isAllAmoLeads,
   metricFactForTraffic,
   netFact,
   omLeadsValue,
@@ -6761,14 +6762,17 @@ function AdminDayPanel({
             {metrics.map((metric) => {
               const record = findDailyRecord(records, selectedDate, city, metric);
               const plan = record?.plan ?? 0;
-              const cleanFact = Math.max(0, draft[city][metric].fact - draft[city][metric].recommendations);
+              const allLeads = record ? isAllAmoLeads(record) : false;
+              const cleanFact = Math.max(0, draft[city][metric].fact - (allLeads ? 0 : draft[city][metric].recommendations));
+              const manualCorrection = city === "МСК" || city === "СПБ"
+                ? dailyRecordNetFact(findDailyRecord(records, selectedDate, city, metric, "Ручная корректировка")) : 0;
               const isQualified = metric === "Квалы";
-              const marketingQualified = cleanFact + draft[city][metric].omQualified;
+              const marketingQualified = cleanFact + manualCorrection + draft[city][metric].omQualified;
               return (
                 <label className="admin-fact-input" key={metric}>
                   <span className={isQualified ? "admin-input-labels three" : "admin-input-labels"}>
                     <b>{isQualified ? "КВАЛ ОП" : "FACT"}</b>
-                    <b title="Дополнительные ручные вычеты; рекомендации и кешбэки из amoCRM уже исключены">Доп. вычеты</b>
+                    <b title={allLeads ? "Все источники уже входят в лиды; вычеты к этому факту не применяются" : "Дополнительные ручные вычеты; рекомендации и кешбэки из amoCRM уже исключены"}>Доп. вычеты</b>
                     {isQualified && <b>ОМ КВАЛ</b>}
                   </span>
                   <span className={isQualified ? "admin-metric-inputs three" : "admin-metric-inputs"}>
@@ -6783,6 +6787,7 @@ function AdminDayPanel({
                       type="number"
                       min="0"
                       value={draft[city][metric].recommendations}
+                      disabled={allLeads}
                       onChange={(event) => setRecommendations(city, metric, Number(event.target.value))}
                       aria-label={`${cityLabels[city]} ${metric} рекомендации`}
                     />
@@ -6797,9 +6802,11 @@ function AdminDayPanel({
                     )}
                   </span>
                   <small>
-                    план {formatNumber(plan)} · ОП <b>{formatNumber(cleanFact)}</b>
+                    план {formatNumber(plan)} · ОП <b>{formatNumber(cleanFact + manualCorrection)}</b>
                     {isQualified && <> · маркетинг <b>{formatNumber(marketingQualified)}</b></>}
                   </small>
+                  {allLeads && <small>Все источники включены в факт; дополнительные вычеты не применяются.</small>}
+                  {manualCorrection > 0 && <small>В итогах отдельно учтено +{formatNumber(manualCorrection)} вручную. Поле выше — основной факт.</small>}
                 </label>
               );
             })}
@@ -9575,6 +9582,7 @@ function findDailyRecord(records: DailyRecord[], date: string, city: DailyRecord
   return records.find((record) => {
     if (record.date !== date || record.city !== city || record.metric !== metric) return false;
     if (city === sourceRecordCity && channel) return sourceNameEquals(record.channel, channel);
+    if (city === "МСК" || city === "СПБ") return (record.channel === "Ручная корректировка") === (channel === "Ручная корректировка");
     return true;
   });
 }
@@ -9698,7 +9706,7 @@ function stripOmQualifiedFromComment(comment: string): string {
 }
 
 function dailyRecordKey(date: string, city: DailyRecordCity, metric: Metric, channel?: string): string {
-  if (city === sourceRecordCity && channel) {
+  if ((city === sourceRecordCity && channel) || ((city === "МСК" || city === "СПБ") && channel === "Ручная корректировка")) {
     return `${date}-${city}-${channel}-${metric}`;
   }
   return `${date}-${city}-${metric}`;

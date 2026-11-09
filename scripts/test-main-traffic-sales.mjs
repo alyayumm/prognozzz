@@ -72,7 +72,7 @@ test('refreshing November recomputes confirmed October cohorts from the complete
   assert.deepEqual(plain(snapshot.historicalMonths), ['2026-10']);
 });
 
-test('historical leads and qualification retain their cached city while won sales follow the city pipeline', () => {
+test('historical all-lead traffic and sales follow city pipelines while qualification retains its cached city', () => {
   const date = '2026-10-31';
   const f = fixture([
     lead('missing-pipeline-name', date, { statusId: '41892613', stageName: 'Брифинг', pipelineName: '' }),
@@ -81,7 +81,7 @@ test('historical leads and qualification retain their cached city while won sale
   ], [sale(date, 'МСК', { trafficSales: 0 }), sale(date, 'СПБ', { trafficSales: 0 })]);
   const rows = f.api.read('2026-11-05', '2026-11-05').rows;
   const fact = (city, metric) => rows.find(row => row.date === date && row.city === city && row.metric === metric);
-  assert.equal(fact('МСК', 'Лиды').fact, 2);
+  assert.equal(fact('МСК', 'Лиды').fact, 1);
   assert.equal(fact('МСК', 'Квалы').fact, 2);
   assert.equal(fact('СПБ', 'Лиды').fact, 1);
   assert.equal(fact('СПБ', 'Квалы').fact, 1);
@@ -109,7 +109,7 @@ test('unchanged confirmed historical and requested sales are not rewritten while
     lead('old-won', oldDate, { category: 'A+B' }),
     lead('current-won', currentDate),
   ], [oldSale, currentSale,
-    { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0, omLeads: 0 },
+    { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0, omLeads: 0, comment: '[AMO_LEADS_ALL=1]' },
     { id: `${oldDate}-МСК-Квалы`, date: oldDate, city: 'МСК', metric: 'Квалы', fact: 1, omQualified: 0 },
   ]);
   const snapshot = f.api.read(currentDate, currentDate);

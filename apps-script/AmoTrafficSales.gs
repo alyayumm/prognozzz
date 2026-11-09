@@ -52,15 +52,20 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
       || (record.excludeReason === 'closedLostChat' ? saleCity : '');
     // Most cached leads belong to untouched history. Avoid full normalization for them.
     if (cachedDate && !(won && targets[cachedDate + '|' + saleCity])
-      && !historicalFacts[cachedDate + '|' + factCity]) return;
+      && !historicalFacts[cachedDate + '|' + factCity]
+      && !historicalFacts[cachedDate + '|' + saleCity]) return;
     lead = lead || salesAmoLeadFromCachedRecord_(record);
     if (!lead) return;
+    const leadFacts = salesAmoLeadFacts_(lead, { users: {}, pipelines: {}, statuses: {} }, { periodMode: 'all' });
+    const oldLeadFacts = leadFacts && historicalFacts[leadFacts.createdDate + '|' + leadFacts.city];
+    if (oldLeadFacts) oldLeadFacts.leads += 1;
     const historicalKey = (lead.cachedNormalized || {}).createdDate + '|' + factCity;
     const oldFacts = historicalFacts[historicalKey];
     const normalized = oldFacts ? salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, { periodMode: 'all' }) : null;
     if (oldFacts && normalized && !normalized.exclude) {
       const counts = salesAmoTrafficCounts_(normalized);
-      Object.keys(counts).forEach((metric) => { oldFacts[metric] += counts[metric]; });
+      oldFacts.qualified += counts.qualified;
+      oldFacts.omQualified += counts.omQualified;
     }
     if (!won) return;
     const city = salesAmoCity_(lead.pipeline_name || (lead.cachedNormalized || {}).pipeline);
@@ -96,13 +101,14 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
       const fact = metric === 'Лиды' ? facts.leads : facts.qualified;
       const omQualified = metric === 'Квалы' ? facts.omQualified : 0;
       const omLeads = metric === 'Лиды' ? facts.omLeads : '';
+      const comment = metric === 'Лиды' ? salesAmoAllLeadsComment_(current.comment) : current.comment || 'amoCRM';
       if (current.id && Number(current.fact || 0) === fact && Number(current.omQualified || 0) === omQualified
-        && (metric !== 'Лиды' || optionalSalesCount_(current.omLeads) === omLeads)) return;
+        && (metric !== 'Лиды' || (optionalSalesCount_(current.omLeads) === omLeads && comment === current.comment))) return;
       rows.push(Object.assign({}, current, {
         id: id, date: target.date, month: target.date.slice(0, 7), week: weekOfMonth_(target.date),
         city: target.city, channel: 'Город', metric: metric, fact: fact, omQualified: omQualified, omLeads: omLeads,
         plan: Number(current.plan || 0), forecast: current.forecast !== undefined && current.forecast !== '' ? Number(current.forecast) : Number(current.plan || 0),
-        comment: current.comment || 'amoCRM', recommendations: Number(current.recommendations || 0),
+        comment: comment, recommendations: Number(current.recommendations || 0),
       }));
       historicalMonths[target.date.slice(0, 7)] = true;
     });

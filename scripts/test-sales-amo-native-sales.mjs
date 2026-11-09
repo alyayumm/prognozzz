@@ -223,7 +223,7 @@ test('cache prefilter retains October sales closed just after Moscow midnight on
   }
 });
 
-test('department sales include message-type A plus B without adding those leads to traffic or OP qualification', () => {
+test('department sales and lead traffic include city message-type A plus B while OP qualification excludes it', () => {
   const message = record({
     createdAt: '2026-10-02 12:00:00', createdDate: '2026-10-02',
     city: '', excludeReason: 'messagesType', typeLabel: 'Сообщение', category: 'А+Б',
@@ -233,9 +233,9 @@ test('department sales include message-type A plus B without adding those leads 
   assert.equal(day.totalDeals, 2);
   assert.equal(day.mskDeals, 2);
   assert.equal(result.byManager['РОП'].factDeals, 2);
-  assert.equal(result.byManager['РОП'].totalTraffic, 0);
+  assert.equal(result.byManager['РОП'].totalTraffic, 1);
   assert.equal(result.byManager['РОП'].factQualified, 0);
-  assert.equal(result.daily.reduce((sum, row) => sum + row.totalTraffic, 0), 0);
+  assert.equal(result.daily.reduce((sum, row) => sum + row.totalTraffic, 0), 1);
 });
 
 test('amo refresh retains its native sales audit without overwriting authoritative PS city sales', () => {
@@ -253,7 +253,7 @@ test('amo refresh retains its native sales audit without overwriting authoritati
   const metric = name => saved.find(row => row.metric === name && row.city === 'МСК');
   assert.equal(metric('Продажи'), undefined);
   assert.equal(result.amoSalesAudit.count, 2);
-  assert.equal(metric('Лиды').fact, 0);
+  assert.equal(metric('Лиды').fact, 1);
   assert.equal(metric('Квалы').fact, 0);
   assert.equal(metric('Квалы').omQualified, 0);
 });

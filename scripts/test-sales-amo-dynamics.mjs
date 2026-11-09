@@ -96,12 +96,12 @@ test('CRM refresh requests loss reason names so classification also works for ne
   assert.ok(requested.with.split(',').includes('loss_reason'));
 });
 
-test('department counts System owners in OP and excludes Technical owners without treating them as refusals', () => {
+test('department includes System and Technical leads while only System qualification belongs to OP', () => {
   const leads = [record(), record({ leadId: '2', responsibleUserName: 'Системный', managerName: 'Системный' }),
     record({ leadId: '3', responsibleUserName: 'Технический', managerName: 'Технический' })].map(api.cached);
   const result = api.department(config, [], leads);
   assert.equal(result.daily[0].totalQualified, 2);
-  assert.equal(result.daily[0].totalTraffic, 2);
+  assert.equal(result.daily[0].totalTraffic, 3);
   assert.equal(result.byManager['Системный'].factQualified, 1);
   assert.equal(result.byManager['Технический'].refusalLeads, 0);
 });
@@ -131,8 +131,8 @@ test('main import splits OP and OM once, preserves plans and keeps A+B sales cou
     assert.equal(qualified.plan, 40);
     assert.equal(qualified.forecast, 44);
     assert.equal(qualified.recommendations, 2);
-    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 3);
-    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 1);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
+    assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 0);
     assert.equal(saved.find(row => row.metric === 'Продажи'), undefined);
   }
 });

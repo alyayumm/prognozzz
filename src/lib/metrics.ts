@@ -197,7 +197,13 @@ export function netFact(record: DailyRecord): number {
   if (record.salesDateBasis && isCitySale(record)) return selectedSalesCount(record) ?? 0;
   if (isPendingPsSale(record)) return 0;
   if (isPsSale(record)) return Math.max(0, Number(record.fact || 0));
+  if (isAllAmoLeads(record)) return Math.max(0, Number(record.fact || 0));
   return Math.max(0, Number(record.fact || 0) - recommendationValue(record));
+}
+
+export function isAllAmoLeads(record: Pick<DailyRecord, "metric" | "comment" | "city" | "channel">): boolean {
+  return record.metric === "Лиды" && record.channel === "Город" && (record.city === "МСК" || record.city === "СПБ")
+    && (record.comment ?? "").includes("[AMO_LEADS_ALL=1]");
 }
 
 export function selectedSalesAvailability(records: DailyRecord[]): Pick<MetricAggregate, "factAvailable" | "salesDateBasis" | "salesObservationPresent"> {

@@ -1048,15 +1048,17 @@ function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
 
   leads.forEach((lead) => {
     const normalized = salesNormalizeAmoLead_(lead, dictionaries, config);
+    const leadFacts = salesAmoLeadFacts_(lead, dictionaries, config);
+    const hasLead = leadFacts && leadFacts.createdInMonth;
     const sale = salesAmoSalesFacts_(lead, dictionaries, config);
     const hasSale = sale && sale.closedInMonth;
-    if ((!normalized || normalized.exclude) && !hasSale) {
+    if ((!normalized || normalized.exclude) && !hasSale && !hasLead) {
       if (normalized && normalized.excludeReason === 'noCity') debug.excludedNoCity += 1;
       if (normalized && normalized.excludeReason === 'messagesPipeline') debug.excludedMessagesPipeline += 1;
       if (normalized && normalized.excludeReason === 'messagesType') debug.excludedMessagesType += 1;
       return;
     }
-    const managerName = hasSale ? sale.manager : normalized.manager;
+    const managerName = hasSale ? sale.manager : (normalized && !normalized.exclude ? normalized.manager : leadFacts.manager);
     const canonicalManager = salesCanonicalManagerName_(managerName, config.managers);
     if (config.restrictManagers && !canonicalManager) {
       debug.excludedManager += 1;
@@ -1066,21 +1068,24 @@ function salesReadAmoDepartmentData_(config, warnings, cachedLeads) {
     const manager = canonicalManager || managerName || 'Без ответственного';
     const item = byManager[manager] || salesEmptyAmoManagerStats_(manager);
 
-    if (normalized && !normalized.exclude && !normalized.isReferral && !normalized.isOmQualified && normalized.createdInMonth) {
+    if (hasLead) {
       debug.createdInMonth += 1;
       item.totalTraffic += 1;
-      if (normalized.city === 'МСК') item.mskTraffic += 1;
-      if (normalized.city === 'СПБ') item.spbTraffic += 1;
-      if (normalized.leadType === 'call') item.calls += 1;
+      if (leadFacts.city === 'МСК') item.mskTraffic += 1;
+      if (leadFacts.city === 'СПБ') item.spbTraffic += 1;
+      if (leadFacts.leadType === 'call') item.calls += 1;
       else item.applications += 1;
 
-      const createdDay = daily[normalized.createdDate];
+      const createdDay = daily[leadFacts.createdDate];
       if (createdDay) {
         createdDay.totalTraffic += 1;
-        if (normalized.city === 'МСК') createdDay.mskTraffic += 1;
-        if (normalized.city === 'СПБ') createdDay.spbTraffic += 1;
+        if (leadFacts.city === 'МСК') createdDay.mskTraffic += 1;
+        if (leadFacts.city === 'СПБ') createdDay.spbTraffic += 1;
       }
+    }
 
+    if (normalized && !normalized.exclude && !normalized.isReferral && !normalized.isOmQualified && normalized.createdInMonth) {
+      const createdDay = daily[normalized.createdDate];
       if (normalized.isQualified) {
         if (!normalized.isOmQualified) {
           item.factQualified += 1;
@@ -1711,17 +1716,50 @@ function salesAmoIsReferralSource_(source) {
   return salesNormalizeLabel_(source).replace(/э/g, 'е') === 'реккешбек';
 }
 
-function salesAmoTrafficCounts_(normalized) {
-  const counts = { leads: 0, qualified: 0, omQualified: 0, omLeads: 0 };
+function salesAmoTrafficCounts_(normalized, leadFacts) {
+  const counts = { leads: leadFacts ? 1 : 0, qualified: 0, omQualified: 0, omLeads: 0 };
   if (!normalized || normalized.exclude || normalized.isReferral) return counts;
   if (normalized.isOmQualified) {
-    counts.omLeads = 1;
     counts.omQualified = normalized.isQualified ? 1 : 0;
   } else {
-    counts.leads = 1;
     counts.qualified = normalized.isQualified ? 1 : 0;
   }
   return counts;
+}
+
+/** Lead traffic has its own eligibility; qualification exclusions do not reduce all leads. */
+function salesAmoLeadFacts_(lead, dictionaries, config) {
+  if (!lead) return null;
+  const cached = lead.cachedNormalized || {};
+  const pipeline = lead.pipeline_name || (dictionaries.pipelines || {})[String(lead.pipeline_id || '')] || cached.pipeline;
+  const city = salesAmoCity_(pipeline);
+  if (!city || salesNormalizeText_(pipeline).indexOf('сообщ') >= 0) return null;
+  const ownerId = String(lead.responsible_user_id || '').trim();
+  if (ownerId === '10549050' || ownerId === '12326414') return null;
+  const stage = cached.stage || lead.status_name || (dictionaries.statuses || {})[String(lead.pipeline_id || '') + ':' + String(lead.status_id || '')] || '';
+  if (salesAmoIsClosedLostChat_(stage, lead)) return null;
+
+  const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
+  const createdDate = cached.createdDate || salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at);
+  if (!createdDate) return null;
+  const manager = cached.manager
+    || salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
+    || lead.responsible_user_name || (dictionaries.users || {})[ownerId] || ownerId || 'Без ответственного';
+  const typeLabel = cached.typeLabel || salesAmoField_(fields, ['тип лида', 'тип обращения']);
+  return {
+    city: city, createdDate: createdDate, createdInMonth: salesDateInReportPeriod_(createdDate, config),
+    manager: String(manager).trim(), leadType: cached.leadType || salesAmoLeadType_(typeLabel),
+  };
+}
+
+function salesAmoAllLeadsComment_(comment) {
+  const text = String(comment || 'amoCRM');
+  return text.indexOf('[AMO_LEADS_ALL=1]') >= 0 ? text : text + ' [AMO_LEADS_ALL=1]';
+}
+
+function salesAmoUsesAllLeads_(row) {
+  return row.metric === 'Лиды' && row.channel === 'Город' && (row.city === 'МСК' || row.city === 'СПБ')
+    && String(row.comment || '').indexOf('[AMO_LEADS_ALL=1]') >= 0;
 }
 
 function salesAmoField_(fields, names) {
@@ -4176,7 +4214,6 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const metrics = ['Лиды', 'Квалы'];
   const aggregated = {};
   const omQualified = {};
-  const omLeads = {};
   const sales = { deals: 0, doubleDeals: 0, count: 0, byDay: {} };
 
   dates.forEach((date) => {
@@ -4201,6 +4238,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   });
   Array.from(uniqueRecords.values()).forEach((record) => {
     const lead = salesAmoLeadFromCachedRecord_(record);
+    const leadFacts = salesAmoLeadFacts_(lead, { users: {}, pipelines: {}, statuses: {} }, reportConfig);
     const sale = salesAmoSalesFacts_(lead, { users: {}, pipelines: {} }, reportConfig);
     if (sale && sale.closedInMonth) {
       const count = salesAmoDealCount_(sale);
@@ -4214,16 +4252,17 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
       sales.byDay[sale.closedDate] = day;
     }
     const normalized = salesNormalizeAmoLead_(lead, { users: {}, pipelines: {}, statuses: {} }, reportConfig);
+    const counts = salesAmoTrafficCounts_(normalized, leadFacts);
+    if (leadFacts && leadFacts.createdInMonth) {
+      const leadKey = leadFacts.createdDate + '|' + leadFacts.city + '|Лиды';
+      aggregated[leadKey] = (aggregated[leadKey] || 0) + counts.leads;
+    }
     if (!normalized || normalized.exclude || (cities.indexOf(normalized.city) < 0)) return;
 
     if (normalized.createdDate >= fromDate && normalized.createdDate <= toDate) {
-      const counts = salesAmoTrafficCounts_(normalized);
-      const leadKey = normalized.createdDate + '|' + normalized.city + '|Лиды';
       const qualifiedKey = normalized.createdDate + '|' + normalized.city + '|Квалы';
-      aggregated[leadKey] = (aggregated[leadKey] || 0) + counts.leads;
       aggregated[qualifiedKey] = (aggregated[qualifiedKey] || 0) + counts.qualified;
       omQualified[qualifiedKey] = (omQualified[qualifiedKey] || 0) + counts.omQualified;
-      omLeads[leadKey] = (omLeads[leadKey] || 0) + counts.omLeads;
     }
 
   });
@@ -4250,10 +4289,10 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
           plan: Number(current.plan || 0),
           fact: Math.round(Number(aggregated[date + '|' + city + '|' + metric] || 0)),
           forecast: current.forecast !== undefined && current.forecast !== '' ? Number(current.forecast || 0) : Number(current.plan || 0),
-          comment: current.comment || 'amoCRM',
+          comment: metric === 'Лиды' ? salesAmoAllLeadsComment_(current.comment) : current.comment || 'amoCRM',
           recommendations: Number(current.recommendations || 0),
           omQualified: metric === 'Квалы' ? Number(omQualified[date + '|' + city + '|' + metric] || 0) : 0,
-          omLeads: metric === 'Лиды' ? Number(omLeads[date + '|' + city + '|' + metric] || 0) : '',
+          omLeads: metric === 'Лиды' ? 0 : '',
         });
       });
     });
@@ -4265,7 +4304,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
   rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
-    warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода. Из трафика ОП исключены РЕК/КЭШБЕК, ОМ КВАЛ и закрытые отказы «Чат». Маркетинговый трафик возвращает ОМ без рек/кешбэка. Все успешные продажи от трафика и оплаты ПС сохраняются независимо от этих вычетов.');
+    warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода. Лиды включают все этапы, источники и типы внутри городских воронок, кроме двух исключённых штатных ответственных и закрытых отказов «Чат». КВАЛ сохраняет отдельные правила квалификации и разделение ОП/ОМ. Все успешные продажи от трафика и оплаты ПС сохраняются.');
   }
   return { updated: upsertResult.updated, months: rebuiltMonths, amoSalesAudit: sales };
 }
@@ -4425,7 +4464,7 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     stageName: normalized.stage || statusName || '',
     typeLabel: normalized.typeLabel || '',
     leadType: normalized.leadType || '',
-    createdDate: normalized.createdDate || String(createdAt).slice(0, 10),
+    createdDate: normalized.createdDate || salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at),
     closedDate: normalized.closedDate || String(closedAt).slice(0, 10),
     isQualified: normalized.isQualified ? 'TRUE' : '',
     isNotQualifiedYet: normalized.isNotQualifiedYet ? 'TRUE' : '',
@@ -4988,6 +5027,7 @@ function upsertDailyValues_(payload) {
       sheet.getRange(rowById[normalized.id], 1, 1, values.length).setValues([values]);
     } else {
       sheet.appendRow(values);
+      rowById[normalized.id] = sheet.getLastRow();
     }
   });
 
@@ -5395,6 +5435,9 @@ function normalizeDailyUpdate_(record) {
   const city = record.city;
   const metric = record.metric;
   const channel = record.channel || defaultDailyChannel_(city);
+  const separateManual = (city === 'МСК' || city === 'СПБ') && channel === 'Ручная корректировка';
+  const manualId = separateManual ? dailyRecordId_(date, city, metric, channel) : '';
+  if (separateManual && record.id && record.id !== manualId) throw new Error('Ручная корректировка должна иметь отдельный идентификатор даты, города и метрики.');
   const current = findDailyRecord_(date, city, metric, channel);
   return {
     id: record.id || dailyRecordId_(date, city, metric, channel),
@@ -5420,12 +5463,13 @@ function findDailyRecord_(date, city, metric, channel) {
   return readObjects_(CONFIG.sheets.daily).find((row) => {
     if (row.date !== date || row.city !== city || row.metric !== metric) return false;
     if (city === 'источники') return String(row.channel || '') === String(channel || '');
+    if (city === 'МСК' || city === 'СПБ') return (row.channel === 'Ручная корректировка') === (channel === 'Ручная корректировка');
     return true;
   });
 }
 
 function dailyRecordId_(date, city, metric, channel) {
-  if (city === 'источники' && channel) {
+  if ((city === 'источники' && channel) || ((city === 'МСК' || city === 'СПБ') && channel === 'Ручная корректировка')) {
     return date + '-' + city + '-' + channel + '-' + metric;
   }
   return date + '-' + city + '-' + metric;
@@ -5701,7 +5745,7 @@ function weekOfMonth_(dateIso) {
 
 function sum_(rows, field) {
   if (field === 'fact') {
-    return rows.reduce((total, row) => total + Math.max(0, Number(row.fact || 0) - Number(row.recommendations || 0)), 0);
+    return rows.reduce((total, row) => total + Math.max(0, Number(row.fact || 0) - (salesAmoUsesAllLeads_(row) ? 0 : Number(row.recommendations || 0))), 0);
   }
   if (field === 'recommendations') {
     return rows.reduce((total, row) => total + Number(row.recommendations || 0), 0);
