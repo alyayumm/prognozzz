@@ -41,10 +41,15 @@
 .demand-dynamics-inspector-year + .demand-dynamics-inspector-year { border-top: 1px solid var(--line, #dce3f1); }
 .demand-dynamics-inspector-year > strong { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .demand-dynamics-inspector-year > strong i { width: 8px; height: 8px; border-radius: 50%; }
-.demand-dynamics-inspector dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
-.demand-dynamics-inspector dt { color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.5; }
-.demand-dynamics-inspector dd { margin: 4px 0 0; font-size: 14px; font-weight: 750; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
+.demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dt { color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.5; }
+.demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dd { margin: 4px 0 0; font-size: 14px; font-weight: 750; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .demand-dynamics-inspector > p { padding: 10px 0; color: var(--muted-strong, #536481); font-size: 12px; line-height: 1.6; }
+.demand-dynamics-annual { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line, #dce3f1); }
+.demand-dynamics-annual h4 { font-size: 15px; font-weight: 750; line-height: 1.5; }
+.demand-dynamics-annual > p { max-width: 85ch; margin-top: 5px; color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.6; }
+.demand-dynamics-annual small { display: block; margin-top: 3px; color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.55; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.demand-dynamics-annual > .demand-dynamics-annual-method { margin-top: 8px; }
 .demand-dynamics-note { margin-top: 12px; max-width: 95ch; color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.65; }
 @media (max-width: 700px) {
   .demand-dynamics-heading { display: grid; gap: 14px; }
@@ -53,7 +58,7 @@
   .demand-dynamics-controls select { width: 100%; }
   .demand-dynamics-plot { height: 260px; }
   .demand-dynamics-inspector-year { grid-template-columns: 1fr; gap: 10px; }
-  .demand-dynamics-inspector dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+  .demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
   .demand-dynamics-inspector-year > strong { font-size: 13px; }
   .demand-dynamics-month-control { display: grid; gap: 8px; }
   .demand-dynamics-month-control label { min-width: 0; }

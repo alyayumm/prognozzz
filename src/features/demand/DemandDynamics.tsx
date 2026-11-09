@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type K
 import type { DemandOutcomeRecord } from "../../api/demandOutcomesApi";
 import type { WordstatDemandRecord } from "../../api/wordstatApi";
 import type { DemandComparisonCity } from "../../lib/demandComparison";
-import { buildDemandDynamics, type DemandDynamicsMetric } from "../../lib/demandDynamics";
+import { buildDemandDynamics, formatDemandDynamicsCoverage, type DemandDynamicsMetric } from "../../lib/demandDynamics";
 import { MONTH_LABELS } from "../../lib/wordstatDemand";
 import "./demandDynamics.css";
 
@@ -18,6 +18,7 @@ const METRICS: Record<DemandDynamicsMetric, { label: string; unit: string; ratio
 const YEAR_COLORS = ["#1c46f5", "#087b79", "#8645b0", "#b74b35", "#8b6509", "#475b82", "#9e397c", "#496e30", "#15708c"];
 const YEAR_DASHES = [undefined, "7 4", "2 3", "10 3 2 3", "4 3", "10 5", "8 3 2 3", "3 3", "12 4"];
 const FULL_MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+const ANNUAL_METRICS = [["demand", "Спрос, запросов"], ["sales", "Продажи, шт."], ["losses", "Сливы, шт."], ["salesRatio", "Продажи / спрос"], ["lossesRatio", "Сливы / спрос"]] as const;
 const countFormat = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
 const ratioFormat = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 2 });
 const axisCountFormat = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 });
@@ -152,6 +153,24 @@ export default function DemandDynamics({ demandRecords, outcomeRecords, city }: 
       })}
       {dynamics.series.length === 0 && <p>Выберите годы, чтобы увидеть значения за {FULL_MONTHS[activeMonth].toLowerCase()}.</p>}
     </div>
+    <section className="demand-dynamics-annual" aria-labelledby={`${id}-annual-heading`}>
+      <h4 id={`${id}-annual-heading`}>Итоги по годам</h4>
+      <p>{cityName}. Суммы по доступным завершённым месяцам; период указан у каждого показателя.</p>
+      {dynamics.series.map((series) => <div className="demand-dynamics-inspector-year" key={series.year}>
+        <strong><i aria-hidden="true" style={{ background: yearColor(series.year) }} />{series.year}</strong>
+        <dl>{ANNUAL_METRICS.map(([key, label]) => {
+          const total = series.totals[key];
+          const ratioTotal = key === "salesRatio" || key === "lossesRatio" ? series.totals[key] : null;
+          return <div key={key}>
+            <dt>{label}</dt><dd>{ratioTotal ? ratio(total.value) : count(total.value)}</dd>
+            <small>{formatDemandDynamicsCoverage(total.months)}</small>
+            {ratioTotal && total.months.length > 0 && <small>{count(ratioTotal.numerator)} / {count(ratioTotal.denominator)} запросов</small>}
+          </div>;
+        })}</dl>
+      </div>)}
+      {dynamics.series.length === 0 && <p>Выберите годы над графиком, чтобы увидеть итоги.</p>}
+      <p className="demand-dynamics-annual-method">Для каждого отношения берутся суммы продаж или сливов и спроса только за общие месяцы. Месячные проценты не усредняются; продажи со сливами не складываются.</p>
+    </section>
     <p className="demand-dynamics-note">Отношение = количество продаж или сливов / число запросов Wordstat × 100%. Это отношение к поисковому спросу, а не конверсия посетителей в продажу. Продажи и сливы показаны отдельно. «—» означает отсутствие данных, 0 — подтверждённый ноль; при нулевом спросе отношение не рассчитывается. Текущий и будущие месяцы не включены.</p>
   </section>;
 }

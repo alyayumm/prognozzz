@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createReportModelLoader } from './helpers/report-model.mjs';
 
-const { buildDemandDynamics } = createReportModelLoader()('src/lib/demandDynamics.ts');
+const { buildDemandDynamics, formatDemandDynamicsCoverage } = createReportModelLoader()('src/lib/demandDynamics.ts');
 const now = new Date('2026-11-09T10:00:00+03:00');
 const demand = (month, count, city = 'МСК', updatedAt = '2026-11-01T00:00:00Z') => ({ month, count, city, regionId: '', share: null, updatedAt });
 const outcome = (month, count, metric = 'sales', city = 'МСК') => ({ month, count, metric, city, sourceRow: 2, sourceColumn: 'B' });
@@ -133,4 +133,94 @@ test('the pure model leaves frozen input records and selected years unchanged', 
   assert.deepEqual(years, [2026, 2025, 2026]);
   assert.deepEqual(result.series.map(series => series.year), [2025, 2026]);
   assert.equal(point(result, 2026).value, 0.1);
+});
+
+test('annual raw totals have independent observed-month coverage and retain real zeroes', () => {
+  const result = model([demand('2026-01', 100), demand('2026-02', 200)],
+    [outcome('2026-01', 10), outcome('2026-03', 30), outcome('2026-02', 0, 'losses'), outcome('2026-04', 15, 'losses')]);
+  const totals = result.series[0].totals;
+  assert.deepEqual(totals.demand, {value: 300, months: ['2026-01', '2026-02']});
+  assert.deepEqual(totals.sales, {value: 40, months: ['2026-01', '2026-03']});
+  assert.deepEqual(totals.losses, {value: 15, months: ['2026-02', '2026-04']});
+  assert.deepEqual(totals.salesRatio, {value: 0.1, numerator: 10, denominator: 100, months: ['2026-01']});
+  assert.deepEqual(totals.lossesRatio, {value: 0, numerator: 0, denominator: 200, months: ['2026-02']});
+  assert.deepEqual(model([], [], {years: [2025]}).series[0].totals.sales, {value: null, months: []}, 'a missing annual history must not look like zero sales');
+});
+
+test('annual ratios use weighted sums on each overlap, never the average of monthly percentages', () => {
+  const result = model([demand('2026-01', 100), demand('2026-02', 900)],
+    [outcome('2026-01', 50), outcome('2026-02', 90), outcome('2026-01', 10, 'losses'), outcome('2026-02', 180, 'losses')]);
+  const totals = result.series[0].totals;
+  assert.equal(totals.salesRatio.value, 140 / 1000);
+  assert.equal(totals.salesRatio.numerator, 140);
+  assert.equal(totals.salesRatio.denominator, 1000);
+  assert.notEqual(totals.salesRatio.value, (0.5 + 0.1) / 2);
+  assert.equal(totals.lossesRatio.value, 190 / 1000);
+  assert.deepEqual(totals.lossesRatio.months, ['2026-01', '2026-02']);
+});
+
+test('annual overlap includes a known zero-demand month even when its monthly ratio is undefined', () => {
+  const records = [demand('2026-01', 0), demand('2026-02', 100)];
+  const outcomes = [outcome('2026-01', 5), outcome('2026-02', 10)];
+  const result = model(records, outcomes);
+  assert.equal(point(result, 2026).salesRatio, null);
+  assert.deepEqual(result.series[0].totals.salesRatio, {value: 0.15, numerator: 15, denominator: 100, months: ['2026-01', '2026-02']});
+  const zeroDemand = model([demand('2026-01', 0)], [outcome('2026-01', 5), outcome('2026-01', 0, 'losses')]).series[0].totals;
+  assert.deepEqual(zeroDemand.salesRatio, {value: null, numerator: 5, denominator: 0, months: ['2026-01']});
+  assert.deepEqual(zeroDemand.losses, {value: 0, months: ['2026-01']});
+  assert.equal(zeroDemand.lossesRatio.value, null, 'zero divided by zero remains unknown');
+});
+
+test('disjoint month histories never form an annual ratio using unrelated totals', () => {
+  const totals = model([demand('2026-01', 100)], [outcome('2026-02', 10), outcome('2026-03', 7, 'losses')]).series[0].totals;
+  assert.equal(totals.demand.value, 100);
+  assert.equal(totals.sales.value, 10);
+  assert.equal(totals.losses.value, 7);
+  assert.deepEqual(totals.salesRatio, {value: null, numerator: null, denominator: null, months: []});
+  assert.deepEqual(totals.lossesRatio, {value: null, numerator: null, denominator: null, months: []});
+});
+
+test('annual totals exclude the current and future Moscow months and advance only at the month boundary', () => {
+  const records = [demand('2026-10', 100), demand('2026-11', 1000), demand('2026-12', 10000)];
+  const outcomes = [outcome('2026-10', 10), outcome('2026-11', 100), outcome('2026-12', 1000)];
+  const totals = model(records, outcomes).series[0].totals;
+  assert.deepEqual(totals.demand, {value: 100, months: ['2026-10']});
+  assert.deepEqual(totals.sales, {value: 10, months: ['2026-10']});
+  const nextMonth = model(records, outcomes, {now: new Date('2026-11-30T21:00:00Z')}).series[0].totals;
+  assert.deepEqual(nextMonth.sales, {value: 110, months: ['2026-10', '2026-11']});
+  assert.equal(nextMonth.salesRatio.denominator, 1100);
+  assert.equal(nextMonth.salesRatio.value, 0.1);
+});
+
+test('annual totals preserve exact city scope and the independent All loss summary', () => {
+  const records = [demand('2026-01', 100), demand('2026-01', 50, 'СПБ'), demand('2026-02', 200)];
+  const outcomes = [outcome('2026-01', 20), outcome('2026-01', 10, 'sales', 'СПБ'), outcome('2026-02', 40),
+    outcome('2026-01', 90, 'losses'), outcome('2026-01', 75, 'losses', 'СПБ'), outcome('2026-01', 174, 'losses', 'Все')];
+  const all = model(records, outcomes, {city: 'Все'}).series[0].totals;
+  assert.deepEqual(all.demand, {value: 150, months: ['2026-01']});
+  assert.deepEqual(all.sales, {value: 30, months: ['2026-01']});
+  assert.equal(all.losses.value, 174);
+  assert.equal(all.lossesRatio.value, 174 / 150);
+  const moscow = model(records, outcomes).series[0].totals;
+  assert.equal(moscow.sales.value, 60);
+  assert.equal(moscow.losses.value, 90);
+  assert.equal(moscow.lossesRatio.value, 0.9);
+  assert.equal(model(records, outcomes, {city: 'СПБ'}).series[0].totals.lossesRatio.value, 1.5);
+});
+
+test('annual coverage labels distinguish full years, sparse runs and no observations', () => {
+  assert.equal(formatDemandDynamicsCoverage([]), 'Нет данных · 0 мес.');
+  assert.equal(formatDemandDynamicsCoverage(['2026-12', '2026-04', '2026-01', '2026-03', '2026-03']), 'Янв, Мар–Апр, Дек · 4 мес.');
+  const records = Array.from({length: 12}, (_, index) => demand(`2025-${String(index + 1).padStart(2, '0')}`, 0));
+  const total = model(records, [], {years: [2025]}).series[0].totals.demand;
+  assert.equal(total.value, 0);
+  assert.equal(formatDemandDynamicsCoverage(total.months), 'Весь год · 12 мес.');
+  assert.equal(formatDemandDynamicsCoverage(['2025-12', '2026-01']), 'Дек 2025, Янв 2026 · 2 мес.');
+});
+
+test('annual totals do not change when the plotted metric changes', () => {
+  const records = [demand('2026-01', 100), demand('2026-03', 300)];
+  const outcomes = [outcome('2026-01', 10), outcome('2026-02', 20), outcome('2026-03', 9, 'losses')];
+  const baseline = model(records, outcomes).series[0].totals;
+  for (const metric of ['salesCount', 'lossesCount', 'lossesRatio', 'demandCount']) assert.deepEqual(model(records, outcomes, {metric}).series[0].totals, baseline);
 });
