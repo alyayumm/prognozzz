@@ -83,7 +83,7 @@ test('the five target refusal reasons on native ROP 10304986 qualify only for OM
   }
 });
 
-test('ROP target-refusal exception uses the native owner and leaves other ROP stages as OP', () => {
+test('all qualified ROP stages belong to OM while non-target refusals stay unqualified', () => {
   const customOwner = [{ field_name: 'Ответственный', values: [{ value: 'РОП' }] }];
   const regular = api.normalize(fresh({ loss_reason_id: 3421768, loss_reason: { name: 'Дорого' },
     custom_fields_values: customOwner }), dictionaries, config);
@@ -91,7 +91,7 @@ test('ROP target-refusal exception uses the native owner and leaves other ROP st
   const rop = api.normalize(fresh({ responsible_user_id: 10304986, status_id: 41892613,
     status_name: 'Брифинг', loss_reason_id: 3421768, loss_reason: null }), dictionaries, config);
   assert.equal(rop.isQualified, true);
-  assert.equal(rop.isOmQualified, false);
+  assert.equal(rop.isOmQualified, true);
   const otherRefusal = api.normalize(fresh({ responsible_user_id: 10304986,
     loss_reason_id: 11249860, loss_reason: { name: 'Дубль' } }), dictionaries, config);
   assert.equal(otherRefusal.isQualified, false);
@@ -99,11 +99,40 @@ test('ROP target-refusal exception uses the native owner and leaves other ROP st
   const practice = api.normalize(fresh({ responsible_user_id: 10304986,
     loss_reason_id: 999, loss_reason: { name: 'Практика' } }), dictionaries, config);
   assert.equal(practice.isQualified, true);
-  assert.equal(practice.isOmQualified, false);
+  assert.equal(practice.isOmQualified, true);
   const oldRop = api.normalize(api.cached(cached({ responsibleUserId: '10304986',
     lossReasonId: '', lossReasonName: 'Дорого' })), dictionaries, config);
   assert.equal(oldRop.isQualified, true);
   assert.equal(oldRop.isOmQualified, true);
+});
+
+test('ROP OM ownership uses the native ID or a legacy native name, never a custom manager', () => {
+  for (const stage of ['Брифинг', 'Системный', 'Успешно реализовано']) {
+    for (const lead of [fresh({ responsible_user_id: 10304986, responsible_user_name: '',
+      status_id: stage === 'Успешно реализовано' ? 142 : 41892613, status_name: stage,
+      loss_reason_id: '', loss_reason: null }),
+    api.cached(cached({ responsibleUserId: '10304986', responsibleUserName: '', managerName: 'Менеджер',
+      statusId: stage === 'Успешно реализовано' ? '142' : '41892613', stageName: stage,
+      lossReasonId: '', lossReasonName: '' }))]) {
+      const actual = api.normalize(lead, dictionaries, config);
+      assert.equal(actual.isQualified, true);
+      assert.equal(actual.isOmQualified, true);
+    }
+  }
+  const briefing = { status_id: 41892613, status_name: 'Брифинг', loss_reason_id: '', loss_reason: null };
+  for (const lead of [fresh({ ...briefing, responsible_user_id: '', responsible_user_name: '  РОП  ' }),
+    api.cached(cached({ responsibleUserId: '', responsibleUserName: 'РОП',
+      statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' }))]) {
+    assert.equal(api.normalize(lead, dictionaries, config).isOmQualified, true);
+  }
+  for (const lead of [fresh({ ...briefing,
+    custom_fields_values: [{ field_name: 'Ответственный', values: [{ value: 'РОП' }] }] }),
+    api.cached(cached({ responsibleUserId: '1', responsibleUserName: 'Менеджер', managerName: 'РОП',
+      statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' })),
+    api.cached(cached({ responsibleUserId: '', responsibleUserName: '', managerName: 'РОП',
+      statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' }))]) {
+    assert.equal(api.normalize(lead, dictionaries, config).isOmQualified, false);
+  }
 });
 
 test('other duplicate reasons and inactive target-duplicate reasons do not gain qualification', () => {

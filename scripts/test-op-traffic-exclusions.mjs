@@ -129,6 +129,43 @@ test('historical September and October cohorts include all leads and keep System
   }
 });
 
+test('native ROP qualification moves from OP to OM in department and historical cohorts without changing leads or A+B sales', () => {
+  const date = '2026-10-01';
+  const rop = raw('rop', { responsibleUserId: '10304986', responsibleUserName: 'РОП', managerName: 'РОП',
+    statusId: '142', stageName: 'Успешно реализовано', category: 'А+Б', closedAt: '2026-10-08T12:00:00Z' });
+  const cache = [rop, raw('system', { responsibleUserName: 'Системный' }),
+    raw('technical', { responsibleUserName: 'Технический' })];
+  const f = fixture(cache);
+  const department = f.api.department({ monthKey: '2026-10', monthYear: 2026, monthIndex: 9,
+    managers: [], restrictManagers: false }, [], cache.map(f.api.cached));
+  assert.equal(department.daily[0].totalTraffic, 3);
+  assert.equal(department.daily[0].totalQualified, 1);
+  assert.equal(department.byManager['РОП'].factQualified, 0);
+  assert.equal(department.byManager['РОП'].factDeals, 2);
+
+  const leads = { id: `${date}-МСК-Лиды`, date, city: 'МСК', channel: 'Город', metric: 'Лиды',
+    fact: 3, omLeads: 0, comment: '[AMO_LEADS_ALL=1]', plan: 30, recommendations: 2 };
+  const qualified = { id: `${date}-МСК-Квалы`, date, city: 'МСК', channel: 'Город', metric: 'Квалы',
+    fact: 2, omQualified: 1, plan: 20, forecast: 22, comment: 'заметка' };
+  const sale = { id: `${date}-МСК-Продажи`, date, city: 'МСК', channel: 'Город', metric: 'Продажи',
+    trafficSales: 2, paidSales: 5, fact: 5 };
+  const manual = { id: `${date}-МСК-Ручная корректировка-Квалы`, date, city: 'МСК',
+    channel: 'Ручная корректировка', metric: 'Квалы', fact: 4 };
+  const snapshot = fixture(cache, [leads, qualified, sale, manual]).api.snapshot('2026-11-09', '2026-11-09');
+  const changed = snapshot.rows.find(row => row.id === qualified.id);
+  assert.equal(changed.fact, 1);
+  assert.equal(changed.omQualified, 2);
+  assert.equal(changed.fact + changed.omQualified, 3);
+  for (const key of ['plan', 'forecast', 'comment']) assert.equal(changed[key], qualified[key]);
+  for (const untouched of [leads, sale, manual]) assert.equal(snapshot.rows.some(row => row.id === untouched.id), false);
+
+  f.api.sync(cache, date, date, []);
+  const mainQualified = f.saved().find(row => row.city === 'МСК' && row.metric === 'Квалы');
+  assert.equal(mainQualified.fact, 1);
+  assert.equal(mainQualified.omQualified, 2);
+  assert.equal(f.saved().find(row => row.city === 'МСК' && row.metric === 'Лиды').fact, 3);
+});
+
 test('derived OM leads survive storage and plan edits but cannot be overwritten by stale clients', () => {
   const row = { id: '2026-10-01-МСК-Лиды', date: '2026-10-01', city: 'МСК', channel: 'Город', metric: 'Лиды', fact: 4, omLeads: 3, plan: 20 };
   const f = fixture([], [row]);

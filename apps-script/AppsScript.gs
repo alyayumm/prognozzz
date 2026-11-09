@@ -1615,7 +1615,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
     cached.isQualified = salesAmoIsQualified_(cached.stage, lead);
     cached.isOmQualified = cached.isQualified && (salesAmoIsOmRefusal_(cached.stage, lead)
-      || salesAmoIsTechnicalOwner_(lead, dictionaries, cached.manager));
+      || salesAmoIsOmOwner_(lead, dictionaries, cached.manager));
     cached.isReferral = salesAmoIsReferralSource_(cached.source);
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
@@ -1673,7 +1673,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     closedInMonth: salesDateInReportPeriod_(closedDate, config),
     isQualified: qualified,
     isOmQualified: qualified && (salesAmoIsOmRefusal_(stage, lead)
-      || salesAmoIsTechnicalOwner_(lead, dictionaries, manager)),
+      || salesAmoIsOmOwner_(lead, dictionaries, manager)),
     isNotQualifiedYet: notQualifiedYet,
     isWon: won,
     isVip: salesNormalizeText_(vip) === 'да',
@@ -1895,12 +1895,14 @@ function salesAmoLossReasonName_(lead) {
   return String((named && named.name) || (lead && lead.lossReasonName) || '').trim();
 }
 
-function salesAmoIsTechnicalOwner_(lead, dictionaries, fallbackManager) {
+function salesAmoIsOmOwner_(lead, dictionaries, fallbackManager) {
+  const ownerId = String((lead && lead.responsible_user_id) || '').trim();
+  if (ownerId === '10304986') return true;
   const owner = (lead && lead.responsible_user_name)
-    || (dictionaries && dictionaries.users && dictionaries.users[String((lead && lead.responsible_user_id) || '')])
-    || fallbackManager;
-  const normalized = salesNormalizeText_(owner);
-  return normalized === 'технический';
+    || (dictionaries && dictionaries.users && dictionaries.users[ownerId]);
+  if (salesNormalizeText_(owner || fallbackManager) === 'технический') return true;
+  // Legacy caches can lack the native ID; only a native name can identify ROP then.
+  return !ownerId && salesNormalizeText_(owner) === 'роп';
 }
 
 function salesAmoQualifiedLossReasonIds_() {

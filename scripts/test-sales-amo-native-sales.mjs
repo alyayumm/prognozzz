@@ -188,6 +188,7 @@ test('creation and closing fetches use the same Moscow calendar boundaries as da
 test('cache period selection uses the same creation date as OP qualification', () => {
   const rows = [record({
     createdAt: '2026-09-15 12:00:00', createdDate: '2026-10-03',
+    responsibleUserName: 'Менеджер', managerName: 'Менеджер',
     updatedAt: '2026-10-20 12:00:00', closedAt: '', closedDate: '',
     stageName: 'Брифинг', statusId: '123', isWon: '',
   })];
@@ -203,6 +204,7 @@ test('missing cached creation dates fall back to the native Moscow day, includin
   for (const createdAt of ['2026-09-30 21:30:00', new Date('2026-09-30T21:30:00Z')]) {
     const rows = [record({
       createdAt, createdDate: '', closedAt: '', closedDate: '',
+      responsibleUserName: 'Менеджер', managerName: 'Менеджер',
       stageName: 'Брифинг', statusId: '123', isWon: '',
     })];
     const cachedApi = loadApi({ cachedRows: () => rows }, 'readAmoCrmRawLeadObjectsFast_ = () => cachedRows();');
