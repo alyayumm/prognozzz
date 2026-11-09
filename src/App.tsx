@@ -6607,7 +6607,7 @@ function AdminDashboard({
           <article key={metric}>
             <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
             <strong>{formatNumber(reportTotals[metric].fact)}</strong>
-            <small>чистый факт после вычета рекомендаций</small>
+            <small>факт по действующим правилам расчёта</small>
             <em>
               рекомендации: {formatNumber(reportTotals[metric].recommendations)}
               {metric === "Квалы" && <> · ОМ КВАЛ: {formatNumber(reportTotals[metric].omQualified)}</>}
@@ -6740,7 +6740,7 @@ function AdminDayPanel({
 
   return (
     <section className="admin-entry-panel">
-      <PanelHead title="День" description="КВАЛ ОП и ОМ КВАЛ хранятся отдельно. Рекомендации и кешбэки из amoCRM исключаются при загрузке; поле вычетов — для дополнительных ручных поправок.">
+      <PanelHead title="День" description="Лиды считаются по всем этапам, кроме исключённых ответственных и закрытых чатов. КВАЛ ОП и ОМ КВАЛ хранятся отдельно; рекомендации и кешбэки исключаются только из квалов.">
         <label className="admin-date-select">
           <span>Дата</span>
           <select value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}>
