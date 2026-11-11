@@ -1560,7 +1560,7 @@ function MonthDashboard({
       <MonthFinancePanel finance={finance} selectedScope={selectedScope} />
       <MonthEndForecastPanel projection={monthForecast} trafficMode={trafficMode} />
       <PlanCompletionWidget totals={totals} periodLabel="План месяца" trafficMode={trafficMode} />
-      <RecommendationWeekPanel weeks={weeks} />
+      <RecommendationWeekPanel weeks={weeks} monthlyQualifiedReferrals={selectedScope === "Все" ? config.qualificationAdjustment?.targetReferrals : undefined} />
 
       <ConversionCards conversions={conversions} trafficMode={trafficMode} />
 
@@ -6135,7 +6135,7 @@ function MetricWeekCard({
   );
 }
 
-function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
+function RecommendationWeekPanel({ weeks, monthlyQualifiedReferrals }: { weeks: WeekSummary[]; monthlyQualifiedReferrals?: number }) {
   const totalRecommendations = metrics.reduce(
     (sum, metric) => sum + weeks.reduce((metricSum, week) => metricSum + week.totals[metric].recommendations, 0),
     0,
@@ -6149,21 +6149,21 @@ function RecommendationWeekPanel({ weeks }: { weeks: WeekSummary[] }) {
       />
       <div className="recommendation-grid">
         {metrics.map((metric) => (
-          <RecommendationMetricCard key={metric} metric={metric} weeks={weeks} />
+          <RecommendationMetricCard key={metric} metric={metric} weeks={weeks} monthlyTotal={metric === "Квалы" ? monthlyQualifiedReferrals : undefined} />
         ))}
       </div>
-      {totalRecommendations === 0 && <p className="recommendation-empty">Рекомендации пока не внесены.</p>}
+      {totalRecommendations === 0 && monthlyQualifiedReferrals === undefined && <p className="recommendation-empty">Рекомендации пока не внесены.</p>}
     </section>
   );
 }
 
-function RecommendationMetricCard({ metric, weeks }: { metric: Metric; weeks: WeekSummary[] }) {
+function RecommendationMetricCard({ metric, weeks, monthlyTotal }: { metric: Metric; weeks: WeekSummary[]; monthlyTotal?: number }) {
   const values = weeks.map((week) => ({
     week: week.week,
     value: week.totals[metric].recommendations,
   }));
   const max = Math.max(...values.map((item) => item.value), 1);
-  const totalValue = values.reduce((sum, item) => sum + item.value, 0);
+  const totalValue = monthlyTotal ?? values.reduce((sum, item) => sum + item.value, 0);
 
   return (
     <article className="recommendation-card">
@@ -6171,7 +6171,7 @@ function RecommendationMetricCard({ metric, weeks }: { metric: Metric; weeks: We
         <span>{metric === "Квалы" ? "КВАЛ" : metric}</span>
         <strong>{formatNumber(totalValue)}</strong>
       </div>
-      <div className="recommendation-chart" style={{ gridTemplateColumns: `repeat(${Math.max(values.length, 1)}, minmax(0, 1fr))` }}>
+      {monthlyTotal !== undefined ? <p className="recommendation-empty">Общий итог за месяц. Распределение по неделям пока не задано.</p> : <div className="recommendation-chart" style={{ gridTemplateColumns: `repeat(${Math.max(values.length, 1)}, minmax(0, 1fr))` }}>
         {values.map((item) => (
           <div className="recommendation-week" key={item.week}>
             <span
@@ -6182,7 +6182,7 @@ function RecommendationMetricCard({ metric, weeks }: { metric: Metric; weeks: We
             <small>{item.week} нед.</small>
           </div>
         ))}
-      </div>
+      </div>}
     </article>
   );
 }
