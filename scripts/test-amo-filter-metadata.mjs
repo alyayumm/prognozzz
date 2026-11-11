@@ -64,3 +64,18 @@ test('filter metadata remains password-protected before API access without servi
   assert.equal(allowed.ok, true); assert.equal(f.calls.length, 1);
   assert.equal(allowed.data.pipelines.length, 4);
 });
+
+test('filter counts route checks the password before its read-only handler and avoids sheet setup or run locks', () => {
+  let calls = 0;
+  const forbidden = () => { throw new Error('Unexpected write, setup or run lock'); };
+  const post = runInNewContext(`${source}
+    ensureServiceSheets_ = forbidden;
+    verifyPassword_ = password => password === 'test-pass';
+    amoQualificationFilterAudit_ = () => { called(); return {readOnly: true}; };
+    jsonResponse = value => value;
+    doPost;`, {forbidden, called: () => {calls++;}, LockService: {getScriptLock: forbidden}, PropertiesService: {getScriptProperties: forbidden}});
+  const invoke = password => post({postData: {contents: JSON.stringify({action: 'syncAmoCrmMonth', password, payload: {phase: 'filterCounts'}})}});
+  assert.equal(invoke('wrong').ok, false); assert.equal(calls, 0);
+  const accepted = invoke('test-pass');
+  assert.equal(accepted.ok, true); assert.equal(accepted.data.readOnly, true); assert.equal(calls, 1);
+});

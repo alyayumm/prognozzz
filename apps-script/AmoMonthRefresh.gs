@@ -6,6 +6,7 @@ const AMO_MONTH_SNAPSHOTS = 'AMOCRM_CONFIRMED_MONTH_SNAPSHOTS';
 function syncAmoCrmMonth_(payload) {
   const request = payload || {};
   if (request.phase === 'filterMetadata') return amoMonthFilterMetadata_();
+  if (request.phase === 'filterCounts') return amoQualificationFilterAudit_(request);
   if (request.phase === 'status') return amoMonthRefreshPublic_(amoMonthRefreshLoad_(request));
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) throw new Error('Обновление amoCRM уже выполняется. Проверьте статус текущего этапа.');
