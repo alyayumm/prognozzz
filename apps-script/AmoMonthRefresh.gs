@@ -5,6 +5,7 @@ const AMO_MONTH_SNAPSHOTS = 'AMOCRM_CONFIRMED_MONTH_SNAPSHOTS';
 /** Protected, resumable full-month import. Stages never publish canonical daily facts. */
 function syncAmoCrmMonth_(payload) {
   const request = payload || {};
+  if (request.phase === 'setReferralOverride') return setMonthlyReferralOverride_(request);
   if (request.phase === 'filterMetadata') return amoMonthFilterMetadata_();
   if (request.phase === 'filterCounts') return amoQualificationFilterAudit_(request);
   if (request.phase === 'applyFilterFacts') return amoApplyQualificationFilterFacts_(request);

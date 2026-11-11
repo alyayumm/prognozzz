@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { eventMapSpreadsheetId, loadEventMapSnapshot, mergeEventMapEvents } from "./eventMapApi";
 import { optionalSalesCount } from "../lib/salesDateBasis";
+import { callReportApi } from "./reportApi";
 
 const spreadsheetId = "1aVrYGhV3j1ZTB9KCPnETXTLRafekprmrBbLPolIwZ-s";
 const sourceYear = 2026;
@@ -131,10 +132,11 @@ export async function loadPublicSheetSnapshot(
 }
 
 async function loadServiceSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Promise<PublicSheetSnapshot> {
-  const [monthTable, planTable, dailyTable] = await Promise.all([
+  const [monthTable, planTable, dailyTable, remoteMonths] = await Promise.all([
     loadGvizSheet(serviceSheets.months),
     loadGvizSheet(serviceSheets.plans),
     loadGvizSheet(serviceSheets.daily),
+    callReportApi<MonthConfig[]>("getMonths"),
   ]);
   const [eventTable, eventMap] = await Promise.all([
     loadOptionalGvizSheet(serviceSheets.events),
@@ -142,7 +144,12 @@ async function loadServiceSheetSnapshot(fallbackMonthConfigs: MonthConfig[]): Pr
   ]);
   const planRows = rowsToObjects(planTable);
   const records = parseServiceDailySheet(dailyTable);
-  const monthConfigs = parseServiceMonthConfigs(monthTable, planRows, fallbackMonthConfigs);
+  if (!Array.isArray(remoteMonths)) throw new Error("Не удалось загрузить месячные корректировки. Показываем сохранённые данные.");
+  const monthConfigs = parseServiceMonthConfigs(monthTable, planRows, fallbackMonthConfigs).map((config) => {
+    const remote = remoteMonths.find((month) => month.monthKey === config.monthKey);
+    if (!remote) throw new Error("Не все месячные настройки загружены. Показываем сохранённые данные.");
+    return { ...config, qualificationAdjustment: remote.qualificationAdjustment };
+  });
 
   return {
     records,

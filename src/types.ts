@@ -51,6 +51,14 @@ export interface MonthConfig {
   plansByCity?: PlanByCity;
   dailyAverageByCity?: PlanByCity;
   status?: "active" | "closed";
+  qualificationAdjustment?: {
+    kind: "referralOverride";
+    targetReferrals: number;
+    baselineReferrals: number;
+    deduction: number;
+    scope: "Все";
+    updatedAt: string;
+  };
 }
 
 export interface DailyValueUpdate {

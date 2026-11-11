@@ -110,7 +110,7 @@ test('the normal public refresh reads both external tabs and merges them with sa
   const savedEvent = { ...reader.parseEventMapSheet(table([nativeRow()]), 'МСК')[0], id: 'manual-3', source: 'manual', title: 'Ручное событие' };
   const source = readFileSync(new URL('../src/api/publicSheetApi.ts', import.meta.url), 'utf8');
   const exports = {};
-  const context = { exports, require: () => reader,
+  const context = { exports, require: () => ({...reader, callReportApi: async () => [{monthKey: '2026-11'}]}),
     request: async (sheetName, sourceId, query) => {
       calls.push({ sheetName, sourceId, query });
       return sourceId === reader.eventMapSpreadsheetId ? table([nativeRow()]) : table([]);
@@ -141,7 +141,7 @@ test('the external map remains available when the saved report events cannot be 
     loadGvizSheetOnce = request;
     parseServiceDailySheet = () => [{date: '2026-11-02'}];
     parseServiceMonthConfigs = () => [{monthKey: '2026-11'}];
-  `, { exports, require: () => reader, request: async (sheetName, sourceId) => {
+  `, { exports, require: () => ({...reader, callReportApi: async () => [{monthKey: '2026-11'}]}), request: async (sheetName, sourceId) => {
     if (sheetName === 'Event_Map') throw new Error('saved events unavailable');
     return sourceId === reader.eventMapSpreadsheetId ? table([nativeRow()]) : table([]);
   } });

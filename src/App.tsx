@@ -34,6 +34,8 @@ import { isEventMapEvent, mergeEventMapEvents } from "./api/eventMapApi";
 import DemandView from "./features/demand/DemandView";
 import LeadConversionView from "./features/lead-conversion/LeadConversionView";
 import SalesDateBasisPanel from "./components/SalesDateBasisPanel";
+import MonthlyQualificationNotice from "./components/MonthlyQualificationNotice";
+import { applyMonthlyQualificationAdjustment, monthlyQualificationDeduction } from "./lib/monthlyQualificationAdjustment";
 import { optionalSalesCount, selectSalesDateBasis, salesSourceLabel } from "./lib/salesDateBasis";
 import {
   legacyBrandRecordsToPerformance,
@@ -505,16 +507,20 @@ export default function App() {
     () => activeWeek ? filterEventsForRange(reportEvents, activeWeek.startDate, activeWeek.endDate) : [],
     [activeWeek, reportEvents],
   );
-  const metricTotals = useMemo(() => mergeTotals(weeks), [weeks]);
+  const metricTotals = useMemo(() => applyMonthlyQualificationAdjustment(mergeTotals(weeks), selectedMonthConfig, selectedScope), [weeks, selectedMonthConfig, selectedScope]);
   const displayMetricTotals = useMemo(() => applyTrafficModeToTotals(metricTotals, trafficMode), [metricTotals, trafficMode]);
   const conversions = useMemo(() => buildConversions(metricTotals, trafficMode), [metricTotals, trafficMode]);
   const periodStatus = useMemo(() => getRecordsPeriodStatus(currentMonthRecords, trafficMode), [currentMonthRecords, trafficMode]);
   const monthTiming = useMemo(() => getMonthTiming(monthDates, todayIso), [monthDates, todayIso]);
   const allMonths = useMemo(
-    () => buildOverallMonths(reportRecords, reportEvents, monthConfigs).map((month) => ({
-      ...month,
-      weeks: applyOverallPlanOverrideToWeeks(month.weeks, month.config, selectedScope),
-    })),
+    () => buildOverallMonths(reportRecords, reportEvents, monthConfigs).map((month) => {
+      const monthWeeks = applyOverallPlanOverrideToWeeks(month.weeks, month.config, selectedScope);
+      return {
+        ...month,
+        weeks: monthWeeks,
+        totals: applyMonthlyQualificationAdjustment(mergeTotals(monthWeeks), month.config, selectedScope),
+      };
+    }),
     [reportRecords, reportEvents, monthConfigs, selectedScope],
   );
   const visibleEvents = useMemo(() => {
@@ -1036,6 +1042,10 @@ export default function App() {
         {eventMapWarning && mode !== "demand" && mode !== "leadConversion" && <section className="notice" role="status">{eventMapWarning}</section>}
 
         {["allMonths", "month", "monthDaily", "week"].includes(mode) && <SalesDateBasisPanel records={filterRecordsByScope(currentMonthAllRecords, selectedScope)} basis={salesDateBasis} onChange={setSalesDateBasis} monthLabel={selectedMonthConfig.label} />}
+        {["allMonths", "month", "monthDaily", "week"].includes(mode) &&
+          (mode === "allMonths" ? monthConfigs : [selectedMonthConfig]).map((config) => (
+            <MonthlyQualificationNotice key={config.monthKey} config={config} />
+          ))}
 
         <div className={mode === "events" || mode === "messages" || mode === "sources" || mode === "brands" || mode === "leadConversion" || mode === "demand" || mode === "admin" || mode === "leadDaily" ? "content-single" : "content-grid"}>
           <section className="main-panel">
@@ -1409,7 +1419,7 @@ function AllMonthsDashboard({
   todayIso,
   events,
 }: {
-  months: Array<{ config: MonthConfig; dates: string[]; events: EventItem[]; weeks: WeekSummary[] }>;
+  months: Array<{ config: MonthConfig; dates: string[]; events: EventItem[]; weeks: WeekSummary[]; totals?: MetricTotals }>;
   records: DailyRecord[];
   selectedMetric: Metric;
   setSelectedMetric: (metric: Metric) => void;
@@ -1418,7 +1428,7 @@ function AllMonthsDashboard({
   todayIso: string;
   events: EventItem[];
 }) {
-  const rawTotals = mergeTotals(months.flatMap((month) => month.weeks));
+  const rawTotals = mergeTotals(months.map((month) => ({ totals: month.totals ?? mergeTotals(month.weeks) })));
   const totals = applyTrafficModeToTotals(rawTotals, trafficMode);
   const status = getRecordsPeriodStatus(records, trafficMode);
   const insights = buildAttentionItems(totals, events);
@@ -1516,6 +1526,14 @@ function MonthDashboard({
     selectedScope === "Все" ? config.plan : undefined,
     trafficMode,
   );
+  const monthlyDeduction = monthlyQualificationDeduction(config, selectedScope);
+  if (monthTiming.isClosed && monthlyDeduction) {
+    const qualified = monthForecast.metrics["Квалы"];
+    qualified.fact = Math.max(0, qualified.fact - monthlyDeduction);
+    qualified.projected = qualified.fact;
+    qualified.completion = percent(qualified.projected, qualified.plan);
+    qualified.delta = qualified.projected - qualified.plan;
+  }
   const summaries = metrics.map((metric) =>
     buildMetricSummary(metric, totals[metric], monthDates, todayIso, monthTiming.isClosed, monthForecast.metrics[metric].projected),
   );
@@ -6175,7 +6193,7 @@ function MetricMonthCard({
   trafficMode,
 }: {
   metric: Metric;
-  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[]; totals?: MetricTotals }>;
   trafficMode: TrafficMode;
 }) {
   return (
@@ -6199,12 +6217,12 @@ function MonthlyTrendChart({
   metric,
   trafficMode,
 }: {
-  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[]; totals?: MetricTotals }>;
   metric: Metric;
   trafficMode: TrafficMode;
 }) {
   const chartHeight = 210;
-  const monthTotals = months.map((month) => mergeTotals(month.weeks));
+  const monthTotals = months.map((month) => month.totals ?? mergeTotals(month.weeks));
   const values = months.map((month, index) => {
     const totals = monthTotals[index];
     const plan = totals[metric].plan;
@@ -6413,7 +6431,7 @@ function MonthMatrix({
   months,
   trafficMode,
 }: {
-  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[] }>;
+  months: Array<{ config: MonthConfig; events: EventItem[]; weeks: WeekSummary[]; totals?: MetricTotals }>;
   trafficMode: TrafficMode;
 }) {
   return (
@@ -6421,8 +6439,9 @@ function MonthMatrix({
       <PanelHead title="Матрица месяцев" description="Итоги месяца, две конверсии и динамика к предыдущему месяцу." />
       <div className="month-matrix">
         {months.map((month, monthIndex) => {
-          const rawTotals = mergeTotals(month.weeks);
-          const previousRawTotals = monthIndex > 0 ? mergeTotals(months[monthIndex - 1].weeks) : null;
+          const rawTotals = month.totals ?? mergeTotals(month.weeks);
+          const previousMonth = monthIndex > 0 ? months[monthIndex - 1] : null;
+          const previousRawTotals = previousMonth ? previousMonth.totals ?? mergeTotals(previousMonth.weeks) : null;
           const totals = applyTrafficModeToTotals(rawTotals, trafficMode);
           const previousTotals = previousRawTotals ? applyTrafficModeToTotals(previousRawTotals, trafficMode) : null;
           const conversions = buildConversions(rawTotals, trafficMode);
@@ -7619,7 +7638,7 @@ function weekdayCoefficientKey(dateIso: string): WeekdayCoefficientKey {
   return coefficientWeekdays.find((weekday) => weekday.dayIndex === dayIndex)?.key ?? "mon";
 }
 
-function mergeTotals(weeks: WeekSummary[]): MetricTotals {
+function mergeTotals(weeks: Array<Pick<WeekSummary, "totals">>): MetricTotals {
   return metrics.reduce<MetricTotals>((acc, metric) => {
     acc[metric] = weeks.reduce(
       (sum, week) => ({

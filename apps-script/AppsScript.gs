@@ -392,7 +392,7 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getDemandOutcomes', 'syncDemandOutcomes', 'getLeadConversion', 'syncLeadConversion', 'syncAmoCrmMonth'];
+    const independentActions = ['getMonths', 'getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getDemandOutcomes', 'syncDemandOutcomes', 'getLeadConversion', 'syncLeadConversion', 'syncAmoCrmMonth'];
     if (independentActions.indexOf(action) < 0) {
       ensureServiceSheets_();
     }
@@ -5409,7 +5409,7 @@ function decorateMonthConfig_(month, plans) {
   const monthKey = normalizeMonthKey_(month.monthKey, month.year, month.monthIndex);
   const monthPlans = plans.filter((row) => row.monthKey === monthKey);
   const plansByCity = plansByCityFromRows_(monthPlans);
-  return {
+  const config = {
     monthKey: monthKey,
     label: month.label,
     year: Number(month.year || 0),
@@ -5419,6 +5419,11 @@ function decorateMonthConfig_(month, plans) {
     plansByCity: plansByCity,
     status: month.status || 'active',
   };
+  if (typeof readMonthlyQualificationAdjustment_ === 'function') {
+    const adjustment = readMonthlyQualificationAdjustment_(monthKey);
+    if (adjustment) config.qualificationAdjustment = adjustment;
+  }
+  return config;
 }
 
 function upsertMonthPlans_(monthKey, plansByCity) {
