@@ -108,7 +108,8 @@ test('historical September and October cohorts include all leads and keep System
     { id: `${date}-МСК-Квалы`, date, city: 'МСК', channel: 'Город', metric: 'Квалы', fact: 0, omQualified: 2, plan: 20, forecast: 22 },
   ]);
   const cache = dates.flatMap(date => ['Системный', 'Технический'].map(owner => raw(`${date}-${owner}`, {
-    createdDate: date, updatedAt: '2026-11-09T12:00:00Z', responsibleUserName: owner,
+    createdAt: `${date}T12:00:00Z`, createdDate: date,
+    updatedAt: '2026-11-09T12:00:00Z', responsibleUserName: owner,
   })));
   const snapshot = fixture(cache, existing).api.snapshot('2026-11-01', '2026-11-09');
   for (const date of dates) {

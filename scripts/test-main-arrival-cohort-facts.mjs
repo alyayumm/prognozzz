@@ -20,11 +20,11 @@ const globals = {
 const cachedLead = (id, overrides = {}) => ({
   id: `amocrm-lead-${id}`, leadId: String(id), pipelineId: '4535035', pipelineName: 'СПБ АШ', city: 'СПБ',
   statusId: '142', stageName: 'Успешно реализовано', isQualified: 'TRUE', isWon: 'TRUE',
-  createdAt: '2026-10-29 10:00:00', createdDate: '2026-10-30', updatedAt: '2026-11-02 10:00:00',
+  createdAt: '2026-10-30 10:00:00', createdDate: '2026-09-30', updatedAt: '2026-11-02 10:00:00',
   closedAt: '2026-11-02 10:00:00', closedDate: '2026-11-02', category: 'B', ...overrides,
 });
 
-test('a requested custom arrival cohort includes a cached lead omitted by every native fresh-date stream', () => {
+test('a requested native creation cohort includes cached leads even when stale custom creation points elsewhere', () => {
   const cache = [cachedLead(1)];
   let saved = [];
   let rawReads = 0;
@@ -59,11 +59,12 @@ test('a requested custom arrival cohort includes a cached lead omitted by every 
   assert.equal(Object.hasOwn(result.mainReportTrafficSales, 'cohortRecords'), false);
 });
 
-test('arrival candidates reuse the scalar cache, keep native fallback dates and avoid normalizing unrelated history', () => {
+test('arrival candidates use native Moscow instants without fully normalizing unrelated history', () => {
   const cache = [
     cachedLead(1),
     cachedLead(2, {createdDate: '', createdAt: new Date('2026-10-29T21:30:00Z'), statusId: '41892613', stageName: 'Брифинг', isWon: '', closedAt: ''}),
-    ...Array.from({length: 100}, (_, index) => cachedLead(100 + index, {createdDate: '2026-09-01', statusId: '41892613', stageName: 'Брифинг'})),
+    ...Array.from({length: 100}, (_, index) => cachedLead(100 + index, {
+      createdAt: '2026-09-01 12:00:00', createdDate: '2026-10-30', statusId: '41892613', stageName: 'Брифинг'})),
   ];
   const converted = [];
   let rawReads = 0;
@@ -76,15 +77,15 @@ test('arrival candidates reuse the scalar cache, keep native fallback dates and 
   `, {...globals, readCache: () => { rawReads++; return cache; }, capture: id => converted.push(id)});
   const snapshot = read('2026-10-30', '2026-10-31');
   assert.deepEqual(plain(snapshot.cohortRecords.map(row => row.leadId)).sort(), ['1', '2']);
-  assert.deepEqual(converted.sort(), ['1', '2']);
+  assert.deepEqual(converted.sort(), ['1'], 'the native Date candidate is selected without full normalization');
   assert.equal(rawReads, 1);
 });
 
-test('fresh facts override cached duplicates while cached custom arrivals and fresh closed-date audits remain included', () => {
+test('fresh facts override duplicates while cached native cohorts and fresh closed-date audits remain included', () => {
   const missingFromFresh = cachedLead(2);
   const staleDuplicate = cachedLead(1);
   const freshChat = cachedLead(1, {statusId: '143', stageName: 'Закрыто и не реализовано', lossReasonId: '23625702', lossReasonName: 'Чат'});
-  const freshSaleOutsideCohort = cachedLead(3, {createdDate: '2026-09-01', closedAt: '2026-10-30 10:00:00', closedDate: '2026-10-30', category: 'A+B'});
+  const freshSaleOutsideCohort = cachedLead(3, {createdAt: '2026-09-01 10:00:00', createdDate: '2026-10-30', closedAt: '2026-10-30 10:00:00', closedDate: '2026-10-30', category: 'A+B'});
   let saved = [];
   let mergedIds = [];
   const sync = runInNewContext(`${source}

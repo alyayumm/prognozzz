@@ -36,13 +36,8 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
   Object.keys(byLead).forEach((id) => {
     const record = byLead[id];
     let lead = null;
-    let cachedDate = salesCachedDateOnlyString_(record.createdDate);
-    if (!cachedDate) {
-      lead = salesAmoLeadFromCachedRecord_(record);
-      if (!lead) return;
-      cachedDate = (lead.cachedNormalized || {}).createdDate;
-    }
-    // Custom arrival can be inside this period even when every native API date is outside.
+    const cachedDate = salesAmoCachedCreatedDate_(record);
+    // Native Moscow creation determines membership, even when a legacy custom date disagrees.
     if (cachedDate >= fromDate && cachedDate <= toDate) cohortRecords.push(record);
     const won = String(record.statusId || '').trim() === '142';
     if (!won && !hasHistoricalFacts) return;

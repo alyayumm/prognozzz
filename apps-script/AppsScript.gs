@@ -392,7 +392,7 @@ function doPost(e) {
       return jsonResponse({ ok: true, data: verifyPassword_(request.password) });
     }
 
-    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getDemandOutcomes', 'syncDemandOutcomes', 'getLeadConversion', 'syncLeadConversion'];
+    const independentActions = ['getSalesDepartmentDashboard', 'getWordstatDemand', 'syncWordstatDemand', 'getDemandOutcomes', 'syncDemandOutcomes', 'getLeadConversion', 'syncLeadConversion', 'syncAmoCrmMonth'];
     if (independentActions.indexOf(action) < 0) {
       ensureServiceSheets_();
     }
@@ -424,6 +424,7 @@ function doPost(e) {
       getAmoCrmStatus: getAmoCrmStatus_,
       testAmoCrmConnection: testAmoCrmConnection_,
       syncAmoCrmLeads: syncAmoCrmLeads_,
+      syncAmoCrmMonth: (payload) => syncAmoCrmMonth_(payload),
       syncPsSales: syncMainPsSales_,
       getYandexMetrikaSyncStatus: getYandexMetrikaSyncStatus_,
       getMetrikaBrandSources: getMetrikaBrandSources_,
@@ -440,7 +441,7 @@ function doPost(e) {
       throw new Error('Неизвестное действие: ' + action);
     }
 
-    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncPsSales', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand', 'syncDemandOutcomes', 'syncLeadConversion'];
+    const writeActions = ['createMonth', 'upsertDailyValues', 'upsertEvent', 'deleteEvent', 'updateForecastCoefficients', 'upsertSalesManualDeals', 'upsertBrandPerformance', 'upsertBrandBranches', 'syncRoistatSources', 'syncRoistatBrands', 'refreshRoistatFields', 'setRoistatRecommendedFields', 'testAmoCrmConnection', 'syncAmoCrmLeads', 'syncAmoCrmMonth', 'syncPsSales', 'syncYandexMetrikaBrandSources', 'syncWordstatDemand', 'syncDemandOutcomes', 'syncLeadConversion'];
     if (writeActions.indexOf(action) >= 0 && !verifyPassword_(request.password)) {
       throw new Error('Неверный пароль админки');
     }
@@ -1330,7 +1331,7 @@ function salesTargetPipelineIds_(dictionaries) {
   return Object.keys(pipelines).filter((pipelineId) => salesAmoCity_(pipelines[pipelineId]));
 }
 
-function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, maxPages, warnings) {
+function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, maxPages, warnings, options) {
   const dateFrom = Math.floor(Utilities.parseDate(fromDate + ' 00:00:00', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss').getTime() / 1000);
   const dateTo = Math.floor(Utilities.parseDate(toDate + ' 23:59:59', Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss').getTime() / 1000);
   const result = [];
@@ -1347,7 +1348,7 @@ function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, m
     if (pipelineId) params['filter[pipeline_id]'] = pipelineId;
     let response = null;
     try {
-      response = fetchAmoCrmEndpoint_('/api/v4/leads', params);
+      response = fetchAmoCrmEndpoint_('/api/v4/leads', params, options);
     } catch (error) {
       if (warnings) warnings.push('amoCRM: страница ' + page + ' не загрузилась (' + fieldName + ':' + pipelineId + '), сохранено уже ' + result.length + ' сделок: ' + salesErrorMessage_(error));
       throw new Error('amoCRM: неполная выгрузка ' + fieldName + ', страница ' + page + '. ' + sanitizeAmoCrmText_(salesErrorMessage_(error)));
@@ -1355,8 +1356,17 @@ function fetchAmoCrmLeadsByDateField_(fromDate, toDate, fieldName, pipelineId, m
     const leads = response && response._embedded && Array.isArray(response._embedded.leads)
       ? response._embedded.leads
       : [];
-    if (!leads.length) break;
+    if (!leads.length) {
+      if (options && options.strictLeadList && response._links && response._links.next) {
+        throw new Error('amoCRM: пустая страница содержит продолжение; этап не подтверждён.');
+      }
+      break;
+    }
     result.push.apply(result, leads);
+    if (options && options.strictLeadList && response._links && response._links.next != null
+      && (!response._links.next || typeof response._links.next.href !== 'string' || !response._links.next.href.trim())) {
+      throw new Error('amoCRM: некорректная ссылка продолжения; этап не подтверждён.');
+    }
     if (!response._links || !response._links.next || !response._links.next.href) break;
     if (page === safeMaxPages && warnings) {
       warnings.push('amoCRM: загрузка ' + fieldName + ' остановлена по лимиту страниц, уже загружено сделок ' + result.length + '.');
@@ -1432,6 +1442,7 @@ function readAmoCrmRawLeadObjectsFast_() {
     'source',
     'lossReasonId',
     'lossReasonName',
+    'syncedAt',
   ];
   const ranges = [];
   required.map((header) => ({ header: header, index: headers.indexOf(header) }))
@@ -1466,7 +1477,7 @@ function readAmoCrmRawLeadObjectsFast_() {
     });
     if (hasValue) rows.push(row);
   }
-  return rows;
+  return typeof amoMonthRefreshFilterCachedRecords_ === 'function' ? amoMonthRefreshFilterCachedRecords_(rows) : rows;
 }
 
 function salesAmoLeadFromCachedRecord_(record) {
@@ -1474,7 +1485,7 @@ function salesAmoLeadFromCachedRecord_(record) {
   if (!leadId) return null;
   const createdAt = salesCachedDateTimeString_(record.createdAt);
   const closedAt = salesCachedDateTimeString_(record.closedAt);
-  const createdDate = salesCachedDateOnlyString_(record.createdDate) || salesAmoDate_('', salesTimestampFromCachedDate_(createdAt));
+  const createdDate = salesAmoCachedCreatedDate_(record);
   const closedDate = salesCachedDateOnlyString_(record.closedDate) || String(closedAt).slice(0, 10);
   const city = salesValidCachedCity_(record.city);
   const isDoubleAB = salesAmoIsDoubleAB_(record.category) || salesParseBoolean_(record.isDoubleAB);
@@ -1537,6 +1548,26 @@ function salesCachedDateTimeString_(value) {
   const date = salesCachedDateObject_(value);
   if (date) return Utilities.formatDate(date, 'GMT', 'yyyy-MM-dd HH:mm:ss');
   return String(value || '').trim();
+}
+
+/** Native amoCRM creation is the cohort clock; old custom dates are legacy fallbacks only. */
+function salesAmoNativeCreatedDate_(unixValue) {
+  const timestamp = Number(unixValue || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  const date = new Date(timestamp * 1000);
+  return isNaN(date.getTime()) ? '' : Utilities.formatDate(date, 'Europe/Moscow', 'yyyy-MM-dd');
+}
+
+function salesAmoCachedCreatedDate_(record) {
+  const nativeTimestamp = salesTimestampFromCachedDate_(salesCachedDateTimeString_(record.createdAt));
+  return salesAmoNativeCreatedDate_(nativeTimestamp) || salesCachedDateOnlyString_(record.createdDate);
+}
+
+function salesAmoCreatedDate_(lead, fields) {
+  const nativeDate = salesAmoNativeCreatedDate_(lead.created_at);
+  if (nativeDate) return nativeDate;
+  return salesCachedDateOnlyString_((lead.cachedNormalized || {}).createdDate)
+    || salesAmoDate_(salesAmoField_(fields || salesAmoFieldMap_(lead.custom_fields_values || []), ['дата создания']), '');
 }
 
 function salesCachedDateObject_(value) {
@@ -1610,6 +1641,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
       return { exclude: true, excludeReason: 'closedLostChat', city: cached.city, pipeline: cached.pipeline,
         stage: cached.stage, typeLabel: cached.typeLabel };
     }
+    cached.createdDate = salesAmoCreatedDate_(lead);
     cached.createdInMonth = salesDateInReportPeriod_(cached.createdDate, config);
     cached.closedInMonth = salesDateInReportPeriod_(cached.closedDate, config);
     cached.isWon = Boolean(cached.isWon) || salesAmoIsWon_(cached.stage, lead.status_id || cached.statusId);
@@ -1648,7 +1680,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     || dictionaries.users[String(lead.responsible_user_id || '')]
     || String(lead.responsible_user_id || '').trim()
     || 'Без ответственного';
-  const createdDate = salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at);
+  const createdDate = salesAmoCreatedDate_(lead, fields);
   const closedDate = salesAmoDate_(salesAmoField_(fields, ['дата завершения', 'дата оплаты']), lead.closed_at);
   const won = salesAmoIsWon_(stage, statusId);
   const qualified = salesAmoIsQualified_(stage, lead);
@@ -1740,7 +1772,7 @@ function salesAmoLeadFacts_(lead, dictionaries, config) {
   if (salesAmoIsClosedLostChat_(stage, lead)) return null;
 
   const fields = salesAmoFieldMap_(lead.custom_fields_values || []);
-  const createdDate = cached.createdDate || salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at);
+  const createdDate = salesAmoCreatedDate_(lead, fields);
   if (!createdDate) return null;
   const manager = cached.manager
     || salesAmoField_(fields, ['отв-ный', 'отв ный', 'ответственный', 'ответственный менеджер'])
@@ -4210,7 +4242,7 @@ function syncAmoCrmLeads_(payload) {
   return result;
 }
 
-function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
+function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings, options) {
   const dates = eachDateInRange_(fromDate, toDate);
   const cities = ['МСК', 'СПБ'];
   const metrics = ['Лиды', 'Квалы'];
@@ -4304,7 +4336,7 @@ function syncAmoCrmMainReportFacts_(records, fromDate, toDate, warnings) {
     ? upsertRowsById_(CONFIG.sheets.daily, HEADERS.Data_Daily, rows, dailyRow_)
     : { updated: 0 };
   const rebuiltMonths = unique_(dates.map((date) => String(date).slice(0, 7)));
-  rebuiltMonths.forEach(rebuildWeeklySummary_);
+  if (!options || !options.deferSummary) rebuiltMonths.forEach(rebuildWeeklySummary_);
   if (warnings) {
     warnings.push('amoCRM: лиды и КВАЛ относятся к дате прихода. Лиды включают все этапы, источники и типы внутри городских воронок, кроме двух исключённых штатных ответственных и закрытых отказов «Чат». КВАЛ сохраняет отдельные правила квалификации и разделение ОП/ОМ. Все успешные продажи от трафика и оплаты ПС сохраняются.');
   }
@@ -4350,7 +4382,7 @@ function fetchAmoCrmLeads_(fromDate, toDate) {
   return result;
 }
 
-function fetchAmoCrmEndpoint_(path, params) {
+function fetchAmoCrmEndpoint_(path, params, options) {
   const properties = PropertiesService.getScriptProperties();
   const token = String(properties.getProperty(CONFIG.amoCrmAccessTokenProperty) || '').trim();
   if (!token) {
@@ -4377,6 +4409,12 @@ function fetchAmoCrmEndpoint_(path, params) {
   }
   if (status < 200 || status >= 300) {
     throw new Error('amoCRM HTTP ' + status + ': ' + sanitizeAmoCrmText_(text));
+  }
+  if (options && options.strictLeadList) {
+    if (status === 204) return { _embedded: { leads: [] } };
+    if (!parsed || !parsed._embedded || !Array.isArray(parsed._embedded.leads)) {
+      throw new Error('amoCRM: некорректный ответ списка сделок; этап не подтверждён.');
+    }
   }
   return parsed || {};
 }
@@ -4466,7 +4504,7 @@ function amoCrmLeadRecord_(lead, dictionaries) {
     stageName: normalized.stage || statusName || '',
     typeLabel: normalized.typeLabel || '',
     leadType: normalized.leadType || '',
-    createdDate: normalized.createdDate || salesAmoDate_(salesAmoField_(fields, ['дата создания']), lead.created_at),
+    createdDate: normalized.createdDate || salesAmoCreatedDate_(lead, fields),
     closedDate: normalized.closedDate || String(closedAt).slice(0, 10),
     isQualified: normalized.isQualified ? 'TRUE' : '',
     isNotQualifiedYet: normalized.isNotQualifiedYet ? 'TRUE' : '',

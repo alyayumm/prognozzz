@@ -154,14 +154,21 @@ test('city pipelines include message types while the separate messages and unkno
   }
 });
 
-test('lead arrival uses custom creation date then native Moscow date, never update or closure date', () => {
+test('native Moscow creation overrides custom and stale cached cohorts for leads and qualification', () => {
   const { api } = fixture();
   const custom = fresh({ created_at: unix('2026-09-15T12:00:00Z'),
     updated_at: unix('2026-10-12T12:00:00Z'), closed_at: unix('2026-10-20T12:00:00Z'),
     custom_fields_values: [field('Дата создания', '03.10.2026')] });
   for (const version of [custom, api.cached(api.record(custom, dictionaries))]) {
-    assert.equal(api.leadFacts(version, dictionaries, config).createdDate, '2026-10-03');
+    assert.equal(api.leadFacts(version, dictionaries, config).createdDate, '2026-09-15');
+    assert.equal(api.leadFacts(version, dictionaries, config).createdInMonth, false);
+    assert.equal(api.normalize(version, dictionaries, config).createdDate, '2026-09-15');
   }
+  assert.equal(api.record(custom, dictionaries).createdDate, '2026-09-15');
+  const stale = api.cached(raw('stale', { createdDate: '2026-09-15' }));
+  stale.cachedNormalized.createdDate = '2026-09-15';
+  assert.equal(api.normalize(stale, dictionaries, config).createdDate, '2026-10-01');
+  assert.equal(api.leadFacts(stale, dictionaries, config).createdDate, '2026-10-01');
   for (const [instant, date, inside] of [
     ['2026-09-30T20:59:59Z', '2026-09-30', false],
     ['2026-09-30T21:00:00Z', '2026-10-01', true],
@@ -173,8 +180,26 @@ test('lead arrival uses custom creation date then native Moscow date, never upda
       const facts = api.leadFacts(version, dictionaries, config);
       assert.equal(facts.createdDate, date);
       assert.equal(facts.createdInMonth, inside);
+      assert.equal(api.normalize(version, dictionaries, config).createdDate, date);
+      assert.equal(api.normalize(version, dictionaries, config).createdInMonth, inside);
     }
   }
+});
+
+test('legacy creation dates are used only when native creation is unavailable', () => {
+  const { api } = fixture();
+  for (const native of [undefined, null, '', 0]) {
+    const item = fresh({ created_at: native,
+      custom_fields_values: [field('Дата создания', '03.10.2026')] });
+    const cached = api.cached(api.record(item, dictionaries));
+    for (const version of [item, cached]) {
+      assert.equal(api.leadFacts(version, dictionaries, config).createdDate, '2026-10-03');
+      assert.equal(api.normalize(version, dictionaries, config).createdDate, '2026-10-03');
+    }
+  }
+  const absent = fresh({ created_at: 0 });
+  assert.equal(api.leadFacts(absent, dictionaries, config), null);
+  assert.equal(api.normalize(absent, dictionaries, config).createdInMonth, false);
 });
 
 test('independent traffic counts include referral, OM and message leads once and retain separate QL rules', () => {
@@ -263,7 +288,9 @@ test('historical September and October cohorts recalculate all leads from comple
     { id: `${date}-МСК-Квалы`, date, city: 'МСК', channel: 'Город', metric: 'Квалы',
       fact: 0, omQualified: 4, plan: 30, forecast: 35 },
   ]);
-  const cache = dates.flatMap(date => mixedRecords(date).map(row => ({ ...row, leadId: `${date}-${row.leadId}` })));
+  const cache = dates.flatMap(date => mixedRecords(date).map(row => ({
+    ...row, createdAt: `${date} 12:00:00`, leadId: `${date}-${row.leadId}`,
+  })));
   const snapshot = fixture(cache, existing).api.snapshot('2026-11-01', '2026-11-09');
   for (const date of dates) {
     const lead = snapshot.rows.find(row => row.date === date && row.city === 'МСК' && row.metric === 'Лиды');
