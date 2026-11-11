@@ -35,54 +35,64 @@ const legacy = (overrides = {}) => ({leadId: '1', pipelineId: '4535038', pipelin
   isQualified: '', ...overrides});
 const total = (result, key) => result.daily.reduce((sum, row) => sum + row[key], 0);
 
-test('message contact types in either API field qualify once and keep A+B sales separate', () => {
+test('only won message contact types in either API field qualify once and keep A+B sales separate', () => {
   for (const fieldName of ['Тип обращения', 'Тип лида']) {
-    for (const status of [11, 142]) {
-      const lead = fresh({status_id: status, closed_at: Date.parse('2026-10-10T12:00:00Z') / 1000,
-        custom_fields_values: [field(fieldName, 'Сообщение'), field('Категория', 'А+Б')]});
-      for (const candidate of [lead, api.cached(api.record(lead, dictionaries))]) {
-        const normalized = api.normalize(candidate, dictionaries, config);
-        assert.ok(!normalized.exclude, `${fieldName}, ${status}: city message contact is allowed`);
-        assert.equal(normalized.city, 'МСК');
-        assert.equal(normalized.isQualified, true);
-        assert.equal(normalized.isOmQualified, false);
-        const result = api.department(config, [], [candidate]);
-        assert.equal(total(result, 'totalQualified'), 1);
-        assert.equal(total(result, 'totalTraffic'), 1);
-        assert.equal(total(result, 'totalDeals'), status === 142 ? 2 : 0);
-      }
+    const lead = fresh({status_id: 142, closed_at: Date.parse('2026-10-10T12:00:00Z') / 1000,
+      custom_fields_values: [field(fieldName, 'Сообщение'), field('Категория', 'А+Б')]});
+    for (const candidate of [lead, api.cached(api.record(lead, dictionaries))]) {
+      const normalized = api.normalize(candidate, dictionaries, config);
+      assert.ok(!normalized.exclude, `${fieldName}: won city message contact is allowed`);
+      assert.equal(normalized.city, 'МСК');
+      assert.equal(normalized.isQualified, true);
+      assert.equal(normalized.isOmQualified, false);
+      const result = api.department(config, [], [candidate]);
+      assert.equal(total(result, 'totalQualified'), 1);
+      assert.equal(total(result, 'totalTraffic'), 1);
+      assert.equal(total(result, 'totalDeals'), 2);
     }
   }
 });
 
-test('legacy messagesType cache rows recover their city and qualification without needing a fresh API record', () => {
+test('won legacy messagesType cache rows recover their city and qualification without needing a fresh API record', () => {
   for (const [owner, om] of [[1, false], [88, true], [99, false]]) {
-    const candidate = api.cached(legacy({responsibleUserId: String(owner), responsibleUserName: dictionaries.users[owner],
-      managerName: dictionaries.users[owner]}));
-    const normalized = api.normalize(candidate, dictionaries, config);
-    assert.ok(!normalized.exclude);
-    assert.equal(normalized.excludeReason, '');
-    assert.equal(normalized.city, 'МСК');
-    assert.equal(normalized.isQualified, true);
-    assert.equal(normalized.isOmQualified, om);
-    assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), om ? 0 : 1);
+    for (const typeLabel of ['Сообщение', '']) {
+      const candidate = api.cached(legacy({statusId: '142', stageName: 'Успешно реализовано',
+        responsibleUserId: String(owner), responsibleUserName: dictionaries.users[owner],
+        managerName: dictionaries.users[owner], typeLabel}));
+      const normalized = api.normalize(candidate, dictionaries, config);
+      assert.ok(!normalized.exclude);
+      assert.equal(normalized.excludeReason, '');
+      assert.equal(normalized.city, 'МСК');
+      assert.equal(normalized.isQualified, true);
+      assert.equal(normalized.isOmQualified, om);
+      assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), om ? 0 : 1);
+    }
   }
 });
 
-test('message contact type does not override referral cashback deductions or stage qualification', () => {
-  for (const candidate of [fresh({source_name: 'РЕК/КЭШБЕК'}),
-    api.cached(legacy({source: 'РЕК/КЭШБЕК'}))]) {
+test('won message contact type does not override referral cashback deductions', () => {
+  for (const candidate of [fresh({status_id: 142, source_name: 'РЕК/КЭШБЕК'}),
+    api.cached(legacy({statusId: '142', stageName: 'Успешно реализовано', source: 'РЕК/КЭШБЕК'}))]) {
     const normalized = api.normalize(candidate, dictionaries, config);
     assert.ok(!normalized.exclude);
     assert.equal(normalized.isReferral, true);
     assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), 0);
   }
-  for (const candidate of [fresh({status_id: 12}),
-    api.cached(legacy({statusId: '12', stageName: 'На проверку', isQualified: 'TRUE'}))]) {
-    const normalized = api.normalize(candidate, dictionaries, config);
-    assert.ok(!normalized.exclude);
-    assert.equal(normalized.isQualified, false);
-    assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), 0);
+});
+
+test('open and closed-lost message contacts never qualify, including target refusals and a stale won stage name', () => {
+  for (const changes of [{status_id: 11}, {status_id: 12},
+    {status_id: 143, loss_reason_id: 3421768}, {status_id: 143, loss_reason_id: 999},
+    {status_id: 11, status_name: 'Успешно реализовано'}]) {
+    const lead = fresh(changes);
+    const old = legacy({statusId: String(lead.status_id), stageName: lead.status_name,
+      isWon: 'TRUE', isQualified: 'TRUE', lossReasonId: String(lead.loss_reason_id || '')});
+    for (const candidate of [lead, api.cached(old),
+      api.cached({...old, excludeReason: '', city: 'МСК'}),
+      api.cached({...old, typeLabel: '', excludeReason: 'messagesType'})]) {
+      assert.equal(api.normalize(candidate, dictionaries, config).exclude, true);
+      assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), 0);
+    }
   }
 });
 

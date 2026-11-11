@@ -216,6 +216,21 @@ test('filtered fact apply migrates a legacy message exclusion and its daily qual
   assert.equal(replay.daily.reduce((sum, day) => sum + day.totalQualified, 0), 1);
 });
 
+test('filtered fact apply removes an open message qualification from a cache written under the broader policy', () => {
+  const f = fixture({fresh: [freshLead(101, {custom_fields_values: [field('Тип обращения', 'Сообщение')]})],
+    mutateRaw: raw => {
+      const stale = raw.find(record => record.leadId === '101');
+      stale.city = 'МСК'; stale.excludeReason = ''; stale.isQualified = 'TRUE';
+    }});
+  const result = f.apply();
+  assert.equal(result.totals.matchingReportOp, 0);
+  assert.equal(result.apply.updatedRawRows, 1);
+  const actual = f.state.raw.find(record => record.leadId === '101');
+  assert.equal(actual.excludeReason, 'messagesType');
+  assert.ok(f.state.daily.filter(row => row.month === '2026-10' && row.channel === 'Город' && row.metric === 'Квалы')
+    .every(row => row.fact === 0));
+});
+
 test('retry repairs a failed summary even when the preceding attempt already applied every raw and fact change', () => {
   let failedOnce = false;
   const f = fixture({onSummary: () => {

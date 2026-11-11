@@ -110,6 +110,18 @@ test('a referral message is deducted once as referral while an ordinary message 
   assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 1);
 });
 
+test('only the native won status admits message types in the exact filters; open and target-lost messages remain excluded', () => {
+  const fields = [field('Тип обращения', 'Сообщение')];
+  const result = fixture([lead(1, '4535038', {status_id: 142, custom_fields_values: fields}),
+    lead(2, '4535038', {custom_fields_values: fields}),
+    lead(3, '4535038', {status_id: 143, loss_reason_id: 3421768, custom_fields_values: fields})]).audit(spec());
+  assert.equal(result.totals.openFilterCount, 2);
+  assert.equal(result.totals.closedFilterCount, 1);
+  assert.equal(result.totals.matchingReportOp, 1);
+  assert.equal(result.totals.excludedByReason.messagesType, 2);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 1);
+});
+
 test('malformed source cohorts and missing dictionaries abort rather than returning partial counts', () => {
   const badRows = [null, {...lead(1), id: ''}, {...lead(1), id: [1]}, lead(1, '4535038', {created_at: 0}),
     lead(1, '4535038', {created_at: Date.parse('2026-09-30T20:59:59Z') / 1000}),
@@ -152,8 +164,8 @@ test('daily qualification uses native Moscow creation boundaries, exact filters 
   const result = fixture(rows).audit(spec());
   assert.equal(result.dailyQualified.length, 62);
   assert.equal(new Set(result.dailyQualified.map(row => `${row.date}|${row.city}`)).size, 62);
-  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 3);
-  assert.equal(result.totals.matchingReportOp, 3);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 2);
+  assert.equal(result.totals.matchingReportOp, 2);
   assert.equal(result.dailyQualified.find(row => row.date === '2026-10-01' && row.city === 'МСК').qualified, 1);
   assert.equal(result.dailyQualified.find(row => row.date === '2026-10-31' && row.city === 'СПБ').qualified, 1);
   for (const row of result.dailyQualified.filter(row => row.date === '2026-10-02')) assert.equal(row.qualified, 0);

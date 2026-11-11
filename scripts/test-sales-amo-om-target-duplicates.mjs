@@ -159,18 +159,14 @@ test('other duplicate reasons and inactive target-duplicate reasons do not gain 
   assert.equal(staleStage.isOmQualified, false);
 });
 
-test('target duplicates keep pipeline exclusions while message contact types still qualify for OM', () => {
+test('target duplicates keep pipeline and non-won message contact exclusions', () => {
   for (const lead of [fresh({ pipeline_name: 'Сообщения' }),
     fresh({ pipeline_name: 'Другая воронка' })]) {
     assert.equal(api.normalize(lead, dictionaries, config).exclude, true);
   }
   for (const lead of [fresh({custom_fields_values: [{field_name: 'Тип обращения', values: [{value: 'Сообщение'}]}]}),
     api.cached(cached({city: '', typeLabel: 'Сообщение', excludeReason: 'messagesType'}))]) {
-    const normalized = api.normalize(lead, dictionaries, config);
-    assert.ok(!normalized.exclude);
-    assert.equal(normalized.city, 'МСК');
-    assert.equal(normalized.isQualified, true);
-    assert.equal(normalized.isOmQualified, true);
+    assert.equal(api.normalize(lead, dictionaries, config).exclude, true);
   }
 });
 

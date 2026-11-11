@@ -64,7 +64,7 @@ test('a stale Chat reason does not exclude reopened or won leads', () => {
   }
 });
 
-test('separate message pipelines and missing cities stay excluded while a city message type follows the Chat rule', () => {
+test('separate message pipelines, unsuccessful city message types and missing cities stay excluded', () => {
   const messages = lead({ pipeline_name: 'АШ Сообщения' });
   const typed = lead({ custom_fields_values: [{ field_name: 'Тип лида', values: [{ value: 'Сообщение' }] }] });
   assert.equal(api.normalize(messages, dictionaries, config).excludeReason, 'messagesPipeline');
