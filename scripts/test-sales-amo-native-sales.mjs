@@ -76,7 +76,7 @@ function record(overrides = {}) {
 
 test('successful message-type leads count as sales in city pipelines, while the messages pipeline stays separate', () => {
   const message = lead({ custom_fields_values: [field('Тип лида', 'Сообщение')] });
-  assert.ok(!api.normalize(message, dictionaries, config).exclude);
+  assert.equal(api.normalize(message, dictionaries, config).exclude, true);
   const sale = api.facts(message, dictionaries, config);
   assert.equal(sale.city, 'МСК');
   assert.equal(sale.closedInMonth, true);
@@ -162,12 +162,11 @@ test('native cached Date values are converted from their UTC instant only once',
   assert.equal(sale.closedInMonth, true);
 });
 
-test('raw caching retains the A plus B category and multiplier without excluding message contact types', () => {
+test('raw caching retains the A plus B sales multiplier while excluding every message contact from qualification', () => {
   const raw = api.record(lead({
     custom_fields_values: [field('Тип лида', 'Сообщение'), field('Категория', 'А+Б')],
   }), dictionaries);
-  assert.equal(raw.excludeReason, '');
-  assert.equal(raw.city, 'МСК');
+  assert.equal(raw.excludeReason, 'messagesType');
   assert.equal(raw.category, 'А+Б');
   assert.equal(raw.isDoubleAB, 'TRUE');
   assert.equal(api.dealCount(api.facts(api.cached(raw), dictionaries, config)), 2);
@@ -233,7 +232,7 @@ test('cache prefilter retains October sales closed just after Moscow midnight on
   }
 });
 
-test('department includes city message-type A plus B in sales, lead traffic and OP qualification', () => {
+test('department includes city message-type A plus B in sales and lead traffic while qualification stays excluded', () => {
   const message = record({
     createdAt: '2026-10-02 12:00:00', createdDate: '2026-10-02',
     city: '', excludeReason: 'messagesType', typeLabel: 'Сообщение', category: 'А+Б',
@@ -244,8 +243,8 @@ test('department includes city message-type A plus B in sales, lead traffic and 
   assert.equal(day.mskDeals, 2);
   assert.equal(result.byManager['РОП'].factDeals, 2);
   assert.equal(result.byManager['РОП'].totalTraffic, 1);
-  assert.equal(result.byManager['РОП'].factQualified, 1);
-  assert.equal(result.daily.find(row => row.key === '2026-10-02').totalQualified, 1);
+  assert.equal(result.byManager['РОП'].factQualified, 0);
+  assert.equal(result.daily.find(row => row.key === '2026-10-02').totalQualified, 0);
   assert.equal(result.daily.reduce((sum, row) => sum + row.totalTraffic, 0), 1);
 });
 
@@ -265,6 +264,6 @@ test('amo refresh retains its native sales audit without overwriting authoritati
   assert.equal(metric('Продажи'), undefined);
   assert.equal(result.amoSalesAudit.count, 2);
   assert.equal(metric('Лиды').fact, 1);
-  assert.equal(metric('Квалы').fact, 1);
+  assert.equal(metric('Квалы').fact, 0);
   assert.equal(metric('Квалы').omQualified, 0);
 });

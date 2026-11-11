@@ -193,27 +193,26 @@ test('a repeated apply is idempotent and never rewrites already-current raw rows
   assert.deepEqual(f.state.raw, snapshot.raw); assert.deepEqual(f.state.daily, snapshot.daily);
 });
 
-test('filtered fact apply migrates a legacy message exclusion and its daily qualification together without changing November', () => {
+test('filtered fact apply removes a won message qualification saved under the earlier exception without changing November', () => {
   const f = fixture({fresh: [freshLead(101, {status_id: 142,
     custom_fields_values: [field('Тип обращения', 'Сообщение'), field('Категория', 'А+Б')]})],
   mutateRaw: raw => {
     const stale = raw.find(record => record.leadId === '101');
-    stale.city = ''; stale.excludeReason = 'messagesType'; stale.isQualified = '';
+    stale.city = 'МСК'; stale.excludeReason = ''; stale.isQualified = 'TRUE';
   }});
   const novemberBefore = copy(f.state.daily.filter(row => row.month === '2026-11'));
   const result = f.apply();
-  assert.equal(result.totals.matchingReportOp, 1);
+  assert.equal(result.totals.matchingReportOp, 0);
   assert.equal(result.apply.updatedRawRows, 1);
   const migrated = f.state.raw.find(record => record.leadId === '101');
-  assert.equal(migrated.city, 'МСК');
-  assert.equal(migrated.excludeReason, '');
-  assert.equal(migrated.isQualified, 'TRUE');
+  assert.equal(migrated.excludeReason, 'messagesType');
+  assert.equal(migrated.isQualified, '');
   assert.equal(migrated.isDoubleAB, 'TRUE');
-  assert.equal(f.state.daily.find(row => row.date === '2026-10-01' && row.city === 'МСК' && row.channel === 'Город' && row.metric === 'Квалы').fact, 1);
+  assert.equal(f.state.daily.find(row => row.date === '2026-10-01' && row.city === 'МСК' && row.channel === 'Город' && row.metric === 'Квалы').fact, 0);
   assert.deepEqual(f.state.daily.filter(row => row.month === '2026-11'), novemberBefore);
   const config = {monthKey: '2026-10', monthYear: 2026, monthIndex: 9, managers: [], restrictManagers: false};
   const replay = f.api.department(config, [], f.state.raw.map(f.api.cached));
-  assert.equal(replay.daily.reduce((sum, day) => sum + day.totalQualified, 0), 1);
+  assert.equal(replay.daily.reduce((sum, day) => sum + day.totalQualified, 0), 0);
 });
 
 test('filtered fact apply removes an open message qualification from a cache written under the broader policy', () => {

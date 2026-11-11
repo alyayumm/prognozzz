@@ -1625,7 +1625,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     const cached = lead.cachedNormalized;
     const cachedMessageType = cached.excludeReason === 'messagesType'
       || salesNormalizeText_(cached.typeLabel).indexOf('сообщ') >= 0;
-    // Re-evaluate Chat and allow only native won messages to leave the old exclusion.
+    // Re-evaluate current Chat and message-type rules, including formerly admitted cache rows.
     if (cached.excludeReason === 'closedLostChat' || cached.excludeReason === 'messagesType') {
       cached.excludeReason = '';
       cached.city = cached.city || salesAmoCity_(cached.pipeline);
@@ -1643,7 +1643,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
       return { exclude: true, excludeReason: 'closedLostChat', city: cached.city, pipeline: cached.pipeline,
         stage: cached.stage, typeLabel: cached.typeLabel };
     }
-    if (cachedMessageType && String(lead.status_id || cached.statusId || '').trim() !== '142') {
+    if (cachedMessageType) {
       cached.excludeReason = 'messagesType';
       return { exclude: true, excludeReason: 'messagesType', city: cached.city, pipeline: cached.pipeline,
         stage: cached.stage, typeLabel: cached.typeLabel };
@@ -1680,7 +1680,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     return { exclude: true, excludeReason: 'closedLostChat', city: city, pipeline: pipeline,
       stage: stage, typeLabel: typeLabel };
   }
-  if (salesNormalizeText_(typeLabel).indexOf('сообщ') >= 0 && statusId !== '142') {
+  if (salesNormalizeText_(typeLabel).indexOf('сообщ') >= 0) {
     return { exclude: true, excludeReason: 'messagesType', city: city, pipeline: pipeline,
       stage: stage, typeLabel: typeLabel };
   }

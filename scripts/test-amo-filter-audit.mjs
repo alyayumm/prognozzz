@@ -72,14 +72,14 @@ test('all four exact CRM filters are counted once with the existing report polic
     assert.equal(call.options.strictLeadList, true); assert.ok(Array.isArray(call.warnings));
   }
   assert.deepEqual(result.totals, {uniqueCohortCount: 15, openFilterCount: 8, closedFilterCount: 2,
-    matchingReportOp: 5, matchingOm: 1, reportOpCohortCount: 7, reportOmCohortCount: 2,
+    matchingReportOp: 4, matchingOm: 1, reportOpCohortCount: 6, reportOmCohortCount: 2,
     extraReportOpOutsideFilters: 2, extraOmOutsideFilters: 1,
-    excludedByReason: {referralCashback: 1, noCity: 2, notQualifiedStageOrReason: 1}});
+    excludedByReason: {referralCashback: 1, messagesType: 1, noCity: 2, notQualifiedStageOrReason: 1}});
   assert.equal(f.stats().normalizations, 15);
   assert.equal(f.stats().dictionaryReads, 1);
   assert.equal(result.dailyQualified.length, 62);
   assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), result.totals.matchingReportOp);
-  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-04' && row.city === 'МСК').qualified, 4);
+  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-04' && row.city === 'МСК').qualified, 3);
   assert.equal(result.dailyQualified.find(row => row.date === '2026-10-04' && row.city === 'СПБ').qualified, 1);
   const serialized = JSON.stringify(result);
   for (const privateValue of ['PRIVATE_LEAD', 'PRIVATE_OWNER', 'PRIVATE_CONTACT', '8100001', 'custom_fields_values', 'responsible_user', 'access_token']) assert.ok(!serialized.includes(privateValue));
@@ -99,27 +99,27 @@ test('filter shape, numeric bounds, disjoint status groups and native real dates
   }
 });
 
-test('a referral message is deducted once as referral while an ordinary message sale qualifies once', () => {
+test('both ordinary and referral won messages are excluded once from qualification', () => {
   const messageFields = [field('Тип обращения', 'Сообщение'), field('Категория', 'А+Б')];
   const result = fixture([lead(1, '4535038', {status_id: 142, custom_fields_values: messageFields}),
     lead(2, '4535038', {status_id: 142, source_name: 'РЕК/КЭШБЕК', custom_fields_values: messageFields})]).audit(spec());
   assert.equal(result.totals.openFilterCount, 2);
-  assert.equal(result.totals.matchingReportOp, 1);
-  assert.equal(result.totals.excludedByReason.referralCashback, 1);
-  assert.equal(result.totals.excludedByReason.messagesType, undefined);
-  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 1);
+  assert.equal(result.totals.matchingReportOp, 0);
+  assert.equal(result.totals.excludedByReason.referralCashback, undefined);
+  assert.equal(result.totals.excludedByReason.messagesType, 2);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 0);
 });
 
-test('only the native won status admits message types in the exact filters; open and target-lost messages remain excluded', () => {
+test('message types in the exact filters stay excluded for won, open and target-lost statuses', () => {
   const fields = [field('Тип обращения', 'Сообщение')];
   const result = fixture([lead(1, '4535038', {status_id: 142, custom_fields_values: fields}),
     lead(2, '4535038', {custom_fields_values: fields}),
     lead(3, '4535038', {status_id: 143, loss_reason_id: 3421768, custom_fields_values: fields})]).audit(spec());
   assert.equal(result.totals.openFilterCount, 2);
   assert.equal(result.totals.closedFilterCount, 1);
-  assert.equal(result.totals.matchingReportOp, 1);
-  assert.equal(result.totals.excludedByReason.messagesType, 2);
-  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 1);
+  assert.equal(result.totals.matchingReportOp, 0);
+  assert.equal(result.totals.excludedByReason.messagesType, 3);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 0);
 });
 
 test('malformed source cohorts and missing dictionaries abort rather than returning partial counts', () => {

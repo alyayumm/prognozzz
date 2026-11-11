@@ -64,7 +64,7 @@ test('a stale Chat reason does not exclude reopened or won leads', () => {
   }
 });
 
-test('separate message pipelines, unsuccessful city message types and missing cities stay excluded', () => {
+test('separate message pipelines, city message types and missing cities stay excluded', () => {
   const messages = lead({ pipeline_name: 'АШ Сообщения' });
   const typed = lead({ custom_fields_values: [{ field_name: 'Тип лида', values: [{ value: 'Сообщение' }] }] });
   assert.equal(api.normalize(messages, dictionaries, config).excludeReason, 'messagesPipeline');
@@ -72,6 +72,16 @@ test('separate message pipelines, unsuccessful city message types and missing ci
   assert.equal(api.normalize(lead({ pipeline_name: 'Неизвестная воронка' }), dictionaries, config).excludeReason, 'noCity');
   const cached = api.cached(cachedRecord({ excludeReason: 'messagesType' }));
   assert.equal(api.normalize(cached, dictionaries, config).excludeReason, 'closedLostChat');
+});
+
+test('won message lead types stay excluded from qualification in fresh and previously admitted cache rows', () => {
+  const typed = lead({status_id: 142, status_name: 'Успешно реализовано', loss_reason_id: '',
+    custom_fields_values: [{field_name: 'Тип лида', values: [{value: 'Сообщение'}]}]});
+  const cached = api.cached(cachedRecord({statusId: '142', stageName: 'Успешно реализовано',
+    lossReasonId: '', typeLabel: 'Сообщение', excludeReason: '', isQualified: 'TRUE'}));
+  for (const candidate of [typed, cached]) {
+    assert.equal(api.normalize(candidate, dictionaries, config).excludeReason, 'messagesType');
+  }
 });
 
 test('Chat exclusion survives raw caching and removes leads in both main and sales-department reports', () => {

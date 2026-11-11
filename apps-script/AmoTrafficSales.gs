@@ -42,7 +42,7 @@ function readMainAmoTrafficSalesSnapshot_(fromDate, toDate) {
     const won = String(record.statusId || '').trim() === '142';
     if (!won && !hasHistoricalFacts) return;
     const saleCity = salesAmoCity_(record.pipelineName);
-    // Restore city for legacy Chat and retired message-type exclusions before grouping history.
+    // Restore city for legacy exclusions before applying the current qualification rules to history.
     const factCity = salesValidCachedCity_(record.city)
       || (record.excludeReason === 'closedLostChat' || record.excludeReason === 'messagesType' ? saleCity : '');
     // Most cached leads belong to untouched history. Avoid full normalization for them.

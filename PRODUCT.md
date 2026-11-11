@@ -23,7 +23,7 @@ Do not make the dashboard feel like a marketing landing page, a decorative bento
 ## Design Principles
 
 - Shared source of truth: saved values must live in the shared Google Sheets layer when possible.
-- Separation by meaning: `Все` means `МСК + СПБ`; separate messages pipelines and source breakdowns stay in their own views. A city-pipeline lead with type `Сообщение` can qualify only with native status `142` (`Успешно реализовано`), subject to the source and OP/OM owner rules.
+- Separation by meaning: `Все` means `МСК + СПБ`; separate messages pipelines and source breakdowns stay in their own views. Per the final rule confirmed on 11 November 2026, lead type `Сообщение` is excluded from qualification at every stage, including successful deals; lead and sale metrics follow their own rules.
 - Fast daily entry: inputs should be compact, scannable, and save whole groups of values at once.
 - Explain the chart: events, source splits, forecasts, recommendations, and brand deltas should clarify why totals moved.
 - Brand restraint: use RECTOP blue, navy, ice surfaces, and simple controls without decorative clutter.

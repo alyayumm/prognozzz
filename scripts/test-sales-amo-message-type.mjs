@@ -35,48 +35,55 @@ const legacy = (overrides = {}) => ({leadId: '1', pipelineId: '4535038', pipelin
   isQualified: '', ...overrides});
 const total = (result, key) => result.daily.reduce((sum, row) => sum + row[key], 0);
 
-test('only won message contact types in either API field qualify once and keep A+B sales separate', () => {
+test('won message contact types in either API field stay out of qualification while A+B sales remain separate', () => {
   for (const fieldName of ['Тип обращения', 'Тип лида']) {
     const lead = fresh({status_id: 142, closed_at: Date.parse('2026-10-10T12:00:00Z') / 1000,
       custom_fields_values: [field(fieldName, 'Сообщение'), field('Категория', 'А+Б')]});
     for (const candidate of [lead, api.cached(api.record(lead, dictionaries))]) {
       const normalized = api.normalize(candidate, dictionaries, config);
-      assert.ok(!normalized.exclude, `${fieldName}: won city message contact is allowed`);
-      assert.equal(normalized.city, 'МСК');
-      assert.equal(normalized.isQualified, true);
-      assert.equal(normalized.isOmQualified, false);
+      assert.equal(normalized.exclude, true, `${fieldName}: even won message contact is excluded`);
+      assert.equal(normalized.excludeReason, 'messagesType');
       const result = api.department(config, [], [candidate]);
-      assert.equal(total(result, 'totalQualified'), 1);
+      assert.equal(total(result, 'totalQualified'), 0);
       assert.equal(total(result, 'totalTraffic'), 1);
       assert.equal(total(result, 'totalDeals'), 2);
     }
   }
 });
 
-test('won legacy messagesType cache rows recover their city and qualification without needing a fresh API record', () => {
-  for (const [owner, om] of [[1, false], [88, true], [99, false]]) {
+test('won legacy messagesType cache rows stay excluded for ordinary, Technical and System owners', () => {
+  for (const owner of [1, 88, 99]) {
     for (const typeLabel of ['Сообщение', '']) {
       const candidate = api.cached(legacy({statusId: '142', stageName: 'Успешно реализовано',
         responsibleUserId: String(owner), responsibleUserName: dictionaries.users[owner],
         managerName: dictionaries.users[owner], typeLabel}));
       const normalized = api.normalize(candidate, dictionaries, config);
-      assert.ok(!normalized.exclude);
-      assert.equal(normalized.excludeReason, '');
-      assert.equal(normalized.city, 'МСК');
-      assert.equal(normalized.isQualified, true);
-      assert.equal(normalized.isOmQualified, om);
-      assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), om ? 0 : 1);
+      assert.equal(normalized.exclude, true);
+      assert.equal(normalized.excludeReason, 'messagesType');
+      assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), 0);
     }
   }
 });
 
-test('won message contact type does not override referral cashback deductions', () => {
+test('won referral messages are excluded once without producing negative qualification or removing arrivals', () => {
   for (const candidate of [fresh({status_id: 142, source_name: 'РЕК/КЭШБЕК'}),
     api.cached(legacy({statusId: '142', stageName: 'Успешно реализовано', source: 'РЕК/КЭШБЕК'}))]) {
     const normalized = api.normalize(candidate, dictionaries, config);
-    assert.ok(!normalized.exclude);
-    assert.equal(normalized.isReferral, true);
-    assert.equal(total(api.department(config, [], [candidate]), 'totalQualified'), 0);
+    assert.equal(normalized.exclude, true);
+    const result = api.department(config, [], [candidate]);
+    assert.equal(total(result, 'totalQualified'), 0);
+    assert.equal(total(result, 'totalTraffic'), 1);
+  }
+});
+
+test('an ordinary won A+B lead still supplies one qualification and two independent sales', () => {
+  const lead = fresh({status_id: 142, closed_at: Date.parse('2026-10-10T12:00:00Z') / 1000,
+    custom_fields_values: [field('Категория', 'А+Б')]});
+  for (const candidate of [lead, api.cached(api.record(lead, dictionaries))]) {
+    const result = api.department(config, [], [candidate]);
+    assert.equal(total(result, 'totalQualified'), 1);
+    assert.equal(total(result, 'totalDeals'), 2);
+    assert.equal(total(result, 'totalTraffic'), 1);
   }
 });
 
