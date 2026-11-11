@@ -79,3 +79,18 @@ test('filter counts route checks the password before its read-only handler and a
   const accepted = invoke('test-pass');
   assert.equal(accepted.ok, true); assert.equal(accepted.data.readOnly, true); assert.equal(calls, 1);
 });
+
+test('apply filter facts stays password-protected and delegates locking to its write handler', () => {
+  let calls = 0;
+  const forbidden = () => { throw new Error('Unexpected service setup or outer run lock'); };
+  const post = runInNewContext(`${source}
+    ensureServiceSheets_ = forbidden;
+    verifyPassword_ = password => password === 'test-pass';
+    amoApplyQualificationFilterFacts_ = () => { called(); return {applied: true}; };
+    jsonResponse = value => value;
+    doPost;`, {forbidden, called: () => {calls++;}, LockService: {getScriptLock: forbidden}, PropertiesService: {getScriptProperties: forbidden}});
+  const invoke = password => post({postData: {contents: JSON.stringify({action: 'syncAmoCrmMonth', password, payload: {phase: 'applyFilterFacts'}})}});
+  assert.equal(invoke('wrong').ok, false); assert.equal(calls, 0);
+  const accepted = invoke('test-pass');
+  assert.equal(accepted.ok, true); assert.equal(accepted.data.applied, true); assert.equal(calls, 1);
+});

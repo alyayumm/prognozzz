@@ -2,6 +2,15 @@
 function amoQualificationFilterAudit_(request) {
   const spec = amoFilterAuditSpec_((request || {}).filterSpec);
   try {
+    return amoFilterAuditAggregate_(spec, amoFilterAuditSnapshot_(spec));
+  } catch (ignore) {
+    // Provider errors can contain lead data; never echo their bodies or warnings.
+    throw new Error('Не удалось выполнить полный аудит фильтров amoCRM. Данные отчёта не изменены.');
+  }
+}
+
+/** Private in-memory snapshot; never return this object from a route. */
+function amoFilterAuditSnapshot_(spec) {
     const dictionaries = amoMonthRefreshDictionaries_();
     const pipelineIds = ['4535035', '4535038', '9926210', '9926246'];
     if (!dictionaries || !dictionaries.users || !dictionaries.pipelines || !dictionaries.statuses) throw new Error();
@@ -23,10 +32,26 @@ function amoQualificationFilterAudit_(request) {
         byId[id] = lead;
       });
     });
+    return { dictionaries: dictionaries, byId: byId };
+}
+
+function amoFilterAuditAggregate_(spec, snapshot) {
+    const dictionaries = snapshot.dictionaries;
+    const byId = snapshot.byId;
+    const pipelineIds = ['4535035', '4535038', '9926210', '9926246'];
     const pipelines = pipelineIds.map((id) => Object.assign({ id: id, name: dictionaries.pipelines[id],
       city: salesAmoCity_(dictionaries.pipelines[id]) }, amoFilterAuditCounts_()));
     const totals = amoFilterAuditCounts_();
     const config = { periodMode: 'custom', periodStart: spec.fromDate, periodEnd: spec.toDate };
+    const dailyQualified = [];
+    const dailyByKey = {};
+    eachDateInRange_(spec.fromDate, spec.toDate).forEach((date) => {
+      ['МСК', 'СПБ'].forEach((city) => {
+        const row = { date: date, city: city, qualified: 0 };
+        dailyQualified.push(row);
+        dailyByKey[date + '|' + city] = row;
+      });
+    });
     Object.keys(byId).forEach((id) => {
       const lead = byId[id];
       const pipelineId = String(lead.pipeline_id);
@@ -43,6 +68,11 @@ function amoQualificationFilterAudit_(request) {
         responsible_user_name: dictionaries.users[owner],
       }), dictionaries, config);
       const counts = salesAmoTrafficCounts_(normalized, null);
+      if ((open || closed) && counts.qualified) {
+        const day = dailyByKey[salesAmoNativeCreatedDate_(lead.created_at) + '|' + normalized.city];
+        if (!day) throw new Error();
+        day.qualified += counts.qualified;
+      }
       const pipeline = pipelines.find((item) => item.id === pipelineId);
       [pipeline, totals].forEach((target) => {
         target.uniqueCohortCount++;
@@ -63,12 +93,9 @@ function amoQualificationFilterAudit_(request) {
         }
       });
     });
+    if (dailyQualified.reduce((sum, row) => sum + row.qualified, 0) !== totals.matchingReportOp) throw new Error();
     return { status: 'success', fromDate: spec.fromDate, toDate: spec.toDate, dateField: 'created_at',
-      pipelines: pipelines, totals: totals };
-  } catch (ignore) {
-    // Provider errors can contain lead data; never echo their bodies or warnings.
-    throw new Error('Не удалось выполнить полный аудит фильтров amoCRM. Данные отчёта не изменены.');
-  }
+      pipelines: pipelines, totals: totals, dailyQualified: dailyQualified };
 }
 
 function amoFilterAuditCounts_() {

@@ -77,6 +77,10 @@ test('all four exact CRM filters are counted once with the existing report polic
     excludedByReason: {referralCashback: 1, messagesType: 1, noCity: 2, notQualifiedStageOrReason: 1}});
   assert.equal(f.stats().normalizations, 15);
   assert.equal(f.stats().dictionaryReads, 1);
+  assert.equal(result.dailyQualified.length, 62);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), result.totals.matchingReportOp);
+  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-04' && row.city === 'МСК').qualified, 3);
+  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-04' && row.city === 'СПБ').qualified, 1);
   const serialized = JSON.stringify(result);
   for (const privateValue of ['PRIVATE_LEAD', 'PRIVATE_OWNER', 'PRIVATE_CONTACT', '8100001', 'custom_fields_values', 'responsible_user', 'access_token']) assert.ok(!serialized.includes(privateValue));
 });
@@ -125,4 +129,30 @@ test('ROP cohort cutoff, allowed refusal IDs, duplicates and A+B qualification r
   assert.equal(result.totals.matchingReportOp, 2); assert.equal(result.totals.matchingOm, 2);
   assert.equal(result.totals.extraOmOutsideFilters, 2);
   assert.equal(result.totals.openFilterCount, 2); assert.equal(result.totals.closedFilterCount, 2);
+});
+
+test('daily qualification uses native Moscow creation boundaries, exact filters and zero-filled city coverage', () => {
+  const rows = [lead(101, '4535038', {created_at: Date.parse('2026-09-30T21:00:00Z') / 1000,
+    custom_fields_values: [field('Дата создания', '31.10.2026')]}),
+    lead(102, '4535035', {created_at: Date.parse('2026-10-31T20:59:59Z') / 1000, responsible_user_id: 10304986}),
+    lead(103, '9926210'), lead(104, '4535038', {responsible_user_id: 2}),
+    lead(105, '4535038', {source_name: 'РЕК/КЭШБЕК'}),
+    lead(106, '4535035', {custom_fields_values: [field('Тип лида', 'Сообщение')]})];
+  const result = fixture(rows).audit(spec());
+  assert.equal(result.dailyQualified.length, 62);
+  assert.equal(new Set(result.dailyQualified.map(row => `${row.date}|${row.city}`)).size, 62);
+  assert.equal(result.dailyQualified.reduce((sum, row) => sum + row.qualified, 0), 2);
+  assert.equal(result.totals.matchingReportOp, 2);
+  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-01' && row.city === 'МСК').qualified, 1);
+  assert.equal(result.dailyQualified.find(row => row.date === '2026-10-31' && row.city === 'СПБ').qualified, 1);
+  for (const row of result.dailyQualified.filter(row => row.date === '2026-10-02')) assert.equal(row.qualified, 0);
+  assert.ok(result.dailyQualified.every(row => Object.keys(row).sort().join(',') === 'city,date,qualified'));
+});
+
+test('a fully observed empty month supplies all 62 deliberate zero qualification values', () => {
+  const result = fixture().audit(spec());
+  assert.equal(result.dailyQualified.length, 62);
+  assert.ok(result.dailyQualified.every(row => row.qualified === 0));
+  assert.deepEqual(result.dailyQualified[0], {date: '2026-10-01', city: 'МСК', qualified: 0});
+  assert.deepEqual(result.dailyQualified[61], {date: '2026-10-31', city: 'СПБ', qualified: 0});
 });
