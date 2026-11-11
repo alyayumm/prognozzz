@@ -1877,7 +1877,8 @@ function salesAmoIsQualified_(stageName, lead) {
   if (excludedStages.some((name) => stage === salesNormalizeLabel_(name))) return false;
   const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
   if (statusId === '143' || stage.indexOf(salesNormalizeLabel_('Закрыто и не реализовано')) === 0) {
-    if (salesAmoIsOmRefusal_(stageName, lead)) return true;
+    // Qualification eligibility is independent of the date-effective OP/OM split.
+    if (salesAmoIsTargetDuplicate_(stageName, lead) || salesAmoIsRopTargetRefusal_(stageName, lead)) return true;
     const parenthetical = String(stageName || '').match(/\(([^)]*)\)/);
     const lossReasonName = parenthetical ? parenthetical[1] : salesAmoLossReasonName_(lead);
     if (String(lossReasonName || '').trim()) {
@@ -1905,6 +1906,10 @@ function salesAmoIsTargetDuplicate_(stageName, lead) {
 
 function salesAmoIsOmRefusal_(stageName, lead) {
   if (salesAmoIsTargetDuplicate_(stageName, lead)) return true;
+  return salesAmoRopOmInCohort_(lead) && salesAmoIsRopTargetRefusal_(stageName, lead);
+}
+
+function salesAmoIsRopTargetRefusal_(stageName, lead) {
   const ownerId = String((lead && (lead.responsible_user_id || lead.responsibleUserId)) || '').trim();
   if (ownerId !== '10304986') return false;
   const statusId = String((lead && (lead.status_id || lead.statusId)) || '').trim();
@@ -1929,12 +1934,16 @@ function salesAmoLossReasonName_(lead) {
 
 function salesAmoIsOmOwner_(lead, dictionaries, fallbackManager) {
   const ownerId = String((lead && lead.responsible_user_id) || '').trim();
-  if (ownerId === '10304986') return true;
+  if (ownerId === '10304986') return salesAmoRopOmInCohort_(lead);
   const owner = (lead && lead.responsible_user_name)
     || (dictionaries && dictionaries.users && dictionaries.users[ownerId]);
   if (salesNormalizeText_(owner || fallbackManager) === 'технический') return true;
   // Legacy caches can lack the native ID; only a native name can identify ROP then.
-  return !ownerId && salesNormalizeText_(owner) === 'роп';
+  return !ownerId && salesNormalizeText_(owner) === 'роп' && salesAmoRopOmInCohort_(lead);
+}
+
+function salesAmoRopOmInCohort_(lead) {
+  return salesAmoCreatedDate_(lead || {}) >= '2026-11-01';
 }
 
 function salesAmoQualifiedLossReasonIds_() {

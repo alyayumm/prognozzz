@@ -68,8 +68,8 @@ test('refreshing November recomputes confirmed October cohorts from the complete
   assert.equal(f.writes[0].cells.find(row => row[0] === previous.id)[14], 2);
   assert.equal(f.writes[0].cells.find(row => row[0] === previous.id)[15], 30);
   const historicalQualified = f.writes[0].rows.find(row => row.date === previous.date && row.metric === 'Квалы');
-  assert.equal(historicalQualified.fact, 0);
-  assert.equal(historicalQualified.omQualified, 1);
+  assert.equal(historicalQualified.fact, 1);
+  assert.equal(historicalQualified.omQualified, 0);
   assert.deepEqual(plain(snapshot.historicalMonths), ['2026-10']);
 });
 
@@ -83,11 +83,11 @@ test('historical all-lead traffic and sales follow city pipelines while qualific
   const rows = f.api.read('2026-11-05', '2026-11-05').rows;
   const fact = (city, metric) => rows.find(row => row.date === date && row.city === city && row.metric === metric);
   assert.equal(fact('МСК', 'Лиды').fact, 1);
-  assert.equal(fact('МСК', 'Квалы').fact, 0);
-  assert.equal(fact('МСК', 'Квалы').omQualified, 2);
+  assert.equal(fact('МСК', 'Квалы').fact, 2);
+  assert.equal(fact('МСК', 'Квалы').omQualified, 0);
   assert.equal(fact('СПБ', 'Лиды').fact, 1);
-  assert.equal(fact('СПБ', 'Квалы').fact, 0);
-  assert.equal(fact('СПБ', 'Квалы').omQualified, 1);
+  assert.equal(fact('СПБ', 'Квалы').fact, 1);
+  assert.equal(fact('СПБ', 'Квалы').omQualified, 0);
   assert.equal(fact('МСК', 'Продажи'), undefined);
   assert.equal(fact('СПБ', 'Продажи').trafficSales, 2);
 });
@@ -99,8 +99,8 @@ test('a reopened legacy Chat exclusion restores its city from the pipeline for h
   [sale(date, 'МСК', { trafficSales: 0 })]);
   const rows = f.api.read('2026-11-05', '2026-11-05').rows;
   assert.equal(rows.find(row => row.date === date && row.metric === 'Лиды').fact, 1);
-  assert.equal(rows.find(row => row.date === date && row.metric === 'Квалы').fact, 0);
-  assert.equal(rows.find(row => row.date === date && row.metric === 'Квалы').omQualified, 1);
+  assert.equal(rows.find(row => row.date === date && row.metric === 'Квалы').fact, 1);
+  assert.equal(rows.find(row => row.date === date && row.metric === 'Квалы').omQualified, 0);
   assert.equal(rows.find(row => row.date === date && row.metric === 'Продажи'), undefined);
 });
 
@@ -114,7 +114,7 @@ test('unchanged confirmed historical and requested sales are not rewritten while
     lead('current-won', currentDate),
   ], [oldSale, currentSale,
     { id: `${oldDate}-МСК-Лиды`, date: oldDate, city: 'МСК', metric: 'Лиды', fact: 1, omQualified: 0, omLeads: 0, comment: '[AMO_LEADS_ALL=1]' },
-    { id: `${oldDate}-МСК-Квалы`, date: oldDate, city: 'МСК', metric: 'Квалы', fact: 0, omQualified: 1 },
+    { id: `${oldDate}-МСК-Квалы`, date: oldDate, city: 'МСК', metric: 'Квалы', fact: 1, omQualified: 0 },
   ]);
   const snapshot = f.api.read(currentDate, currentDate);
   assert.equal(snapshot.rows.some(row => row.id === oldSale.id || row.id === currentSale.id), false);

@@ -11,6 +11,7 @@ function syncAmoCrmMonth_(payload) {
   try {
     if (request.phase === 'begin') return amoMonthRefreshBegin_(request);
     const run = amoMonthRefreshLoad_(request);
+    if (request.phase === 'recalculate') return amoMonthRefreshRecalculate_(run);
     if (run.result) return run.result;
     if (request.phase === 'stage') return amoMonthRefreshStage_(run, request);
     if (request.phase === 'finalize') return amoMonthRefreshFinalize_(run);
@@ -18,6 +19,24 @@ function syncAmoCrmMonth_(payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Reapply current policy only to the latest complete, confirmed native cohort. */
+function amoMonthRefreshRecalculate_(run) {
+  if (!run.result) throw new Error('Пересчёт доступен только для завершённого запуска.');
+  const days = eachDateInRange_(run.fromDate, run.toDate);
+  if (!days.length || !days.every((day) => run.completedDays.indexOf(day) >= 0)) {
+    throw new Error('Месяц загружен не полностью. Пересчёт отменён.');
+  }
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(AMO_MONTH_ACTIVE_PREFIX + run.monthKey) !== run.runId) {
+    throw new Error('Пересчитать можно только последний запуск месяца.');
+  }
+  const snapshots = JSON.parse(properties.getProperty(AMO_MONTH_SNAPSHOTS) || '{}');
+  if (!run.startedAt || snapshots[run.monthKey] !== run.startedAt) {
+    throw new Error('Подтверждённый снимок месяца отсутствует или заменён. Пересчёт отменён.');
+  }
+  return amoMonthRefreshFinalize_(run);
 }
 
 function amoMonthRefreshRange_(monthKey) {

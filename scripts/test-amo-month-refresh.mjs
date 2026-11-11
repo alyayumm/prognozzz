@@ -8,7 +8,7 @@ const month = readFileSync(new URL('../apps-script/AmoMonthRefresh.gs', import.m
 const copy = value => JSON.parse(JSON.stringify(value));
 const now = '2026-11-11T09:00:00.000Z';
 class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
-const dictionary = { users: { 1: 'Менеджер', 2: 'Системный', 3: 'Технический' },
+const dictionary = { users: { 1: 'Менеджер', 2: 'Системный', 3: 'Технический', 10304986: 'РОП' },
   pipelines: { 4535038: 'МСК АШ', 4535035: 'СПБ АШ' },
   statuses: { '4535038:41892613': 'Брифинг', '4535038:142': 'Успешно реализовано', '4535035:41892613': 'Брифинг' } };
 const lead = (id, instant, extra = {}) => ({ id, pipeline_id: 4535038, status_id: 41892613,
@@ -108,7 +108,7 @@ test('native Moscow month snapshot preserves PS/plans/manual/November and filter
   const existingLead = { id: '2026-10-01-МСК-Лиды', date: '2026-10-01', month: '2026-10', city: 'МСК',
     channel: 'Город', metric: 'Лиды', fact: 99, plan: 30, forecast: 31, recommendations: 2, comment: 'memo' };
   const incoming = [lead(1, '2026-09-30T21:00:00Z', { custom_fields_values: [{ field_name: 'Дата создания', values: [{ value: '01.11.2026' }] }] }),
-    lead(2, '2026-10-31T20:59:59Z', { status_id: 142, responsible_user_id: 2,
+    lead(2, '2026-10-31T20:59:59Z', { status_id: 142, responsible_user_id: 10304986,
       custom_fields_values: [{ field_name: 'Категория', values: [{ value: 'А+Б' }] }] }),
     lead(3, '2026-10-15T12:00:00Z', { responsible_user_id: 3 })];
   const f = fixture([legacy(99)], [oldSale, manual, november, existingLead], incoming);
@@ -136,6 +136,77 @@ test('a failed complete-page fetch never confirms coverage or publishes a partia
   const status = f.api.refresh({ phase: 'status', runId: run.runId });
   assert.equal(status.completedDays.length, 0); assert.equal(status.activeStage, null);
   assert.equal(f.raw().length, 0); assert.equal(f.stats().dailyWrites, 0);
+});
+
+test('cache recalculation rejects unfinished, incomplete, superseded and unconfirmed runs without writes or fetches', () => {
+  const unfinished = fixture(); const pending = begin(unfinished);
+  assert.throws(() => unfinished.api.refresh({ phase: 'recalculate', runId: pending.runId }), /завершён/);
+  assert.equal(unfinished.stats().dailyWrites, 0);
+  assert.equal(unfinished.stats().fetches, 0);
+  for (const invalid of ['coverage', 'active', 'missingStamp', 'staleStamp']) {
+    const f = fixture(); const run = begin(f); fill(f, run);
+    f.api.refresh({ phase: 'finalize', runId: run.runId });
+    const stats = f.stats();
+    if (invalid === 'coverage') {
+      const key = `AMOCRM_MONTH_REFRESH_RUN_${run.runId}`;
+      const saved = JSON.parse(f.properties.get(key)); saved.completedDays.pop();
+      f.properties.set(key, JSON.stringify(saved));
+    } else if (invalid === 'active') {
+      f.properties.set('AMOCRM_MONTH_REFRESH_ACTIVE_2026-10', 'another-run');
+    } else if (invalid === 'missingStamp') {
+      f.properties.delete('AMOCRM_CONFIRMED_MONTH_SNAPSHOTS');
+    } else {
+      f.properties.set('AMOCRM_CONFIRMED_MONTH_SNAPSHOTS', JSON.stringify({ '2026-10': '2026-11-11T10:00:00.000Z' }));
+    }
+    assert.throws(() => f.api.refresh({ phase: 'recalculate', runId: run.runId }), /полностью|последн|снимок/);
+    assert.deepEqual(f.stats(), stats);
+  }
+});
+
+test('cache recalculation reuses the latest complete snapshot without fetching and preserves PS, plans, manual and November', () => {
+  const sale = { id: '2026-10-31-МСК-Продажи', date: '2026-10-31', month: '2026-10', city: 'МСК',
+    channel: 'Город', metric: 'Продажи', fact: 55, paidSales: 54, trafficSales: 99,
+    plan: 30, forecast: 32, comment: 'PS', recommendations: 3 };
+  const manual = { id: 'manual', date: '2026-10-01', city: 'МСК', channel: 'Ручная корректировка', metric: 'Квалы', fact: 4 };
+  const november = { id: 'november', date: '2026-11-01', month: '2026-11', city: 'МСК',
+    channel: 'Город', metric: 'Квалы', fact: 100, omQualified: 10, plan: 200, forecast: 190, comment: 'November' };
+  const qualified = { id: '2026-10-01-МСК-Квалы', date: '2026-10-01', month: '2026-10', city: 'МСК',
+    channel: 'Город', metric: 'Квалы', fact: 0, omQualified: 1, plan: 30, forecast: 31, recommendations: 2, comment: 'memo' };
+  const incoming = [lead(1, '2026-10-01T09:00:00Z', { responsible_user_id: 10304986 })];
+  const f = fixture([legacy(99)], [sale, manual, november, qualified], incoming);
+  const run = begin(f); fill(f, run);
+  f.api.refresh({ phase: 'finalize', runId: run.runId });
+  // Canonical rows can still carry the previous policy; only the confirmed raw cache is authoritative.
+  Object.assign(f.daily().find(row => row.id === qualified.id), { fact: 0, omQualified: 1 });
+  const stats = f.stats(); const rawBefore = copy(f.raw());
+  const result = f.api.refresh({ phase: 'recalculate', runId: run.runId, monthKey: '2026-10' });
+  assert.deepEqual(copy(result.counts), { leads: 1, qualified: 1, omQualified: 0, trafficSales: 0 });
+  assert.equal(f.stats().fetches, stats.fetches);
+  assert.deepEqual(copy(f.raw()), rawBefore);
+  assert.equal(f.properties.get('AMOCRM_CONFIRMED_MONTH_SNAPSHOTS'), JSON.stringify({ '2026-10': run.startedAt }));
+  const currentQualified = f.daily().find(row => row.id === qualified.id);
+  assert.equal(currentQualified.fact, 1); assert.equal(currentQualified.omQualified, 0);
+  for (const key of ['plan', 'forecast', 'recommendations', 'comment']) assert.equal(currentQualified[key], qualified[key]);
+  const currentSale = f.daily().find(row => row.id === sale.id);
+  for (const key of ['fact', 'paidSales', 'plan', 'forecast', 'comment', 'recommendations']) assert.equal(currentSale[key], sale[key]);
+  assert.deepEqual(copy(f.daily().find(row => row.id === manual.id)), manual);
+  assert.deepEqual(copy(f.daily().find(row => row.id === november.id)), november);
+  assert.equal(f.api.read().some(row => row.leadId === '99'), false);
+  const after = copy(f.daily());
+  assert.deepEqual(copy(f.api.refresh({ phase: 'recalculate', runId: run.runId })), copy(result));
+  assert.deepEqual(copy(f.daily()), after);
+  const writes = f.stats().dailyWrites;
+  assert.deepEqual(copy(f.api.refresh({ phase: 'finalize', runId: run.runId })), copy(result));
+  assert.equal(f.stats().dailyWrites, writes);
+});
+
+test('a confirmed empty full snapshot can be recalculated without fetching', () => {
+  const f = fixture(); const run = begin(f); fill(f, run);
+  f.api.refresh({ phase: 'finalize', runId: run.runId });
+  const fetches = f.stats().fetches;
+  const result = f.api.refresh({ phase: 'recalculate', runId: run.runId });
+  assert.deepEqual(copy(result.counts), { leads: 0, qualified: 0, omQualified: 0, trafficSales: 0 });
+  assert.equal(f.stats().fetches, fetches);
 });
 
 test('strict monthly fetch accepts native HTTP204 empty but rejects malformed HTTP200 lists', () => {
@@ -192,7 +263,7 @@ test('the new monthly endpoint authenticates every phase before invoking its han
     syncAmoCrmMonth_ = payload => { called(); return {status: payload.phase}; };
     jsonResponse = value => value;
     doPost;`, { called: () => { calls++; } });
-  for (const phase of ['begin', 'stage', 'status', 'finalize']) {
+  for (const phase of ['begin', 'stage', 'status', 'finalize', 'recalculate']) {
     const result = post({ postData: { contents: JSON.stringify({ action: 'syncAmoCrmMonth', password: 'wrong', payload: { phase } }) } });
     assert.equal(result.ok, false); assert.match(result.error, /пароль/);
   }

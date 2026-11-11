@@ -67,15 +67,18 @@ test('exact target duplicate names are used only when the reason ID is missing',
   assert.equal(wrongId.isOmQualified, false);
 });
 
-test('the five target refusal reasons on native ROP 10304986 qualify only for OM', () => {
+test('the five target refusal reasons on native ROP remain qualified but move to OM only from November', () => {
   for (const reason of [13957954, 19999678, 3421768, 3421771, 3421777]) {
-    for (const lead of [fresh({ responsible_user_id: 10304986, responsible_user_name: 'РОП',
+    for (const [createdDate, om] of [['2026-10-04', false], ['2026-11-04', true]]) {
+      for (const lead of [fresh({ responsible_user_id: 10304986, responsible_user_name: 'РОП',
+      created_at: Date.parse(`${createdDate}T12:00:00Z`) / 1000,
       loss_reason_id: reason, loss_reason: null }),
     api.cached(cached({ responsibleUserId: '10304986', responsibleUserName: 'РОП',
-      lossReasonId: String(reason), lossReasonName: '' }))]) {
+      createdDate, lossReasonId: String(reason), lossReasonName: '' }))]) {
       const actual = api.normalize(lead, dictionaries, config);
       assert.equal(actual.isQualified, true, String(reason));
-      assert.equal(actual.isOmQualified, true, String(reason));
+      assert.equal(actual.isOmQualified, om, String(reason));
+      }
     }
     const regular = api.normalize(fresh({ loss_reason_id: reason, loss_reason: null }), dictionaries, config);
     assert.equal(regular.isQualified, true);
@@ -83,7 +86,7 @@ test('the five target refusal reasons on native ROP 10304986 qualify only for OM
   }
 });
 
-test('all qualified ROP stages belong to OM while non-target refusals stay unqualified', () => {
+test('October qualified ROP stages belong to OP while non-target refusals stay unqualified', () => {
   const customOwner = [{ field_name: 'Ответственный', values: [{ value: 'РОП' }] }];
   const regular = api.normalize(fresh({ loss_reason_id: 3421768, loss_reason: { name: 'Дорого' },
     custom_fields_values: customOwner }), dictionaries, config);
@@ -91,7 +94,7 @@ test('all qualified ROP stages belong to OM while non-target refusals stay unqua
   const rop = api.normalize(fresh({ responsible_user_id: 10304986, status_id: 41892613,
     status_name: 'Брифинг', loss_reason_id: 3421768, loss_reason: null }), dictionaries, config);
   assert.equal(rop.isQualified, true);
-  assert.equal(rop.isOmQualified, true);
+  assert.equal(rop.isOmQualified, false);
   const otherRefusal = api.normalize(fresh({ responsible_user_id: 10304986,
     loss_reason_id: 11249860, loss_reason: { name: 'Дубль' } }), dictionaries, config);
   assert.equal(otherRefusal.isQualified, false);
@@ -99,19 +102,21 @@ test('all qualified ROP stages belong to OM while non-target refusals stay unqua
   const practice = api.normalize(fresh({ responsible_user_id: 10304986,
     loss_reason_id: 999, loss_reason: { name: 'Практика' } }), dictionaries, config);
   assert.equal(practice.isQualified, true);
-  assert.equal(practice.isOmQualified, true);
+  assert.equal(practice.isOmQualified, false);
   const oldRop = api.normalize(api.cached(cached({ responsibleUserId: '10304986',
     lossReasonId: '', lossReasonName: 'Дорого' })), dictionaries, config);
   assert.equal(oldRop.isQualified, true);
-  assert.equal(oldRop.isOmQualified, true);
+  assert.equal(oldRop.isOmQualified, false);
 });
 
 test('ROP OM ownership uses the native ID or a legacy native name, never a custom manager', () => {
   for (const stage of ['Брифинг', 'Системный', 'Успешно реализовано']) {
     for (const lead of [fresh({ responsible_user_id: 10304986, responsible_user_name: '',
+      created_at: Date.parse('2026-11-04T12:00:00Z') / 1000,
       status_id: stage === 'Успешно реализовано' ? 142 : 41892613, status_name: stage,
       loss_reason_id: '', loss_reason: null }),
     api.cached(cached({ responsibleUserId: '10304986', responsibleUserName: '', managerName: 'Менеджер',
+      createdDate: '2026-11-04',
       statusId: stage === 'Успешно реализовано' ? '142' : '41892613', stageName: stage,
       lossReasonId: '', lossReasonName: '' }))]) {
       const actual = api.normalize(lead, dictionaries, config);
@@ -119,17 +124,21 @@ test('ROP OM ownership uses the native ID or a legacy native name, never a custo
       assert.equal(actual.isOmQualified, true);
     }
   }
-  const briefing = { status_id: 41892613, status_name: 'Брифинг', loss_reason_id: '', loss_reason: null };
+  const briefing = { status_id: 41892613, status_name: 'Брифинг', loss_reason_id: '', loss_reason: null,
+    created_at: Date.parse('2026-11-04T12:00:00Z') / 1000 };
   for (const lead of [fresh({ ...briefing, responsible_user_id: '', responsible_user_name: '  РОП  ' }),
     api.cached(cached({ responsibleUserId: '', responsibleUserName: 'РОП',
+      createdDate: '2026-11-04',
       statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' }))]) {
     assert.equal(api.normalize(lead, dictionaries, config).isOmQualified, true);
   }
   for (const lead of [fresh({ ...briefing,
     custom_fields_values: [{ field_name: 'Ответственный', values: [{ value: 'РОП' }] }] }),
     api.cached(cached({ responsibleUserId: '1', responsibleUserName: 'Менеджер', managerName: 'РОП',
+      createdDate: '2026-11-04',
       statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' })),
     api.cached(cached({ responsibleUserId: '', responsibleUserName: '', managerName: 'РОП',
+      createdDate: '2026-11-04',
       statusId: '41892613', stageName: 'Брифинг', lossReasonId: '', lossReasonName: '' }))]) {
     assert.equal(api.normalize(lead, dictionaries, config).isOmQualified, false);
   }
@@ -169,14 +178,14 @@ test('department OP excludes target duplicates without marking them as refusals'
   assert.equal(result.byManager['Менеджер'].refusalLeads, 1);
 });
 
-test('department target duplicates and ROP target refusals produce zero OP qualification', () => {
+test('department October ROP target refusals remain OP while target duplicates stay OM', () => {
   const leads = [cached(), cached({ leadId: '2', responsibleUserId: '10304986', responsibleUserName: 'РОП',
     managerName: 'РОП', lossReasonId: '3421768', lossReasonName: 'Дорого' })].map(api.cached);
   const result = api.department(config, [], leads);
-  assert.equal(result.daily[3].totalQualified, 0);
+  assert.equal(result.daily[3].totalQualified, 1);
   assert.equal(result.byManager['Менеджер'].factQualified, 0);
   assert.equal(result.byManager['Менеджер'].refusalLeads, 0);
-  assert.equal(result.byManager['РОП'].factQualified, 0);
+  assert.equal(result.byManager['РОП'].factQualified, 1);
   assert.equal(result.byManager['РОП'].refusalLeads, 0);
 });
 
@@ -195,8 +204,8 @@ test('main report adds target duplicates to OM on creation day and keeps the OP 
       lossReasonId: '3421768', lossReasonName: 'Дорого' })];
   sync(rows, '2026-10-04', '2026-10-04', []);
   const actual = saved.find(row => row.metric === 'Квалы' && row.city === 'МСК');
-  assert.equal(actual.fact, 1);
-  assert.equal(actual.omQualified, 3);
+  assert.equal(actual.fact, 2);
+  assert.equal(actual.omQualified, 2);
   assert.equal(actual.plan, 40);
   assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').fact, 4);
   assert.equal(saved.find(row => row.metric === 'Лиды' && row.city === 'МСК').omLeads, 0);
