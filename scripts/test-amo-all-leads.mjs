@@ -141,7 +141,7 @@ test('city pipelines include message types while the separate messages and unkno
     cached.city = ''; cached.excludeReason = 'messagesType';
     for (const version of [item, api.cached(cached)]) {
       assert.equal(api.leadFacts(version, dictionaries, config).city, city);
-      assert.equal(api.normalize(version, dictionaries, config).exclude, true);
+      assert.notEqual(api.normalize(version, dictionaries, config).exclude, true);
     }
   }
   for (const item of [fresh({ pipeline_id: 9, pipeline_name: 'АШ Сообщения' }),
@@ -209,7 +209,7 @@ test('independent traffic counts include referral, OM and message leads once and
     [fresh({ responsible_user_name: 'Технический' }), { leads: 1, qualified: 0, omQualified: 1, omLeads: 0 }],
     [fresh({ responsible_user_name: 'Системный' }), { leads: 1, qualified: 1, omQualified: 0, omLeads: 0 }],
     [fresh({ responsible_user_id: 10549050 }), { leads: 0, qualified: 1, omQualified: 0, omLeads: 0 }],
-    [fresh({ custom_fields_values: [field('Тип лида', 'Сообщение')] }), { leads: 1, qualified: 0, omQualified: 0, omLeads: 0 }],
+    [fresh({ custom_fields_values: [field('Тип лида', 'Сообщение')] }), { leads: 1, qualified: 1, omQualified: 0, omLeads: 0 }],
   ];
   for (const [item, expected] of cases) {
     assert.deepEqual(plain(api.counts(api.normalize(item, dictionaries, config), api.leadFacts(item, dictionaries, config))), expected);
@@ -255,7 +255,7 @@ test('main refresh deduplicates all leads, leaves qualification and sales intact
   const qualified = f.saved().find(row => row.city === 'МСК' && row.metric === 'Квалы');
   assert.equal(lead.fact, 7);
   assert.equal(lead.omLeads, 0);
-  assert.equal(qualified.fact, 3, 'native excluded lead owner still qualifies for OP');
+  assert.equal(qualified.fact, 4, 'city message types and native excluded lead owners still qualify for OP');
   assert.equal(qualified.omQualified, 1);
   for (const key of ['plan', 'forecast', 'recommendations']) assert.equal(lead[key], existing[0][key]);
   assert.ok(lead.comment.includes('ручная заметка'));
@@ -264,17 +264,17 @@ test('main refresh deduplicates all leads, leaves qualification and sales intact
   assert.equal(f.saved().some(row => row.metric === 'Продажи'), false, 'PS sales facts must remain authoritative');
 });
 
-test('sales department uses all-lead arrivals while excluding messages and referrals only from qualification', () => {
+test('sales department includes city message types in qualified arrivals while retaining referral exclusions', () => {
   const { api } = fixture();
   const result = api.department(config, [], mixedRecords().map(api.cached));
   const day = result.daily[0];
   assert.equal(day.totalTraffic, 7);
   assert.equal(day.mskTraffic, 7);
-  assert.equal(day.totalQualified, 3);
+  assert.equal(day.totalQualified, 4);
   assert.equal(day.totalDeals, 2);
   const managers = Object.values(result.byManager);
   assert.equal(managers.reduce((sum, manager) => sum + manager.totalTraffic, 0), 7);
-  assert.equal(managers.reduce((sum, manager) => sum + manager.factQualified, 0), 3);
+  assert.equal(managers.reduce((sum, manager) => sum + manager.factQualified, 0), 4);
   assert.equal(result.byManager['Технический'].refusalLeads, 0);
 });
 
@@ -300,7 +300,7 @@ test('historical September and October cohorts recalculate all leads from comple
     assert.equal(lead.plan, 40); assert.equal(lead.forecast, 44); assert.equal(lead.recommendations, 2);
     assert.ok(lead.comment.includes('ручная заметка'));
     assert.ok(lead.comment.includes('[AMO_LEADS_ALL=1]'));
-    assert.equal(qualified.fact, 3); assert.equal(qualified.omQualified, 1);
+    assert.equal(qualified.fact, 4); assert.equal(qualified.omQualified, 1);
     assert.equal(qualified.plan, 30); assert.equal(qualified.forecast, 35);
     assert.equal(snapshot.rows.some(row => row.date === date && row.metric === 'Продажи'), false);
   }

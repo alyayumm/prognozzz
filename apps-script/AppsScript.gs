@@ -1623,8 +1623,8 @@ function salesAmoIsClosedLostChat_(stageName, lead) {
 function salesNormalizeAmoLead_(lead, dictionaries, config) {
   if (lead && lead.cachedNormalized) {
     const cached = lead.cachedNormalized;
-    // Re-evaluate this exclusion so a reopened or won lead is counted again.
-    if (cached.excludeReason === 'closedLostChat') {
+    // Re-evaluate Chat and retire the old city message-type exclusion.
+    if (cached.excludeReason === 'closedLostChat' || cached.excludeReason === 'messagesType') {
       cached.excludeReason = '';
       cached.city = cached.city || salesAmoCity_(cached.pipeline);
     }
@@ -1660,11 +1660,10 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
   const typeLabel = salesAmoField_(fields, ['тип лида', 'тип обращения']);
   const city = salesAmoCity_(pipeline);
   const excludedByPipeline = salesNormalizeText_(pipeline).indexOf('сообщ') >= 0;
-  const excludedByType = salesNormalizeText_(typeLabel).indexOf('сообщ') >= 0;
-  if (!city || excludedByPipeline || excludedByType) {
+  if (!city || excludedByPipeline) {
     return {
       exclude: true,
-      excludeReason: excludedByPipeline ? 'messagesPipeline' : (excludedByType ? 'messagesType' : 'noCity'),
+      excludeReason: excludedByPipeline ? 'messagesPipeline' : 'noCity',
       pipeline: pipeline,
       stage: stage,
       typeLabel: typeLabel,

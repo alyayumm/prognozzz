@@ -64,14 +64,14 @@ test('a stale Chat reason does not exclude reopened or won leads', () => {
   }
 });
 
-test('existing messages and missing-city exclusions stay intact', () => {
+test('separate message pipelines and missing cities stay excluded while a city message type follows the Chat rule', () => {
   const messages = lead({ pipeline_name: 'АШ Сообщения' });
   const typed = lead({ custom_fields_values: [{ field_name: 'Тип лида', values: [{ value: 'Сообщение' }] }] });
   assert.equal(api.normalize(messages, dictionaries, config).excludeReason, 'messagesPipeline');
-  assert.equal(api.normalize(typed, dictionaries, config).excludeReason, 'messagesType');
+  assert.equal(api.normalize(typed, dictionaries, config).excludeReason, 'closedLostChat');
   assert.equal(api.normalize(lead({ pipeline_name: 'Неизвестная воронка' }), dictionaries, config).excludeReason, 'noCity');
   const cached = api.cached(cachedRecord({ excludeReason: 'messagesType' }));
-  assert.equal(api.normalize(cached, dictionaries, config).excludeReason, 'messagesType');
+  assert.equal(api.normalize(cached, dictionaries, config).excludeReason, 'closedLostChat');
 });
 
 test('Chat exclusion survives raw caching and removes leads in both main and sales-department reports', () => {
