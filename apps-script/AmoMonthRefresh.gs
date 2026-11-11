@@ -5,6 +5,7 @@ const AMO_MONTH_SNAPSHOTS = 'AMOCRM_CONFIRMED_MONTH_SNAPSHOTS';
 /** Protected, resumable full-month import. Stages never publish canonical daily facts. */
 function syncAmoCrmMonth_(payload) {
   const request = payload || {};
+  if (request.phase === 'filterMetadata') return amoMonthFilterMetadata_();
   if (request.phase === 'status') return amoMonthRefreshPublic_(amoMonthRefreshLoad_(request));
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) throw new Error('Обновление amoCRM уже выполняется. Проверьте статус текущего этапа.');
@@ -19,6 +20,37 @@ function syncAmoCrmMonth_(payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Password-protected by doPost; never reads leads, users, sheets or run state. */
+function amoMonthFilterMetadata_() {
+  const ids = ['4535035', '4535038', '9926210', '9926246'];
+  const response = fetchAmoCrmEndpoint_('/api/v4/leads/pipelines', { limit: 250 });
+  const rows = response && response._embedded && response._embedded.pipelines;
+  if (!Array.isArray(rows)) throw new Error('amoCRM: некорректный справочник воронок.');
+  if (response._links && Object.prototype.hasOwnProperty.call(response._links, 'next')) {
+    throw new Error('amoCRM: справочник воронок получен не полностью.');
+  }
+  const found = {};
+  rows.forEach((pipeline) => {
+    if (!pipeline || !/^[1-9]\d*$/.test(String(pipeline.id || ''))
+      || typeof pipeline.name !== 'string' || !pipeline.name.trim()) {
+      throw new Error('amoCRM: неполный справочник воронок.');
+    }
+    const id = String(pipeline.id);
+    if (ids.indexOf(id) < 0) return;
+    const statuses = pipeline._embedded && pipeline._embedded.statuses;
+    if (found[id] || !Array.isArray(statuses)) throw new Error('amoCRM: неполный справочник этапов.');
+    found[id] = { id: id, found: true, name: pipeline.name, cityRecognized: Boolean(salesAmoCity_(pipeline.name)),
+      statuses: statuses.map((stage) => {
+        if (!stage || !/^[1-9]\d*$/.test(String(stage.id || ''))
+          || typeof stage.name !== 'string' || !stage.name.trim()) {
+          throw new Error('amoCRM: неполный справочник этапов.');
+        }
+        return { id: String(stage.id), name: stage.name };
+      }) };
+  });
+  return { pipelines: ids.map((id) => found[id] || { id: id, found: false, name: '', cityRecognized: false, statuses: [] }) };
 }
 
 /** Reapply current policy only to the latest complete, confirmed native cohort. */
