@@ -1760,13 +1760,12 @@ function salesAmoIsReferralSource_(source) {
 
 /** The renamed native service owner excludes qualification only for cohorts from 15 November. */
 function salesAmoIsReferralOwner_(lead, dictionaries) {
-  if (salesAmoCreatedDate_(lead || {}) < '2026-11-15') return false;
   const ownerId = String((lead && lead.responsible_user_id) || '').trim();
-  if (ownerId === '12800146') return true;
   const owner = (lead && lead.responsible_user_name)
     || (dictionaries && dictionaries.users && dictionaries.users[ownerId]) || '';
-  return salesNormalizeLabel_(owner) === salesNormalizeLabel_('Отдел продаж')
-    || salesAmoIsReferralSource_(owner);
+  if (ownerId !== '12800146' && salesNormalizeLabel_(owner) !== salesNormalizeLabel_('Отдел продаж')
+    && !salesAmoIsReferralSource_(owner)) return false;
+  return salesAmoCreatedDate_(lead || {}) >= '2026-11-15';
 }
 
 function salesAmoTrafficCounts_(normalized, leadFacts) {
