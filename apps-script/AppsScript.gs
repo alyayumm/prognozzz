@@ -1655,7 +1655,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     cached.isQualified = salesAmoIsQualified_(cached.stage, lead);
     cached.isOmQualified = cached.isQualified && (salesAmoIsOmRefusal_(cached.stage, lead)
       || salesAmoIsOmOwner_(lead, dictionaries, cached.manager));
-    cached.isReferral = salesAmoIsReferralSource_(cached.source);
+    cached.isReferral = salesAmoIsReferralSource_(cached.source) || salesAmoIsReferralOwner_(lead, dictionaries);
     cached.isNotQualifiedYet = !cached.isQualified && (Boolean(cached.isNotQualifiedYet) || salesAmoIsNotQualifiedYet_(cached.stage));
     return cached;
   }
@@ -1727,7 +1727,7 @@ function salesNormalizeAmoLead_(lead, dictionaries, config) {
     leadType: salesAmoLeadType_(typeLabel),
     typeLabel: typeLabel,
     source: source,
-    isReferral: salesAmoIsReferralSource_(source),
+    isReferral: salesAmoIsReferralSource_(source) || salesAmoIsReferralOwner_(lead, dictionaries),
     lossReasonId: String(lead.loss_reason_id || '').trim(),
     lossReasonName: salesAmoLossReasonName_(lead),
     url: '',
@@ -1756,6 +1756,17 @@ function salesAmoFieldMap_(customFields) {
 /** Only the confirmed referral/cashback source, never arbitrary advertising labels. */
 function salesAmoIsReferralSource_(source) {
   return salesNormalizeLabel_(source).replace(/э/g, 'е') === 'реккешбек';
+}
+
+/** The renamed native service owner excludes qualification only for cohorts from 15 November. */
+function salesAmoIsReferralOwner_(lead, dictionaries) {
+  if (salesAmoCreatedDate_(lead || {}) < '2026-11-15') return false;
+  const ownerId = String((lead && lead.responsible_user_id) || '').trim();
+  if (ownerId === '12800146') return true;
+  const owner = (lead && lead.responsible_user_name)
+    || (dictionaries && dictionaries.users && dictionaries.users[ownerId]) || '';
+  return salesNormalizeLabel_(owner) === salesNormalizeLabel_('Отдел продаж')
+    || salesAmoIsReferralSource_(owner);
 }
 
 function salesAmoTrafficCounts_(normalized, leadFacts) {
@@ -1945,6 +1956,8 @@ function salesAmoLossReasonName_(lead) {
 function salesAmoIsOmOwner_(lead, dictionaries, fallbackManager) {
   const ownerId = String((lead && lead.responsible_user_id) || '').trim();
   if (ownerId === '10304986') return salesAmoRopOmInCohort_(lead);
+  // A later rename to dismissed employees must not reclassify older Technical cohorts.
+  if (ownerId === '13194846' && salesAmoCreatedDate_(lead || {}) < '2026-11-15') return true;
   const owner = (lead && lead.responsible_user_name)
     || (dictionaries && dictionaries.users && dictionaries.users[ownerId]);
   if (salesNormalizeText_(owner || fallbackManager) === 'технический') return true;
