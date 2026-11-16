@@ -54,6 +54,10 @@
 .demand-comparison-table tbody tr:hover th:first-child { background: var(--cloud); }
 .demand-comparison-table th small { display: block; margin-top: 4px; font-size: 10px; font-weight: 400; color: var(--muted-strong); }
 .demand-comparison-incomplete { color: var(--muted-strong); }
+.demand-comparison-annual { background: var(--cloud); font-weight: 750; }
+.demand-comparison-annual tr:first-child > * { border-top-color: var(--line-strong); }
+.demand-comparison-annual th:first-child { min-width: 132px; background: var(--cloud); white-space: normal; line-height: 1.4; }
+.demand-comparison-annual td small { display: block; margin-top: 4px; color: var(--muted-strong); font-size: 10px; font-weight: 400; }
 .demand-comparison-provenance { margin-top: 20px; }
 .demand-comparison-provenance summary { display: flex; align-items: center; gap: 10px; width: fit-content; min-height: 40px; color: var(--blue-dark); cursor: pointer; list-style: none; font-size: 12px; font-weight: 750; }
 .demand-comparison-provenance summary::-webkit-details-marker { display: none; }

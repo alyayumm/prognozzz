@@ -38,6 +38,25 @@ export interface AlignedDemandSummary {
   gap: Count;
 }
 
+export interface DemandComparisonAnnualMetric {
+  total: Count;
+  average: Count;
+  months: number;
+}
+
+export interface DemandComparisonAnnualGrowth {
+  value: Count;
+  months: number;
+}
+
+type AnnualMetricKey = "previousDemand" | "demand" | "previousSales" | "sales" | "previousLosses" | "losses" | "expectedSales" | "salesGap";
+
+export type DemandComparisonAnnualSummary = Record<AnnualMetricKey, DemandComparisonAnnualMetric> & {
+  demandYoY: DemandComparisonAnnualGrowth;
+  salesYoY: DemandComparisonAnnualGrowth;
+  lossesYoY: DemandComparisonAnnualGrowth;
+};
+
 export type Correlation = { n: number; r: number | null };
 
 /** Keep each last successful source independently when a later read fails. */
@@ -72,6 +91,34 @@ export function moscowCurrentMonth(now = new Date()): string {
 
 function change(current: Count, previous: Count): Count {
   return current === null || previous === null || previous === 0 ? null : current / previous - 1;
+}
+
+/** Summarize observed completed months; each average keeps its own source coverage. */
+export function buildDemandComparisonAnnualSummary(months: readonly DemandComparisonMonth[]): DemandComparisonAnnualSummary {
+  const completed = months.filter((row) => row.complete);
+  const valid = (value: Count, signed = false): value is number => value !== null && Number.isFinite(value) && (signed || value >= 0);
+  const aggregate = (key: AnnualMetricKey): DemandComparisonAnnualMetric => {
+    const values = completed.map((row) => row[key]).filter((value): value is number => valid(value, key === "salesGap"));
+    const total = values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+    return { total, average: total === null ? null : total / values.length, months: values.length };
+  };
+  const growth = (current: "demand" | "sales" | "losses", previous: "previousDemand" | "previousSales" | "previousLosses"): DemandComparisonAnnualGrowth => {
+    const pairs = completed.flatMap((row): [number, number][] => {
+      const currentValue = row[current];
+      const previousValue = row[previous];
+      return valid(currentValue) && valid(previousValue) ? [[currentValue, previousValue]] : [];
+    });
+    const currentTotal = pairs.reduce((sum, [value]) => sum + value, 0);
+    const previousTotal = pairs.reduce((sum, [, value]) => sum + value, 0);
+    return { value: pairs.length ? change(currentTotal, previousTotal) : null, months: pairs.length };
+  };
+  return {
+    previousDemand: aggregate("previousDemand"), demand: aggregate("demand"),
+    previousSales: aggregate("previousSales"), sales: aggregate("sales"),
+    previousLosses: aggregate("previousLosses"), losses: aggregate("losses"),
+    expectedSales: aggregate("expectedSales"), salesGap: aggregate("salesGap"),
+    demandYoY: growth("demand", "previousDemand"), salesYoY: growth("sales", "previousSales"), lossesYoY: growth("losses", "previousLosses"),
+  };
 }
 
 function combined(first: Count, second: Count): Count {

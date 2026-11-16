@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createReportModelLoader } from './helpers/report-model.mjs';
 
-const { buildDemandComparison, pearsonCorrelation, preserveDemandOutcomeSources } = createReportModelLoader()('src/lib/demandComparison.ts');
+const { buildDemandComparison, buildDemandComparisonAnnualSummary, pearsonCorrelation, preserveDemandOutcomeSources } = createReportModelLoader()('src/lib/demandComparison.ts');
 const now = new Date('2026-11-06T10:00:00+03:00');
 const demand = (month, count, city = 'МСК') => ({ month, count, city, regionId: '', share: null, updatedAt: '2026-11-01T00:00:00Z' });
 const outcome = (month, count, metric = 'sales', city = 'МСК') => ({ month, count, metric, city, sourceRow: 1, sourceColumn: 'B' });
@@ -126,6 +126,106 @@ test('conflicting duplicate observations become unknown rather than summed or ar
   assert.equal(result.months[0].demand, null);
   assert.equal(result.months[0].sales, null);
   assert.equal(result.months[1].sales, 4);
+});
+
+const annualMonth = extra => ({...model([], []).months[0], ...extra});
+const annualCountKeys = ['previousDemand', 'demand', 'previousSales', 'sales', 'previousLosses', 'losses', 'expectedSales', 'salesGap'];
+
+test('annual totals and averages count observed zero and skip missing values independently', () => {
+  const result = buildDemandComparisonAnnualSummary([
+    annualMonth({previousDemand: 10, demand: 0, previousSales: 3, sales: 0, losses: 0, expectedSales: 0, salesGap: 0}),
+    annualMonth({demand: 11, sales: 2}),
+    annualMonth({previousDemand: 5, previousSales: 2, previousLosses: 0, expectedSales: 1.5, salesGap: -1.5}),
+  ]);
+  assert.deepEqual(result.previousDemand, {total: 15, average: 7.5, months: 2});
+  assert.deepEqual(result.demand, {total: 11, average: 5.5, months: 2});
+  assert.deepEqual(result.sales, {total: 2, average: 1, months: 2});
+  assert.deepEqual(result.previousLosses, {total: 0, average: 0, months: 1});
+  assert.deepEqual(result.losses, {total: 0, average: 0, months: 1});
+  assert.deepEqual(result.expectedSales, {total: 1.5, average: 0.75, months: 2});
+  assert.deepEqual(result.salesGap, {total: -1.5, average: -0.75, months: 2});
+});
+
+test('annual summaries use each series coverage but compare growth only on matching months', () => {
+  const result = buildDemandComparisonAnnualSummary([
+    annualMonth({previousDemand: 100, demand: 200, previousSales: 10, sales: 20, losses: 5}),
+    annualMonth({previousDemand: 900, demand: 900, previousSales: 90, sales: 90, previousLosses: 5, losses: 15}),
+    annualMonth({demand: 500, previousSales: 1, previousLosses: 15, losses: 25}),
+    annualMonth({previousDemand: 300, sales: 7}),
+  ]);
+  assert.deepEqual(result.demand, {total: 1600, average: 1600 / 3, months: 3});
+  assert.deepEqual(result.previousDemand, {total: 1300, average: 1300 / 3, months: 3});
+  assert.deepEqual(result.sales, {total: 117, average: 39, months: 3});
+  assert.equal(result.demandYoY.months, 2);
+  assert.ok(Math.abs(result.demandYoY.value - 0.1) < 1e-10, 'growth is weighted by prior totals, never an average of monthly percentages');
+  assert.equal(result.salesYoY.months, 2);
+  assert.ok(Math.abs(result.salesYoY.value - 0.1) < 1e-10);
+  assert.deepEqual(result.lossesYoY, {value: 1, months: 2});
+});
+
+test('unfinished months cannot contribute even when they contain numeric values', () => {
+  const excluded = Object.fromEntries(annualCountKeys.map(key => [key, 999]));
+  const result = buildDemandComparisonAnnualSummary([
+    annualMonth({demand: 10, previousDemand: 20, sales: 2, previousSales: 4}),
+    annualMonth({...excluded, complete: false}),
+  ]);
+  assert.deepEqual(result.demand, {total: 10, average: 10, months: 1});
+  assert.deepEqual(result.sales, {total: 2, average: 2, months: 1});
+  assert.deepEqual(result.losses, {total: null, average: null, months: 0});
+  assert.deepEqual(result.demandYoY, {value: -0.5, months: 1});
+});
+
+test('annual growth preserves matched zero months but refuses a zero previous total', () => {
+  const result = buildDemandComparisonAnnualSummary([
+    annualMonth({previousDemand: 0, demand: 3, previousSales: 0, sales: 0, previousLosses: 0, losses: 2}),
+    annualMonth({previousDemand: 0, demand: 0, previousSales: 0, sales: 4}),
+  ]);
+  assert.deepEqual(result.demandYoY, {value: null, months: 2});
+  assert.deepEqual(result.salesYoY, {value: null, months: 2});
+  assert.deepEqual(result.lossesYoY, {value: null, months: 1});
+});
+
+test('annual model and gap are sums of the displayed monthly scenarios', () => {
+  const result = model(
+    [demand('2025-01', 100), demand('2026-01', 200), demand('2025-02', 900), demand('2026-02', 900)],
+    [outcome('2025-01', 20), outcome('2026-01', 45), outcome('2025-02', 90), outcome('2026-02', 80)],
+  );
+  const annual = buildDemandComparisonAnnualSummary(result.months);
+  assert.deepEqual(annual.expectedSales, {total: 130, average: 65, months: 2});
+  assert.deepEqual(annual.salesGap, {total: -5, average: -2.5, months: 2});
+  assert.notEqual(annual.expectedSales.total, result.salesSummary.expected, 'the footer sums monthly models instead of reapplying a yearly demand ratio');
+});
+
+test('a complete twelve-month year has twelve observations and an unrounded monthly average', () => {
+  const months = Array.from({length: 12}, (_, index) => annualMonth({
+    ...Object.fromEntries(annualCountKeys.map(key => [key, index + 1])),
+    month: `2024-${String(index + 1).padStart(2, '0')}`,
+  }));
+  const result = buildDemandComparisonAnnualSummary(months);
+  for (const key of annualCountKeys) assert.deepEqual(result[key], {total: 78, average: 6.5, months: 12});
+  for (const key of ['demandYoY', 'salesYoY', 'lossesYoY']) assert.deepEqual(result[key], {value: 0, months: 12});
+});
+
+test('an empty year stays unknown rather than manufacturing zero totals or averages', () => {
+  for (const rows of [[], [annualMonth({})], [annualMonth({demand: 20, complete: false})]]) {
+    const result = buildDemandComparisonAnnualSummary(rows);
+    for (const key of annualCountKeys) assert.deepEqual(result[key], {total: null, average: null, months: 0});
+    for (const key of ['demandYoY', 'salesYoY', 'lossesYoY']) assert.deepEqual(result[key], {value: null, months: 0});
+  }
+});
+
+test('annual aggregates reject invalid counts and nonfinite values while allowing signed gaps', () => {
+  const result = buildDemandComparisonAnnualSummary([
+    annualMonth({previousDemand: -1, demand: Number.NaN, previousSales: Infinity, sales: -1, previousLosses: -1, losses: -Infinity, expectedSales: -1, salesGap: -5}),
+    annualMonth({previousDemand: 3, demand: 6, previousSales: 2, sales: 4, previousLosses: 1, losses: 0, expectedSales: 1.5, salesGap: Infinity}),
+  ]);
+  assert.deepEqual(result.previousDemand, {total: 3, average: 3, months: 1});
+  assert.deepEqual(result.sales, {total: 4, average: 4, months: 1});
+  assert.deepEqual(result.expectedSales, {total: 1.5, average: 1.5, months: 1});
+  assert.deepEqual(result.salesGap, {total: -5, average: -5, months: 1});
+  assert.deepEqual(result.demandYoY, {value: 1, months: 1});
+  assert.deepEqual(result.salesYoY, {value: 1, months: 1});
+  assert.deepEqual(result.lossesYoY, {value: -1, months: 1});
 });
 
 const source = (key, extra = {}) => ({key, url: `https://example.com/${key}`, sheetName: key, sheetId: 1, status: 'ready', readAt: '2026-11-05T00:00:00Z', fromMonth: '2026-01', toMonth: '2026-09', warnings: [], ...extra});

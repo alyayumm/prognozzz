@@ -2,7 +2,7 @@ import { ChevronDown, ExternalLink, RefreshCw, TriangleAlert } from "lucide-reac
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { loadDemandOutcomes, refreshDemandOutcomes, type DemandOutcomeSnapshot } from "../../api/demandOutcomesApi";
 import type { WordstatDemandRecord } from "../../api/wordstatApi";
-import { buildDemandComparison, moscowCurrentMonth, preserveDemandOutcomeSources, type Correlation, type DemandComparisonCity, type DemandComparisonMode } from "../../lib/demandComparison";
+import { buildDemandComparison, buildDemandComparisonAnnualSummary, moscowCurrentMonth, preserveDemandOutcomeSources, type Correlation, type DemandComparisonCity, type DemandComparisonMode } from "../../lib/demandComparison";
 import { MONTH_LABELS } from "../../lib/wordstatDemand";
 import DemandDynamics from "./DemandDynamics";
 import "./demandComparison.css";
@@ -30,6 +30,10 @@ function correlationText(value: Correlation) { return `r = ${value.r === null ? 
 function dateTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? "" : new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function AnnualMeanCell({ value, months, paired = false }: { value: number | null; months: number; paired?: boolean }) {
+  return <td>{paired ? percent(value) : decimal(value)}{months > 0 && <small>{months} {paired ? "общ. мес." : "мес."}</small>}</td>;
 }
 
 function ComparisonChart({ config }: { config: ChartConfiguration }) {
@@ -61,6 +65,7 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
   const yearId = useId();
   const modeId = useId();
   const tableHelpId = useId();
+  const annualHelpId = useId();
   const currentYear = Number(moscowCurrentMonth().slice(0, 4));
 
   useEffect(() => {
@@ -76,6 +81,7 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
   const years = useMemo(() => [...new Set([...demandRecords, ...outcomeRecords].map((row) => Number(row.month.slice(0, 4))).filter((year) => Number.isInteger(year) && year > 0 && year <= currentYear))].sort((a, b) => b - a), [demandRecords, outcomeRecords, currentYear]);
   const year = requestedYear ?? (years.includes(currentYear) ? currentYear : years[0] ?? currentYear);
   const comparison = useMemo(() => buildDemandComparison(demandRecords, outcomeRecords, { city, year, mode }), [demandRecords, outcomeRecords, city, year, mode]);
+  const annual = useMemo(() => buildDemandComparisonAnnualSummary(comparison.months), [comparison]);
   const summary = comparison.salesSummary;
   const lossRows = comparison.months.filter((row) => row.losses !== null);
   const lossCount = lossRows.length ? lossRows.reduce((sum, row) => sum + (row.losses as number), 0) : null;
@@ -147,7 +153,30 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
 
     <section className="demand-panel demand-comparison-data" aria-label="Месячные значения и источники">
       <div className="demand-comparison-heading"><h3>Помесячно</h3><p id={tableHelpId}>Спрос — запросы «автошкола», продажи — количество договоров, сливы — количество из сводки. «—» означает отсутствие данных, а 0 — подтверждённый ноль.</p></div>
-      <div className="demand-data-scroll demand-comparison-table" role="region" aria-label="Помесячные данные; таблицу можно прокручивать по горизонтали" aria-describedby={tableHelpId} tabIndex={0}><table><caption>{city === "Все" ? "Москва + Санкт-Петербург" : city === "МСК" ? "Москва" : "Санкт-Петербург"} · {year} и {year - 1}. Продажи и сливы показаны отдельно.</caption><thead><tr><th scope="col">Месяц</th><th scope="col">Спрос {year - 1}</th><th scope="col">Спрос {year}</th><th scope="col">Δ спроса</th><th scope="col">Продажи {year - 1}</th><th scope="col">Продажи {year}</th><th scope="col">Δ продаж</th><th scope="col">Модель продаж</th><th scope="col">Факт − модель</th><th scope="col">Сливы {year - 1}</th><th scope="col">Сливы {year}</th><th scope="col">Δ сливов</th></tr></thead><tbody>{comparison.months.map((row, index) => <tr key={row.month} className={row.complete ? "" : "demand-comparison-incomplete"}><th scope="row">{MONTH_NAMES[index]}{!row.complete && <small>Месяц не завершён</small>}</th><td>{count(row.previousDemand)}</td><td>{count(row.demand)}</td><td>{percent(row.demandYoY)}</td><td>{count(row.previousSales)}</td><td>{count(row.sales)}</td><td>{percent(row.salesYoY)}</td><td>{decimal(row.expectedSales)}</td><td>{decimal(row.salesGap)}</td><td>{count(row.previousLosses)}</td><td>{count(row.losses)}</td><td>{percent(row.lossesYoY)}</td></tr>)}</tbody></table></div>
+      <div className="demand-data-scroll demand-comparison-table" role="region" aria-label="Помесячные данные; таблицу можно прокручивать по горизонтали" aria-describedby={`${tableHelpId} ${annualHelpId}`} tabIndex={0}>
+        <table>
+          <caption>{city === "Все" ? "Москва + Санкт-Петербург" : city === "МСК" ? "Москва" : "Санкт-Петербург"} · {year} и {year - 1}. Продажи и сливы показаны отдельно.</caption>
+          <thead><tr><th scope="col">Месяц</th><th scope="col">Спрос {year - 1}</th><th scope="col">Спрос {year}</th><th scope="col">Δ спроса</th><th scope="col">Продажи {year - 1}</th><th scope="col">Продажи {year}</th><th scope="col">Δ продаж</th><th scope="col">Модель продаж</th><th scope="col">Факт − модель</th><th scope="col">Сливы {year - 1}</th><th scope="col">Сливы {year}</th><th scope="col">Δ сливов</th></tr></thead>
+          <tbody>{comparison.months.map((row, index) => <tr key={row.month} className={row.complete ? "" : "demand-comparison-incomplete"}><th scope="row">{MONTH_NAMES[index]}{!row.complete && <small>Месяц не завершён</small>}</th><td>{count(row.previousDemand)}</td><td>{count(row.demand)}</td><td>{percent(row.demandYoY)}</td><td>{count(row.previousSales)}</td><td>{count(row.sales)}</td><td>{percent(row.salesYoY)}</td><td>{decimal(row.expectedSales)}</td><td>{decimal(row.salesGap)}</td><td>{count(row.previousLosses)}</td><td>{count(row.losses)}</td><td>{percent(row.lossesYoY)}</td></tr>)}</tbody>
+          <tfoot className="demand-comparison-annual">
+            <tr>
+              <th scope="row">Среднее за месяц<small>По месяцам с данными</small></th>
+              <AnnualMeanCell value={annual.previousDemand.average} months={annual.previousDemand.months} />
+              <AnnualMeanCell value={annual.demand.average} months={annual.demand.months} />
+              <AnnualMeanCell value={annual.demandYoY.value} months={annual.demandYoY.months} paired />
+              <AnnualMeanCell value={annual.previousSales.average} months={annual.previousSales.months} />
+              <AnnualMeanCell value={annual.sales.average} months={annual.sales.months} />
+              <AnnualMeanCell value={annual.salesYoY.value} months={annual.salesYoY.months} paired />
+              <AnnualMeanCell value={annual.expectedSales.average} months={annual.expectedSales.months} />
+              <AnnualMeanCell value={annual.salesGap.average} months={annual.salesGap.months} />
+              <AnnualMeanCell value={annual.previousLosses.average} months={annual.previousLosses.months} />
+              <AnnualMeanCell value={annual.losses.average} months={annual.losses.months} />
+              <AnnualMeanCell value={annual.lossesYoY.value} months={annual.lossesYoY.months} paired />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p id={annualHelpId} className="demand-comparison-method-note">Среднее = сумма / число завершённых месяцев с данными; их количество указано под значением. Пропуски не входят в расчёт. Δ сравнивает средние на одинаковых месяцах двух лет. Модель и отклонение усредняются по своим доступным месяцам.</p>
       <details className="demand-comparison-provenance">
         <summary>Источники и правила расчёта<ChevronDown size={15} aria-hidden="true" /></summary>
         <ul>
