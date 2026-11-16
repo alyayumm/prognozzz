@@ -28,7 +28,7 @@ import {
   seedEvents,
 } from "./data/dashboardMock";
 import { callReportApi, getReportApiEndpoint } from "./api/reportApi";
-import { buildReportSyncPeriods, type ReportSyncPeriod } from "./api/reportSyncPeriods";
+import { buildReportSyncPeriods, getMainReportSyncFromDate, type ReportSyncPeriod } from "./api/reportSyncPeriods";
 import { loadPublicSheetSnapshot } from "./api/publicSheetApi";
 import { isEventMapEvent, mergeEventMapEvents } from "./api/eventMapApi";
 import DemandView from "./features/demand/DemandView";
@@ -812,7 +812,7 @@ export default function App() {
     }
   }
 
-  async function syncAmoCrmLeads(fromDate: string, toDate: string) {
+  async function syncAmoCrmLeads(fromDate: string, toDate: string, psFromDate?: string) {
     if (!apiConfigured) {
       setSavedMessage("amoCRM нельзя загрузить в локальном режиме: нужен Apps Script URL.");
       return;
@@ -829,12 +829,16 @@ export default function App() {
     let completedPeriods = 0;
     let lastCompletedPeriod: ReportSyncPeriod | null = null;
     let lastServerMessage = "";
+    const paymentPeriod = psFromDate ? { fromDate: psFromDate, toDate } : null;
+    let paymentRefreshStarted = false;
+    let paymentServerMessage = "";
     let snapshotReadStarted = false;
     const warnings = new Set<string>();
     const serverNote = () => {
       const last = lastCompletedPeriod && lastServerMessage ? ` Последний завершённый период ${periodLabel(lastCompletedPeriod)}: ${lastServerMessage}` : "";
-      const extraWarnings = [...warnings].filter((warning) => !lastServerMessage.includes(warning));
-      return last + (extraWarnings.length ? ` Предупреждения: ${extraWarnings.join(" | ")}` : "");
+      const payment = paymentPeriod && paymentServerMessage ? ` Оплаты ПС за ${periodLabel(paymentPeriod)}: ${paymentServerMessage}` : "";
+      const extraWarnings = [...warnings].filter((warning) => !lastServerMessage.includes(warning) && !paymentServerMessage.includes(warning));
+      return last + payment + (extraWarnings.length ? ` Предупреждения: ${extraWarnings.join(" | ")}` : "");
     };
 
     setIsSavingDaily(true);
@@ -847,6 +851,14 @@ export default function App() {
         completedPeriods += 1;
         lastCompletedPeriod = period;
         lastServerMessage = result.message || "";
+        if (result.status === "warning" && Array.isArray(result.warnings)) result.warnings.forEach((warning) => { if (warning) warnings.add(warning); });
+      }
+      if (paymentPeriod) {
+        paymentRefreshStarted = true;
+        setSavedMessage(`Обновляю оплаты ПС за ${periodLabel(paymentPeriod)}. amoCRM: завершено ${completedPeriods}/${periods.length} периодов.`);
+        const result = await callReportApi<{ status: "success" | "warning" | "error"; message?: string; warnings?: string[] }>("syncPsSales", paymentPeriod, writePassword);
+        if (result.status === "error") throw new Error(result.message || "Сервер не завершил обновление оплат ПС.");
+        paymentServerMessage = result.message || "Оплаты обновлены.";
         if (result.status === "warning" && Array.isArray(result.warnings)) result.warnings.forEach((warning) => { if (warning) warnings.add(warning); });
       }
       snapshotReadStarted = true;
@@ -862,7 +874,8 @@ export default function App() {
         } catch (readError) {
           readMessage = ` Уже сохранённые данные пока не перечитаны: ${getErrorMessage(readError)}.`;
         }
-        setSavedMessage(`Обновление остановлено на периоде ${periodLabel(activePeriod)}: ${getErrorMessage(error)}. Успешно завершено ${completedPeriods}/${periods.length} периодов.${readMessage}${serverNote()}`);
+        const failedStep = paymentRefreshStarted && paymentPeriod ? `оплатах ПС за период ${periodLabel(paymentPeriod)}` : `периоде ${periodLabel(activePeriod)}`;
+        setSavedMessage(`Обновление остановлено на ${failedStep}: ${getErrorMessage(error)}. Успешно завершено ${completedPeriods}/${periods.length} периодов amoCRM.${readMessage}${serverNote()}`);
       }
       throw error;
     } finally {
@@ -1020,7 +1033,9 @@ export default function App() {
           onExport={printCurrentPage}
           onRefreshAmo={["allMonths", "month", "monthDaily", "week"].includes(mode) ? () => {
             const toDate = getSalesDepartmentSyncToDate(selectedMonthConfig);
-            if (toDate) void syncAmoCrmLeads(`${selectedMonthConfig.monthKey}-01`, toDate).catch(() => {
+            const todayIso = getTodayIso();
+            const psFromDate = selectedMonthConfig.monthKey === todayIso.slice(0, 7) ? `${selectedMonthConfig.monthKey}-01` : undefined;
+            if (toDate) void syncAmoCrmLeads(getMainReportSyncFromDate(selectedMonthConfig.monthKey, toDate, currentMonthAllRecords, todayIso), toDate, psFromDate).catch(() => {
               // The shared notice displays the import error.
             });
           } : undefined}

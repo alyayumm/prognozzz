@@ -6,7 +6,57 @@ import ts from 'typescript';
 
 const source = readFileSync(new URL('../src/api/reportSyncPeriods.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-const { buildReportSyncPeriods } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+const { buildReportSyncPeriods, getMainReportSyncFromDate } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+
+function confirmedRecords(through = 12) {
+  return Array.from({ length: through }, (_, index) => `2026-11-${String(index + 1).padStart(2, '0')}`)
+    .flatMap(date => ['МСК', 'СПБ'].flatMap(city => [
+      { date, city, channel: 'Город', metric: 'Лиды', fact: 0, comment: 'amoCRM [AMO_LEADS_ALL=1]' },
+      { date, city, channel: 'Город', metric: 'Квалы', fact: 0 },
+      { date, city, channel: 'Город', metric: 'Продажи', fact: 0, trafficSales: 0 },
+    ]));
+}
+
+test('current-month catch-up rechecks the latest confirmed day before loading missing dates', () => {
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', confirmedRecords(), '2026-11-16'), '2026-11-12');
+});
+
+test('a lagging city or an earlier hole cannot be hidden by a later confirmed day', () => {
+  const cityBehind = confirmedRecords().filter(record => !(record.city === 'СПБ' && record.date > '2026-11-10'));
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', cityBehind, '2026-11-16'), '2026-11-10');
+  const hole = confirmedRecords(16).filter(record => !(record.city === 'МСК' && record.date === '2026-11-05' && record.metric === 'Квалы'));
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', hole, '2026-11-16'), '2026-11-04');
+});
+
+test('planned rows, manual facts and source rows never confirm city imports', () => {
+  const planned = confirmedRecords(16).map(record => ({ ...record, comment: '' }));
+  const otherChannels = confirmedRecords(16).flatMap(record => [
+    { ...record, channel: 'Ручная корректировка' }, { ...record, channel: 'Источник', city: 'источники' },
+  ]);
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', [...planned, ...otherChannels], '2026-11-16'), '2026-11-01');
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', [], '2026-11-16'), '2026-11-01');
+});
+
+test('missing qualification or blank traffic sales remains unconfirmed but imported zeros are valid', () => {
+  for (const invalid of [undefined, '', null, NaN, -1]) {
+    const records = confirmedRecords(16).map(record => record.date === '2026-11-08' && record.city === 'СПБ' && record.metric === 'Продажи'
+      ? { ...record, trafficSales: invalid } : record);
+    assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', records, '2026-11-16'), '2026-11-07');
+  }
+  const missingFact = confirmedRecords(16).map(record => record.date === '2026-11-08' && record.city === 'МСК' && record.metric === 'Квалы'
+    ? { ...record, fact: undefined } : record);
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', missingFact, '2026-11-16'), '2026-11-07');
+});
+
+test('today is always refreshed and the last complete day is rechecked even when all rows exist', () => {
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-16', confirmedRecords(16), '2026-11-16'), '2026-11-15');
+  assert.equal(getMainReportSyncFromDate('2026-11', '2026-11-01', confirmedRecords(), '2026-11-01'), '2026-11-01');
+});
+
+test('a closed-month main refresh keeps the complete month instead of applying catch-up', () => {
+  const october = confirmedRecords(16).map(record => ({ ...record, date: record.date.replace('2026-11', '2026-10') }));
+  assert.equal(getMainReportSyncFromDate('2026-10', '2026-10-31', october, '2026-11-16'), '2026-10-01');
+});
 
 test('single days and exact two-day periods retain inclusive boundaries', () => {
   assert.deepEqual(buildReportSyncPeriods('2026-10-01', '2026-10-01'), [{ fromDate: '2026-10-01', toDate: '2026-10-01' }]);
@@ -62,12 +112,31 @@ const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8
 const appTree = ts.createSourceFile('App.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let syncDeclaration;
 let syncEndDeclaration;
+let mainRefreshExpression;
 function visit(node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'syncAmoCrmLeads') syncDeclaration = node.getText(appTree);
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'getSalesDepartmentSyncToDate') syncEndDeclaration = node.getText(appTree);
+  if (ts.isJsxAttribute(node) && node.name.getText(appTree) === 'onRefreshAmo' && node.initializer && ts.isJsxExpression(node.initializer)) mainRefreshExpression = node.initializer.expression.getText(appTree);
   ts.forEachChild(node, visit);
 }
 visit(appTree);
+
+test('the actual main refresh button catches up both cities from shared records, retaining closed-month refreshes', async () => {
+  const js = ts.transpileModule(`const handler = ${mainRefreshExpression}; handler;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  for (const [monthKey, expected] of [['2026-11', '2026-11-12'], ['2026-10', '2026-10-01']]) {
+    const calls = [];
+    const handler = runInNewContext(js, {
+      mode: 'month', selectedMonthConfig: { monthKey }, currentMonthAllRecords: confirmedRecords(),
+      getTodayIso: () => '2026-11-16', getMainReportSyncFromDate,
+      getSalesDepartmentSyncToDate: () => monthKey === '2026-11' ? '2026-11-16' : '2026-10-31',
+      syncAmoCrmLeads: async (fromDate, toDate, psFromDate) => { calls.push({ fromDate, toDate, psFromDate }); },
+    });
+    await handler();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].fromDate, expected);
+    assert.equal(calls[0].psFromDate, monthKey === '2026-11' ? '2026-11-01' : undefined);
+  }
+});
 const syncJs = ts.transpileModule(syncDeclaration, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness(api, refresh = async () => {}) {
   const messages = [];
@@ -80,6 +149,55 @@ function harness(api, refresh = async () => {}) {
   });
   return { sync, messages, loading };
 }
+
+test('current-month catch-up refreshes all month payments after the amo intervals and before the final snapshot', async () => {
+  const calls = [];
+  const h = harness(async (action, period, password) => {
+    calls.push({ action, ...period, password });
+    return action === 'syncPsSales'
+      ? { status: 'warning', message: 'PS month refreshed', warnings: ['PS payments pending today'] }
+      : { status: 'success', message: 'AMO interval refreshed' };
+  }, async () => calls.push('read'));
+  await h.sync('2026-11-12', '2026-11-15', '2026-11-01');
+  assert.deepEqual(calls, [
+    { action: 'syncAmoCrmLeads', fromDate: '2026-11-12', toDate: '2026-11-13', password: 'test-password' },
+    { action: 'syncAmoCrmLeads', fromDate: '2026-11-14', toDate: '2026-11-15', password: 'test-password' },
+    { action: 'syncPsSales', fromDate: '2026-11-01', toDate: '2026-11-15', password: 'test-password' }, 'read',
+  ]);
+  assert.match(h.messages.at(-1), /PS month refreshed/);
+  assert.match(h.messages.at(-1), /PS payments pending today/);
+});
+
+test('an unsuccessful full-month payment refresh is named separately and rereads saved facts without retrying', async () => {
+  for (const failure of ['error result', 'timeout']) {
+    const calls = [];
+    const h = harness(async (action, period) => {
+      calls.push({ action, ...period });
+      if (action === 'syncPsSales') {
+        if (failure === 'timeout') throw new Error('PS timeout');
+        return { status: 'error', message: 'PS unavailable' };
+      }
+      return { status: 'success' };
+    }, async () => calls.push('read'));
+    await assert.rejects(h.sync('2026-11-14', '2026-11-15', '2026-11-01'), /PS timeout|PS unavailable/);
+    assert.deepEqual(calls, [
+      { action: 'syncAmoCrmLeads', fromDate: '2026-11-14', toDate: '2026-11-15' },
+      { action: 'syncPsSales', fromDate: '2026-11-01', toDate: '2026-11-15' }, 'read',
+    ]);
+    assert.match(h.messages.at(-1), /ПС.*01\.11.*15\.11/);
+    assert.match(h.messages.at(-1), /не заверш|останов/);
+    assert.match(h.messages.at(-1), /сохранённые данные перечитаны/);
+    assert.doesNotMatch(h.messages.at(-1), /обновлён и перечитан/);
+    assert.deepEqual(h.loading, [true, false]);
+  }
+});
+
+test('a failed amo interval prevents the optional full-month payment refresh', async () => {
+  const calls = [];
+  const h = harness(async action => { calls.push(action); throw new Error('AMO timeout'); }, async () => calls.push('read'));
+  await assert.rejects(h.sync('2026-11-12', '2026-11-16', '2026-11-01'), /AMO timeout/);
+  assert.deepEqual(calls, ['syncAmoCrmLeads', 'read']);
+});
 
 test('the actual refresh waits for each interval, keeps credentials and reads the report once after all writes', async () => {
   let releaseFirst;
