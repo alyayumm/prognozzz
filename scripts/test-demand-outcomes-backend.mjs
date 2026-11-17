@@ -199,6 +199,17 @@ test('native two-digit Russian year headers match the supplied SVOD layout', () 
   assert.deepEqual(series(result, 'examGroups').map(row => [row.month, row.count]), [['2023-06', 5], ['2023-07', 0], ['2026-10', 339]]);
 });
 
+test('space-only source cells are missing, not invalid counts or manufactured zero months', () => {
+  const f = fixture();
+  f.blocks.examGroups[93][3] = ' ';
+  f.blocks.examGroups[0][7] = 'Сентябрь 2026';
+  f.blocks.examGroups[93][7] = '   ';
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(sourceState(result, 'examGroups').status, 'ready');
+  assert.equal(series(result, 'examGroups').find(row => row.month === '2023-06').count, 5);
+  assert.equal(series(result, 'examGroups').some(row => row.month === '2026-09'), false);
+});
+
 test('exam group provenance supports AA October and added months through the bounded AW column', () => {
   const f = fixture();
   for (let row = 0; row < 181; row += 1) {

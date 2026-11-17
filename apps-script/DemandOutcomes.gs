@@ -112,6 +112,7 @@ function demandOutcomesReadExamGroups_(sheet) {
   }
   const records = [];
   const months = Object.create(null);
+  const optionalCount = (value) => typeof value === 'string' && !value.trim() ? null : demandOutcomesOptionalCount_(value);
   for (let column = 3; column < 49; column += 1) {
     const header = demandOutcomesText_(values[0][column]);
     if (!header || header === 'среднее') continue;
@@ -122,9 +123,9 @@ function demandOutcomesReadExamGroups_(sheet) {
     const month = year + '-' + String(monthIndex + 1).padStart(2, '0');
     if (months[month]) throw demandOutcomesSafeError_('Группы ГИБДД СПб: месяц повторяется в СВОД. Сохранённые данные не заменены.');
     months[month] = true;
-    const counts = values.slice(1, 180).map((row) => demandOutcomesOptionalCount_(row[column]));
+    const counts = values.slice(1, 180).map((row) => optionalCount(row[column]));
     const observed = counts.filter((count) => count !== null);
-    const declaredTotal = demandOutcomesOptionalCount_(values[180][column]);
+    const declaredTotal = optionalCount(values[180][column]);
     // An entirely empty month is unreported, whereas an explicit school zero is observed.
     if (!observed.length) {
       if (declaredTotal !== null) throw demandOutcomesSafeError_('Группы ГИБДД СПб: итог месяца есть без исходных строк школ. Сохранённые данные не заменены.');
