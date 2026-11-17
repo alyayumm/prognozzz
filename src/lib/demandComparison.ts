@@ -16,9 +16,12 @@ export interface DemandComparisonMonth {
   previousSales: Count;
   losses: Count;
   previousLosses: Count;
+  examGroups: Count;
+  previousExamGroups: Count;
   demandYoY: Count;
   salesYoY: Count;
   lossesYoY: Count;
+  examGroupsYoY: Count;
   expectedSales: Count;
   salesGap: Count;
   plotDemand: Count;
@@ -49,12 +52,13 @@ export interface DemandComparisonAnnualGrowth {
   months: number;
 }
 
-type AnnualMetricKey = "previousDemand" | "demand" | "previousSales" | "sales" | "previousLosses" | "losses" | "expectedSales" | "salesGap";
+type AnnualMetricKey = "previousDemand" | "demand" | "previousSales" | "sales" | "previousLosses" | "losses" | "previousExamGroups" | "examGroups" | "expectedSales" | "salesGap";
 
 export type DemandComparisonAnnualSummary = Record<AnnualMetricKey, DemandComparisonAnnualMetric> & {
   demandYoY: DemandComparisonAnnualGrowth;
   salesYoY: DemandComparisonAnnualGrowth;
   lossesYoY: DemandComparisonAnnualGrowth;
+  examGroupsYoY: DemandComparisonAnnualGrowth;
 };
 
 export type Correlation = { n: number; r: number | null };
@@ -72,7 +76,8 @@ export function preserveDemandOutcomeSources(previous: DemandOutcomeSnapshot | n
     const nextTimestamp = Date.parse(source.readAt);
     const olderCache = source.status === "cached" && Number.isFinite(priorTimestamp) && (!Number.isFinite(nextTimestamp) || priorTimestamp > nextTimestamp);
     if (source.status !== "error" && !olderCache) return source;
-    const warning = `${source.key === "sales" ? "Продажи" : "Сливы"}: ${olderCache ? "серверный кеш старее; сохранена более свежая последняя успешная выгрузка" : "источник сейчас недоступен; показана последняя успешная выгрузка"}.`;
+    const label = source.key === "sales" ? "Продажи" : source.key === "examGroups" ? "Группы ГИБДД" : "Сливы";
+    const warning = `${label}: ${olderCache ? "серверный кеш старее; сохранена более свежая последняя успешная выгрузка" : "источник сейчас недоступен; показана последняя успешная выгрузка"}.`;
     fallbackWarnings.push(warning);
     records = [...records.filter((record) => record.metric !== source.key), ...priorRecords];
     return { ...priorSource, status: "cached" as const, warnings: [...new Set([...priorSource.warnings, ...source.warnings, warning])] };
@@ -102,7 +107,7 @@ export function buildDemandComparisonAnnualSummary(months: readonly DemandCompar
     const total = values.length ? values.reduce((sum, value) => sum + value, 0) : null;
     return { total, average: total === null ? null : total / values.length, months: values.length };
   };
-  const growth = (current: "demand" | "sales" | "losses", previous: "previousDemand" | "previousSales" | "previousLosses"): DemandComparisonAnnualGrowth => {
+  const growth = (current: "demand" | "sales" | "losses" | "examGroups", previous: "previousDemand" | "previousSales" | "previousLosses" | "previousExamGroups"): DemandComparisonAnnualGrowth => {
     const pairs = completed.flatMap((row): [number, number][] => {
       const currentValue = row[current];
       const previousValue = row[previous];
@@ -116,8 +121,10 @@ export function buildDemandComparisonAnnualSummary(months: readonly DemandCompar
     previousDemand: aggregate("previousDemand"), demand: aggregate("demand"),
     previousSales: aggregate("previousSales"), sales: aggregate("sales"),
     previousLosses: aggregate("previousLosses"), losses: aggregate("losses"),
+    previousExamGroups: aggregate("previousExamGroups"), examGroups: aggregate("examGroups"),
     expectedSales: aggregate("expectedSales"), salesGap: aggregate("salesGap"),
     demandYoY: growth("demand", "previousDemand"), salesYoY: growth("sales", "previousSales"), lossesYoY: growth("losses", "previousLosses"),
+    examGroupsYoY: growth("examGroups", "previousExamGroups"),
   };
 }
 
@@ -177,7 +184,9 @@ export function buildDemandComparison(
   const demandAt = (month: string): Count => city === "Все"
     ? combined(demandCities.get("МСК")?.get(month) ?? null, demandCities.get("СПБ")?.get(month) ?? null)
     : demandCities.get(city)?.get(month) ?? null;
-  const outcomeAt = (metric: "sales" | "losses", month: string): Count => {
+  const outcomeAt = (metric: "sales" | "losses" | "examGroups", month: string): Count => {
+    // This source describes SPB only; it is not a combined-city total.
+    if (metric === "examGroups") return city === "СПБ" ? outcomes.get(`examGroups|СПБ|${month}`) ?? null : null;
     // The all-city summary is authoritative and may differ from the city breakdown.
     if (metric === "losses") return outcomes.get(`losses|${city}|${month}`) ?? null;
     return city === "Все" ? combined(outcomes.get(`sales|МСК|${month}`) ?? null, outcomes.get(`sales|СПБ|${month}`) ?? null) : outcomes.get(`sales|${city}|${month}`) ?? null;
@@ -201,10 +210,13 @@ export function buildDemandComparison(
     const previousDemand = complete ? demandAt(previous) : null;
     const previousSales = complete ? outcomeAt("sales", previous) : null;
     const previousLosses = complete ? outcomeAt("losses", previous) : null;
+    const examGroups = complete ? outcomeAt("examGroups", month) : null;
+    const previousExamGroups = complete ? outcomeAt("examGroups", previous) : null;
     const expectedSales = demand === null || previousDemand === null || previousDemand === 0 || previousSales === null ? null : previousSales * demand / previousDemand;
     return {
-      month, label, complete, demand, previousDemand, sales, previousSales, losses, previousLosses,
+      month, label, complete, demand, previousDemand, sales, previousSales, losses, previousLosses, examGroups, previousExamGroups,
       demandYoY: change(demand, previousDemand), salesYoY: change(sales, previousSales), lossesYoY: change(losses, previousLosses), expectedSales,
+      examGroupsYoY: change(examGroups, previousExamGroups),
       salesGap: sales === null || expectedSales === null ? null : sales - expectedSales,
       plotDemand: null, plotSales: null, plotLosses: null,
     };

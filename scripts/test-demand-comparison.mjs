@@ -8,6 +8,24 @@ const demand = (month, count, city = 'МСК') => ({ month, count, city, regionI
 const outcome = (month, count, metric = 'sales', city = 'МСК') => ({ month, count, metric, city, sourceRow: 1, sourceColumn: 'B' });
 const model = (d, o, extra = {}) => buildDemandComparison(d, o, { city: 'МСК', year: 2026, mode: 'yoy', now, ...extra });
 
+test('SPB exam groups preserve sparse months and cannot become an all-city or Moscow total', () => {
+  const groups = [outcome('2025-06', 270, 'examGroups', 'СПБ'), outcome('2026-06', 262, 'examGroups', 'СПБ'),
+    outcome('2026-08', 0, 'examGroups', 'СПБ'), outcome('2026-10', 339, 'examGroups', 'СПБ'), outcome('2026-11', 145, 'examGroups', 'СПБ')];
+  const result = model([], groups, { city: 'СПБ' });
+  assert.equal(result.months[5].examGroups, 262);
+  assert.equal(result.months[5].previousExamGroups, 270);
+  assert.ok(Math.abs(result.months[5].examGroupsYoY - (262 / 270 - 1)) < 1e-12);
+  assert.equal(result.months[6].examGroups, null);
+  assert.equal(result.months[7].examGroups, 0);
+  assert.equal(result.months[9].examGroups, 339);
+  assert.equal(result.months[10].examGroups, null, 'unfinished November is excluded');
+  const annual = buildDemandComparisonAnnualSummary(result.months);
+  assert.equal(annual.examGroups.months, 3);
+  assert.equal(annual.examGroups.average, 601 / 3);
+  assert.equal(annual.examGroupsYoY.months, 1);
+  for (const city of ['Все', 'МСК']) assert.ok(model([], groups, { city }).months.every(row => row.examGroups === null));
+});
+
 test('an 18% demand decrease gives an explicit sales scenario, keeping losses separate', () => {
   const row = model([demand('2025-01', 100), demand('2026-01', 82)], [outcome('2025-01', 50), outcome('2026-01', 45), outcome('2026-01', 12, 'losses', 'Все')]).months[0];
   assert.ok(Math.abs(row.demandYoY + 0.18) < 1e-10);

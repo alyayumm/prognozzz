@@ -3,7 +3,7 @@ import type { WordstatDemandRecord } from "../api/wordstatApi";
 import { buildDemandComparison, moscowCurrentMonth, type DemandComparisonCity, type DemandComparisonMonth } from "./demandComparison";
 import { MONTH_LABELS } from "./wordstatDemand";
 
-export type DemandDynamicsMetric = "salesRatio" | "lossesRatio" | "salesCount" | "lossesCount" | "demandCount";
+export type DemandDynamicsMetric = "salesRatio" | "lossesRatio" | "salesCount" | "lossesCount" | "demandCount" | "examGroupsCount";
 
 export interface DemandDynamicsPoint {
   month: string;
@@ -12,6 +12,7 @@ export interface DemandDynamicsPoint {
   demand: number | null;
   sales: number | null;
   losses: number | null;
+  examGroups: number | null;
   salesRatio: number | null;
   lossesRatio: number | null;
   value: number | null;
@@ -37,6 +38,7 @@ export interface DemandDynamicsYearTotals {
   demand: DemandDynamicsTotal;
   sales: DemandDynamicsTotal;
   losses: DemandDynamicsTotal;
+  examGroups: DemandDynamicsTotal;
   salesRatio: DemandDynamicsRatioTotal;
   lossesRatio: DemandDynamicsRatioTotal;
 }
@@ -65,7 +67,7 @@ export function formatDemandDynamicsCoverage(months: readonly string[]): string 
 
 function summarizeYear(points: readonly DemandDynamicsPoint[]): DemandDynamicsYearTotals {
   const completed = points.filter((point) => point.complete);
-  const total = (key: "demand" | "sales" | "losses"): DemandDynamicsTotal => {
+  const total = (key: "demand" | "sales" | "losses" | "examGroups"): DemandDynamicsTotal => {
     const observed = completed.filter((point) => point[key] !== null);
     return { value: observed.length ? observed.reduce((sum, point) => sum + (point[key] as number), 0) : null, months: observed.map((point) => point.month) };
   };
@@ -76,7 +78,7 @@ function summarizeYear(points: readonly DemandDynamicsPoint[]): DemandDynamicsYe
     const denominator = aligned.length ? aligned.reduce((sum, point) => sum + (point.demand as number), 0) : null;
     return { value: ratio(numerator, denominator), numerator, denominator, months: aligned.map((point) => point.month) };
   };
-  return { demand: total("demand"), sales: total("sales"), losses: total("losses"), salesRatio: ratioTotal("sales"), lossesRatio: ratioTotal("losses") };
+  return { demand: total("demand"), sales: total("sales"), losses: total("losses"), examGroups: total("examGroups"), salesRatio: ratioTotal("sales"), lossesRatio: ratioTotal("losses") };
 }
 
 /** Compare calendar years using the same city, source and missing-data rules as the monthly comparison. */
@@ -105,7 +107,7 @@ export function buildDemandDynamics(
     if (validYear(year) && year <= currentYear) candidateYears.add(year);
   }
   const availableYears = [...candidateYears].sort((a, b) => a - b).filter((year) => monthsFor(year)
-    .some((row) => row.demand !== null || row.sales !== null || row.losses !== null));
+    .some((row) => row.demand !== null || row.sales !== null || row.losses !== null || row.examGroups !== null));
   const years = [...new Set(options.years.filter(validYear))].sort((a, b) => a - b);
   const series = years.map((year): DemandDynamicsSeries => {
     const points = monthsFor(year).map((row): DemandDynamicsPoint => {
@@ -113,10 +115,11 @@ export function buildDemandDynamics(
       const lossesRatio = ratio(row.losses, row.demand);
       const values: Record<DemandDynamicsMetric, number | null> = {
         salesRatio, lossesRatio, salesCount: row.sales, lossesCount: row.losses, demandCount: row.demand,
+        examGroupsCount: row.examGroups,
       };
       return {
         month: row.month, label: row.label, complete: row.complete,
-        demand: row.demand, sales: row.sales, losses: row.losses,
+        demand: row.demand, sales: row.sales, losses: row.losses, examGroups: row.examGroups,
         salesRatio, lossesRatio, value: values[options.metric],
       };
     });

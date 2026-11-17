@@ -9,6 +9,20 @@ const outcome = (month, count, metric = 'sales', city = 'МСК') => ({ month, c
 const model = (d, o, options = {}) => buildDemandDynamics(d, o, { city: 'МСК', years: [2026], metric: 'salesRatio', now, ...options });
 const point = (result, year, monthIndex = 0) => result.series.find(series => series.year === year).points[monthIndex];
 
+test('exam-group curves use independent SPB counts and observed-month annual coverage', () => {
+  const groups = [outcome('2023-06', 300, 'examGroups', 'СПБ'), outcome('2026-02', 263, 'examGroups', 'СПБ'),
+    outcome('2026-08', 323, 'examGroups', 'СПБ'), outcome('2026-10', 339, 'examGroups', 'СПБ')];
+  const result = model([], groups, { city: 'СПБ', years: [2023, 2026], metric: 'examGroupsCount' });
+  assert.deepEqual(result.availableYears, [2023, 2026]);
+  assert.equal(point(result, 2026, 9).value, 339);
+  assert.equal(point(result, 2026, 8).value, null);
+  assert.equal(point(result, 2026, 9).sales, null, 'groups do not become sales');
+  const total = result.series.at(-1).totals.examGroups;
+  assert.equal(total.value, 925);
+  assert.deepEqual(total.months, ['2026-02', '2026-08', '2026-10']);
+  assert.deepEqual(model([], groups, { city: 'Все' }).availableYears, []);
+});
+
 test('multiple years align on twelve static month labels with sorted duplicate-free year series', () => {
   const records = [demand('2025-01', 200), demand('2026-01', 100), demand('2026-02', 50)];
   const outcomes = [outcome('2025-01', 40), outcome('2026-01', 30), outcome('2026-02', 25)];

@@ -66,3 +66,36 @@ test('city breakdown metadata rejects an unapproved destination', async () => {
   value.sources[1].breakdown = { url: 'javascript:alert(1)', sheetName: 'Распределение потока', sheetId: 105, fromMonth: '2025-11', toMonth: '2026-08' };
   await assert.rejects(api(async () => value).loadDemandOutcomes(), /неизвестного формата/);
 });
+
+const withExamGroups = () => {
+  const value = snapshot();
+  value.sources.push({ key: 'examGroups', url: 'https://docs.google.com/spreadsheets/d/1ZPbHfKN6smZKKRqPa-pqjYqf1U9pzUi1YLYhy_5wsnQ/edit?gid=522389953',
+    sheetName: 'СВОД', sheetId: 522389953, status: 'ready', readAt: '2026-11-17T08:00:00Z', fromMonth: '2023-06', toMonth: '2026-10', warnings: [] });
+  value.records.push({ month: '2026-10', city: 'СПБ', metric: 'examGroups', count: 339, sourceRow: 2, sourceColumn: 'AA' });
+  return value;
+};
+
+test('new clients opt into SPB exam groups while accepting a legacy two-source backend', async () => {
+  const calls = [];
+  const client = api(async (...args) => { calls.push(args); return calls.length === 1 ? snapshot() : withExamGroups(); });
+  assert.equal((await client.loadDemandOutcomes()).sources.length, 2);
+  assert.equal((await client.refreshDemandOutcomes('test')).records.at(-1).count, 339);
+  assert.equal(calls[0][1].includeExamGroups, true);
+  assert.equal(calls[1][1].includeExamGroups, true);
+});
+
+test('exam groups require their approved source, aggregate start row and SPB scope', async () => {
+  for (const mutate of [
+    value => { value.records.at(-1).city = 'Все'; },
+    value => { value.records.at(-1).city = 'МСК'; },
+    value => { value.records.at(-1).sourceRow = 181; },
+    value => { value.records.at(-1).sourceColumn = 'AX'; },
+    value => { value.sources.at(-1).sheetId = 0; },
+    value => { value.sources.at(-1).url = 'https://example.com/'; },
+    value => { value.sources.pop(); },
+    value => { value.sources[0] = value.sources[2]; },
+  ]) {
+    const value = withExamGroups(); mutate(value);
+    await assert.rejects(api(async () => value).loadDemandOutcomes(), /неизвестного формата/);
+  }
+});

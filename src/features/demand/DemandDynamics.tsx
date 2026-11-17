@@ -14,11 +14,12 @@ const METRICS: Record<DemandDynamicsMetric, { label: string; unit: string; ratio
   salesCount: { label: "Продажи, количество", unit: "Продажи, шт.", ratio: false },
   lossesCount: { label: "Сливы, количество", unit: "Сливы, шт.", ratio: false },
   demandCount: { label: "Спрос Wordstat, запросы", unit: "Спрос, запросов", ratio: false },
+  examGroupsCount: { label: "Группы ГИБДД · практика, кат. B", unit: "Группы ГИБДД · практика, шт.", ratio: false },
 };
 const YEAR_COLORS = ["#1c46f5", "#087b79", "#8645b0", "#b74b35", "#8b6509", "#475b82", "#9e397c", "#496e30", "#15708c"];
 const YEAR_DASHES = [undefined, "7 4", "2 3", "10 3 2 3", "4 3", "10 5", "8 3 2 3", "3 3", "12 4"];
 const FULL_MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
-const ANNUAL_METRICS = [["demand", "Спрос, запросов"], ["sales", "Продажи, шт."], ["losses", "Сливы, шт."], ["salesRatio", "Продажи / спрос"], ["lossesRatio", "Сливы / спрос"]] as const;
+const ANNUAL_METRICS = [["demand", "Спрос, запросов"], ["sales", "Продажи, шт."], ["losses", "Сливы, шт."], ["salesRatio", "Продажи / спрос"], ["lossesRatio", "Сливы / спрос"], ["examGroups", "Группы ГИБДД · практика"]] as const;
 const countFormat = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
 const ratioFormat = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 2 });
 const axisCountFormat = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 });
@@ -39,7 +40,9 @@ function chartScale(values: number[], isRatio: boolean) {
 }
 
 export default function DemandDynamics({ demandRecords, outcomeRecords, city }: Props) {
-  const [metric, setMetric] = useState<DemandDynamicsMetric>("salesRatio");
+  const [requestedMetric, setMetric] = useState<DemandDynamicsMetric>("salesRatio");
+  const showExamGroups = city === "СПБ";
+  const metric = !showExamGroups && requestedMetric === "examGroupsCount" ? "salesRatio" : requestedMetric;
   const [chartType, setChartType] = useState<ChartType>("line");
   const [requestedYears, setRequestedYears] = useState<number[] | null>(null);
   const [requestedMonth, setRequestedMonth] = useState<number | null>(null);
@@ -101,11 +104,11 @@ export default function DemandDynamics({ demandRecords, outcomeRecords, city }: 
     monthTargets.current[next]?.focus();
   }
 
-  return <section className="demand-panel demand-dynamics" aria-labelledby={`${id}-heading`}>
+  return <section className={`demand-panel demand-dynamics${showExamGroups ? " demand-dynamics-with-exam-groups" : ""}`} aria-labelledby={`${id}-heading`}>
     <div className="demand-dynamics-heading">
-      <div><h3 id={`${id}-heading`}>Продажи и сливы относительно спроса</h3><p>{cityName}. Один год — одна линия или группа столбиков, месяцы всегда с января по декабрь.</p></div>
+      <div><h3 id={`${id}-heading`}>{showExamGroups ? "Спрос, продажи, сливы и группы ГИБДД" : "Продажи и сливы относительно спроса"}</h3><p>{cityName}. Один год — одна линия или группа столбиков, месяцы всегда с января по декабрь.</p></div>
       <div className="demand-dynamics-controls">
-        <label htmlFor={`${id}-metric`}>Показатель<select id={`${id}-metric`} value={metric} onChange={(event) => setMetric(event.target.value as DemandDynamicsMetric)}>{Object.entries(METRICS).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
+        <label htmlFor={`${id}-metric`}>Показатель<select id={`${id}-metric`} value={metric} onChange={(event) => setMetric(event.target.value as DemandDynamicsMetric)}>{Object.entries(METRICS).filter(([key]) => showExamGroups || key !== "examGroupsCount").map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label>
         <label htmlFor={`${id}-type`}>График<select id={`${id}-type`} value={chartType} onChange={(event) => setChartType(event.target.value as ChartType)}><option value="line">Линии</option><option value="bar">Столбики</option></select></label>
       </div>
     </div>
@@ -143,12 +146,12 @@ export default function DemandDynamics({ demandRecords, outcomeRecords, city }: 
     </div>
 
     <div className="demand-dynamics-month-control"><label htmlFor={`${id}-month`}>Показатели за месяц<select id={`${id}-month`} value={activeMonth} onChange={(event) => setRequestedMonth(Number(event.target.value))}>{FULL_MONTHS.map((label, index) => <option value={index} key={label}>{label}</option>)}</select></label><p id={`${id}-month-help`}>Наведите на месяц, коснитесь графика или выберите месяц. На графике работают стрелки, Home и End.</p></div>
-    <div className="demand-dynamics-inspector" role="region" aria-label={`${FULL_MONTHS[activeMonth]}: спрос, продажи, сливы и отношения`}>
+    <div className="demand-dynamics-inspector" role="region" aria-label={`${FULL_MONTHS[activeMonth]}: спрос, продажи, сливы${showExamGroups ? ", группы ГИБДД" : ""} и отношения`}>
       {dynamics.series.map((series) => {
         const point = series.points[activeMonth];
         return <div className="demand-dynamics-inspector-year" key={series.year}>
           <strong><i aria-hidden="true" style={{ background: yearColor(series.year) }} />{series.year}</strong>
-          <dl><div><dt>Спрос, запросов</dt><dd>{count(point.demand)}</dd></div><div><dt>Продажи, шт.</dt><dd>{count(point.sales)}</dd></div><div><dt>Сливы, шт.</dt><dd>{count(point.losses)}</dd></div><div><dt>Продажи / спрос</dt><dd>{ratio(point.salesRatio)}</dd></div><div><dt>Сливы / спрос</dt><dd>{ratio(point.lossesRatio)}</dd></div></dl>
+          <dl><div><dt>Спрос, запросов</dt><dd>{count(point.demand)}</dd></div><div><dt>Продажи, шт.</dt><dd>{count(point.sales)}</dd></div><div><dt>Сливы, шт.</dt><dd>{count(point.losses)}</dd></div><div><dt>Продажи / спрос</dt><dd>{ratio(point.salesRatio)}</dd></div><div><dt>Сливы / спрос</dt><dd>{ratio(point.lossesRatio)}</dd></div>{showExamGroups && <div><dt>Группы ГИБДД · практика</dt><dd>{count(point.examGroups)}</dd></div>}</dl>
         </div>;
       })}
       {dynamics.series.length === 0 && <p>Выберите годы, чтобы увидеть значения за {FULL_MONTHS[activeMonth].toLowerCase()}.</p>}
@@ -158,7 +161,7 @@ export default function DemandDynamics({ demandRecords, outcomeRecords, city }: 
       <p>{cityName}. Суммы по доступным завершённым месяцам; период указан у каждого показателя.</p>
       {dynamics.series.map((series) => <div className="demand-dynamics-inspector-year" key={series.year}>
         <strong><i aria-hidden="true" style={{ background: yearColor(series.year) }} />{series.year}</strong>
-        <dl>{ANNUAL_METRICS.map(([key, label]) => {
+        <dl>{ANNUAL_METRICS.filter(([key]) => showExamGroups || key !== "examGroups").map(([key, label]) => {
           const total = series.totals[key];
           const ratioTotal = key === "salesRatio" || key === "lossesRatio" ? series.totals[key] : null;
           return <div key={key}>
@@ -171,6 +174,7 @@ export default function DemandDynamics({ demandRecords, outcomeRecords, city }: 
       {dynamics.series.length === 0 && <p>Выберите годы над графиком, чтобы увидеть итоги.</p>}
       <p className="demand-dynamics-annual-method">Для каждого отношения берутся суммы продаж или сливов и спроса только за общие месяцы. Месячные проценты не усредняются; продажи со сливами не складываются.</p>
     </section>
+    {showExamGroups && <p className="demand-dynamics-note">Группы ГИБДД · практика — сумма групп категории B по автошколам листа «СВОД». Это количество групп, а не учеников. Доступные месяцы могут идти с разрывами; пропуски не заполнены.</p>}
     <p className="demand-dynamics-note">Отношение = количество продаж или сливов / число запросов Wordstat × 100%. Это отношение к поисковому спросу, а не конверсия посетителей в продажу. Продажи и сливы показаны отдельно. «—» означает отсутствие данных, 0 — подтверждённый ноль; при нулевом спросе отношение не рассчитывается. Текущий и будущие месяцы не включены.</p>
   </section>;
 }

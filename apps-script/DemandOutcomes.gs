@@ -8,20 +8,26 @@ const DEMAND_OUTCOMES_SOURCES = [
   { key: 'losses', spreadsheetId: '1h0cg9NzgfhN_THJBrelCWeMEYMGCqbSoBMFpVAM01-M', sheetName: 'Сводка по месяцам', sheetId: 104 },
 ];
 const DEMAND_OUTCOMES_LOSS_BREAKDOWN = { sheetName: 'Распределение потока', sheetId: 105 };
+const DEMAND_OUTCOMES_EXAM_GROUPS = { key: 'examGroups', spreadsheetId: '1ZPbHfKN6smZKKRqPa-pqjYqf1U9pzUi1YLYhy_5wsnQ', sheetName: 'СВОД', sheetId: 522389953 };
+
+/** Keep the original two-source contract for clients that have not opted in. */
+function demandOutcomesSources_(payload) {
+  return payload && payload.includeExamGroups === true ? DEMAND_OUTCOMES_SOURCES.concat([DEMAND_OUTCOMES_EXAM_GROUPS]) : DEMAND_OUTCOMES_SOURCES;
+}
 
 function demandOutcomesNow_() { return new Date(); }
 
 /** Public reads do not create sheets, change properties, or persist source data. */
-function getDemandOutcomes_() {
-  return demandOutcomesSnapshot_(DEMAND_OUTCOMES_SOURCES.map(demandOutcomesReadSource_));
+function getDemandOutcomes_(payload) {
+  return demandOutcomesSnapshot_(demandOutcomesSources_(payload).map(demandOutcomesReadSource_));
 }
 
 /** The dispatcher requires the report password before calling this action. */
-function syncDemandOutcomes_() {
+function syncDemandOutcomes_(payload) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) throw demandOutcomesSafeError_('Сравнение спроса: обновление уже выполняется. Попробуйте позже.');
   try {
-    const results = DEMAND_OUTCOMES_SOURCES.map(demandOutcomesReadSource_);
+    const results = demandOutcomesSources_(payload).map(demandOutcomesReadSource_);
     const fresh = results.filter((result) => result.info.status === 'ready');
     if (fresh.length) demandOutcomesWriteCache_(fresh);
     return demandOutcomesSnapshot_(results);
@@ -40,12 +46,12 @@ function demandOutcomesReadSource_(source) {
     const sheet = demandOutcomesVerifiedSheet_(spreadsheet, source.sheetName, source.sheetId);
     records = source.key === 'sales'
       ? demandOutcomesReadSales_(sheet)
-      : demandOutcomesReadLosses_(spreadsheet, sheet, warnings);
+      : source.key === 'losses' ? demandOutcomesReadLosses_(spreadsheet, sheet, warnings) : demandOutcomesReadExamGroups_(sheet);
     records = demandOutcomesValidateRecords_(records, source);
     const readAt = demandOutcomesNow_().toISOString();
     return { source: source, records: records, info: demandOutcomesSourceInfo_(source, records, 'ready', readAt, warnings) };
   } catch (error) {
-    const label = source.key === 'sales' ? 'Договоры' : 'Сливы';
+    const label = source.key === 'sales' ? 'Договоры' : source.key === 'losses' ? 'Сливы' : 'Группы ГИБДД СПб';
     const message = error && error.demandOutcomesSafe ? error.message : label + ': исходная таблица временно недоступна. Проверьте доступ аккаунта отчёта к источнику.';
     try {
       const cached = demandOutcomesReadCache_(source);
@@ -95,6 +101,41 @@ function demandOutcomesReadSales_(sheet) {
   const moscow = records.filter((record) => record.city === 'МСК').map((record) => record.month).join('|');
   const petersburg = records.filter((record) => record.city === 'СПБ').map((record) => record.month).join('|');
   if (moscow !== petersburg) throw demandOutcomesSafeError_('Договоры: Москва и СПб содержат разные месяцы. Сохранённые данные не заменены.');
+  return records;
+}
+
+/** Aggregate category-B group counts from the supplied summary only; monthly sheets overlap it. */
+function demandOutcomesReadExamGroups_(sheet) {
+  const values = sheet.getRange('A1:AW181').getValues();
+  if (values.length !== 181 || ['конкурент', 'интересные', 'филиалы'].some((header, index) => demandOutcomesText_(values[0][index]) !== header)) {
+    throw demandOutcomesSafeError_('Группы ГИБДД СПб: изменилась структура листа СВОД. Сохранённые данные не заменены.');
+  }
+  const records = [];
+  const months = Object.create(null);
+  for (let column = 3; column < 49; column += 1) {
+    const header = demandOutcomesText_(values[0][column]);
+    if (!header || header === 'среднее') continue;
+    const match = /^([а-яё]+)\s+(20\d{2}|\d{2})$/.exec(header);
+    const monthIndex = match ? DEMAND_OUTCOMES_MONTHS.indexOf(match[1]) : -1;
+    if (monthIndex < 0) throw demandOutcomesSafeError_('Группы ГИБДД СПб: не распознан месяц в СВОД. Сохранённые данные не заменены.');
+    const year = match[2].length === 2 ? '20' + match[2] : match[2];
+    const month = year + '-' + String(monthIndex + 1).padStart(2, '0');
+    if (months[month]) throw demandOutcomesSafeError_('Группы ГИБДД СПб: месяц повторяется в СВОД. Сохранённые данные не заменены.');
+    months[month] = true;
+    const counts = values.slice(1, 180).map((row) => demandOutcomesOptionalCount_(row[column]));
+    const observed = counts.filter((count) => count !== null);
+    const declaredTotal = demandOutcomesOptionalCount_(values[180][column]);
+    // An entirely empty month is unreported, whereas an explicit school zero is observed.
+    if (!observed.length) {
+      if (declaredTotal !== null) throw demandOutcomesSafeError_('Группы ГИБДД СПб: итог месяца есть без исходных строк школ. Сохранённые данные не заменены.');
+      continue;
+    }
+    const total = demandOutcomesCount_(observed.reduce((sum, count) => sum + count, 0));
+    if (declaredTotal !== null && declaredTotal !== total) throw demandOutcomesSafeError_('Группы ГИБДД СПб: итог месяца не совпадает с суммой строк школ 2:180. Сохранённые данные не заменены.');
+    const sourceColumn = column < 26 ? String.fromCharCode(65 + column) : 'A' + String.fromCharCode(65 + column - 26);
+    // sourceRow identifies the start of the school range, not a fabricated total cell.
+    records.push({ month: month, city: 'СПБ', metric: 'examGroups', count: total, sourceRow: 2, sourceColumn: sourceColumn });
+  }
   return records;
 }
 
@@ -200,6 +241,7 @@ function demandOutcomesValidateRecords_(records, source) {
     const valid = /^20\d{2}-(0[1-9]|1[0-2])$/.test(record.month) && sourceRow >= 2
       && (source.key === 'sales'
         ? record.metric === 'sales' && (record.city === 'МСК' || record.city === 'СПБ') && /^[B-M]$/.test(record.sourceColumn) && sourceRow <= 18
+        : source.key === 'examGroups' ? record.metric === 'examGroups' && record.city === 'СПБ' && sourceRow === 2 && /^(?:[D-Z]|A[A-W])$/.test(record.sourceColumn)
         : record.metric === 'losses' && (record.city === 'Все'
           ? record.sourceColumn === 'D' && sourceRow <= 13 && record.month === demandOutcomesLossMonth_(sourceRow - 2)
           : (record.city === 'МСК' || record.city === 'СПБ') && record.sourceColumn === (record.city === 'МСК' ? 'G' : 'I')

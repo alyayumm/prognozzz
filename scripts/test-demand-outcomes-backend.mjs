@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 const source = readFileSync(new URL('../apps-script/DemandOutcomes.gs', import.meta.url), 'utf8');
 const salesId = '18AsqW5bhWTTsMYKqWH73AC335llbGlggSA0tGRUEkyw';
 const lossesId = '1h0cg9NzgfhN_THJBrelCWeMEYMGCqbSoBMFpVAM01-M';
+const examGroupsId = '1ZPbHfKN6smZKKRqPa-pqjYqf1U9pzUi1YLYhy_5wsnQ';
 const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const clone = value => JSON.parse(JSON.stringify(value));
 
@@ -28,8 +29,20 @@ function cityLossesBlock() {
     Array(15).fill(''), Array(15).fill('')];
 }
 
+function examGroupsBlock() {
+  const values = Array.from({ length: 181 }, () => Array(49).fill(''));
+  values[0].splice(0, 7, 'Конкурент', 'интересные', 'филиалы', 'Июнь 2023', 'Июль 2023', 'Октябрь 2026', 'Среднее');
+  values[1][0] = 'Автошкола А'; values[2][0] = 'Автошкола Б';
+  values[1][3] = 2; values[2][3] = 3;
+  values[1][4] = 0;
+  values[1][5] = 200; values[2][5] = 139;
+  values[180][5] = 339;
+  values[1][6] = 999;
+  return values;
+}
+
 function fixture({ lockAvailable = true } = {}) {
-  const blocks = { moscow: salesBlock('Москва', 0), petersburg: salesBlock('Питер', 100), losses: lossesBlock(), cityLosses: cityLossesBlock() };
+  const blocks = { moscow: salesBlock('Москва', 0), petersburg: salesBlock('Питер', 100), losses: lossesBlock(), cityLosses: cityLossesBlock(), examGroups: examGroupsBlock() };
   const props = {};
   const sourceErrors = new Set();
   const replacedSheetIds = new Map();
@@ -66,7 +79,7 @@ function fixture({ lockAvailable = true } = {}) {
     },
   };
   const nativeSheet = (bookId, sheetId) => ({
-    getName: () => sheetId === 1815158623 ? 'Договоры' : sheetId === 104 ? 'Сводка по месяцам' : sheetId === 105 ? 'Распределение потока' : 'Лист1',
+    getName: () => sheetId === 1815158623 ? 'Договоры' : sheetId === 104 ? 'Сводка по месяцам' : sheetId === 105 ? 'Распределение потока' : sheetId === 522389953 ? 'СВОД' : 'Лист1',
     getSheetId: () => replacedSheetIds.get(sheetId) ?? sheetId,
     getRange: (...args) => {
       const [row, column, height, width] = parseRange(args);
@@ -78,6 +91,7 @@ function fixture({ lockAvailable = true } = {}) {
       else if (bookId === lossesId && sheetId === 104 && row === 1 && column === 1 && height === 14 && width === 6) values = blocks.losses;
       else if (bookId === lossesId && sheetId === 105 && row === 15 && column === 1 && height === 13 && width === 15) values = blocks.cityLosses;
       else if (bookId === lossesId && sheetId === 0 && row === 1 && column === 1 && height === 1 && width === 1) values = [[period]];
+      else if (bookId === examGroupsId && sheetId === 522389953 && row === 1 && column === 1 && height === 181 && width === 49) values = blocks.examGroups;
       else throw Error(`Unbounded or unexpected source read ${key}`);
       return { getValues: () => clone(values), getDisplayValues: () => clone(values), setValues: values => { sourceWrites.push(values); throw Error('Source sheets are read only'); } };
     },
@@ -92,12 +106,13 @@ function fixture({ lockAvailable = true } = {}) {
       deleteProperty: key => { delete props[key]; },
     }) },
     SpreadsheetApp: { flush: () => {}, openById: id => {
-      assert.ok([salesId, lossesId].includes(id), 'Only the two approved sources may be read');
+      assert.ok([salesId, lossesId, examGroupsId].includes(id), 'Only approved sources may be read');
       if (sourceErrors.has(id)) throw Error('private-secret token=upstream-sensitive-details');
       return {
         getSheetById: sheetId => nativeSheet(id, sheetId),
         getSheetByName: name => {
           if (id === salesId) { assert.equal(name, 'Договоры'); return nativeSheet(id, 1815158623); }
+          if (id === examGroupsId) { assert.equal(name, 'СВОД'); return nativeSheet(id, 522389953); }
           assert.ok(['Сводка по месяцам', 'Распределение потока', 'Лист1'].includes(name));
           return nativeSheet(id, name === 'Лист1' ? 0 : name === 'Распределение потока' ? 105 : 104);
         },
@@ -144,6 +159,107 @@ test('public reads use only approved bounded source ranges and never write cache
     assert.ok(item.sheetId === 1815158623 || item.sheetId === 104);
     assert.ok(item.url.includes('/spreadsheets/d/'));
   }
+});
+
+test('exam groups are opt-in and aggregate only bounded SPB school rows, preserving zero and sparse months', () => {
+  const f = fixture();
+  for (const payload of [undefined, {}, { includeExamGroups: false }, { includeExamGroups: 'true' }]) {
+    assert.equal(f.api.get(payload).sources.length, 2);
+  }
+  assert.equal(f.sourceReads.some(key => key.startsWith(`${examGroupsId}:`)), false);
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(result.status, 'ready');
+  assert.equal(result.sources.length, 3);
+  assert.deepEqual(series(result, 'examGroups'), [
+    { month: '2023-06', city: 'СПБ', metric: 'examGroups', count: 5, sourceRow: 2, sourceColumn: 'D' },
+    { month: '2023-07', city: 'СПБ', metric: 'examGroups', count: 0, sourceRow: 2, sourceColumn: 'E' },
+    { month: '2026-10', city: 'СПБ', metric: 'examGroups', count: 339, sourceRow: 2, sourceColumn: 'F' },
+  ]);
+  assert.equal(sourceState(result, 'examGroups').url, `https://docs.google.com/spreadsheets/d/${examGroupsId}/edit?gid=522389953`);
+  assert.equal(f.cacheWrites.length, 0);
+  assert.equal(f.sourceWrites.length, 0);
+  assert.equal(f.lockRequests.length, 0);
+});
+
+test('exam groups ignore averages and all-blank month columns without inventing zeroes', () => {
+  const f = fixture();
+  f.blocks.examGroups[0][7] = 'Ноябрь 2026';
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(series(result, 'examGroups').some(row => row.month === '2026-11'), false);
+  assert.equal(series(result, 'examGroups').some(row => row.count === 999), false);
+});
+
+test('native two-digit Russian year headers match the supplied SVOD layout', () => {
+  const f = fixture();
+  f.blocks.examGroups[0][3] = 'июнь 23';
+  f.blocks.examGroups[0][4] = 'июль 23';
+  f.blocks.examGroups[0][5] = 'октябрь 26';
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(sourceState(result, 'examGroups').status, 'ready');
+  assert.deepEqual(series(result, 'examGroups').map(row => [row.month, row.count]), [['2023-06', 5], ['2023-07', 0], ['2026-10', 339]]);
+});
+
+test('exam group provenance supports AA October and added months through the bounded AW column', () => {
+  const f = fixture();
+  for (let row = 0; row < 181; row += 1) {
+    f.blocks.examGroups[row][26] = f.blocks.examGroups[row][5];
+    f.blocks.examGroups[row][5] = '';
+  }
+  f.blocks.examGroups[0][48] = 'Декабрь 2026';
+  f.blocks.examGroups[1][48] = 10;
+  const rows = series(clone(f.api.get({ includeExamGroups: true })), 'examGroups');
+  assert.equal(rows.find(row => row.month === '2026-10').count, 339);
+  assert.equal(rows.find(row => row.month === '2026-10').sourceColumn, 'AA');
+  assert.equal(rows.find(row => row.month === '2026-12').sourceColumn, 'AW');
+});
+
+for (const [label, alter] of [
+  ['changed fixed headers', f => { f.blocks.examGroups[0][0] = 'Неизвестное поле'; }],
+  ['unrecognized month header', f => { f.blocks.examGroups[0][3] = 'Итого за год'; }],
+  ['wrong existing total', f => { f.blocks.examGroups[180][5] = 340; }],
+  ['non-count school cell', f => { f.blocks.examGroups[2][5] = 'нет сведений'; }],
+  ['duplicate month header', f => { f.blocks.examGroups[0][4] = 'Июнь 2023'; }],
+  ['fractional groups', f => { f.blocks.examGroups[2][3] = 1.5; }],
+  ['negative groups', f => { f.blocks.examGroups[2][3] = -1; }],
+  ['changed source tab', f => { f.replacedSheetIds.set(522389953, 99); }],
+]) {
+  test(`exam groups ${label} retain their successful cache without poisoning sales or losses`, () => {
+    const f = fixture();
+    f.api.sync({ includeExamGroups: true });
+    alter(f);
+    const result = clone(f.api.get({ includeExamGroups: true }));
+    assert.equal(sourceState(result, 'examGroups').status, 'cached');
+    assert.equal(series(result, 'examGroups').find(row => row.month === '2026-10').count, 339);
+    assert.equal(sourceState(result, 'sales').status, 'ready');
+    assert.equal(sourceState(result, 'losses').status, 'ready');
+  });
+}
+
+test('unavailable exam groups without cache remain absent rather than fabricating counts', () => {
+  const f = fixture();
+  f.sourceErrors.add(examGroupsId);
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(result.status, 'partial');
+  assert.equal(sourceState(result, 'examGroups').status, 'error');
+  assert.deepEqual(series(result, 'examGroups'), []);
+  assert.equal(sourceState(result, 'sales').status, 'ready');
+  assert.equal(sourceState(result, 'losses').status, 'ready');
+  assert.equal(JSON.stringify(result).includes('private-secret'), false);
+});
+
+test('default legacy cache sync retains the independently committed exam-group generation', () => {
+  const f = fixture();
+  f.api.sync({ includeExamGroups: true });
+  const examIndex = JSON.parse(f.props.DEMAND_OUTCOMES_CACHE_INDEX).examGroups;
+  assert.ok(examIndex);
+  const legacy = clone(f.api.sync());
+  assert.equal(legacy.sources.length, 2);
+  assert.deepEqual(JSON.parse(f.props.DEMAND_OUTCOMES_CACHE_INDEX).examGroups, examIndex);
+  f.sourceErrors.add(examGroupsId);
+  const result = clone(f.api.get({ includeExamGroups: true }));
+  assert.equal(sourceState(result, 'examGroups').status, 'cached');
+  assert.equal(series(result, 'examGroups').find(row => row.month === '2026-10').count, 339);
+  assert.equal(JSON.stringify(result).includes('private-secret'), false);
 });
 
 test('sales preserve historical years, genuine zeroes, provenance and blank future months', () => {

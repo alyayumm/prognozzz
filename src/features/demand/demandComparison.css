@@ -49,6 +49,7 @@
 .demand-comparison-loss-total span { color: var(--muted-strong); }
 .demand-comparison-table { scrollbar-color: var(--line-strong) var(--cloud); scrollbar-width: thin; }
 .demand-comparison-table table { min-width: 1280px; }
+.demand-comparison-table-with-exam-groups table { min-width: 1640px; }
 .demand-comparison-table th:first-child { position: sticky; left: 0; background: white; }
 .demand-comparison-table thead th:first-child { background: var(--cloud); }
 .demand-comparison-table tbody tr:hover th:first-child { background: var(--cloud); }

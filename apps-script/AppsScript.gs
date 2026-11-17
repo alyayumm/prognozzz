@@ -431,8 +431,8 @@ function doPost(e) {
       syncYandexMetrikaBrandSources: syncYandexMetrikaBrandSources_,
       getWordstatDemand: getWordstatDemand_,
       syncWordstatDemand: syncWordstatDemand_,
-      getDemandOutcomes: () => getDemandOutcomes_(),
-      syncDemandOutcomes: () => syncDemandOutcomes_(),
+      getDemandOutcomes: (payload) => getDemandOutcomes_(payload),
+      syncDemandOutcomes: (payload) => syncDemandOutcomes_(payload),
       getLeadConversion: getLeadConversion_,
       syncLeadConversion: syncLeadConversion_,
     };

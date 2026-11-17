@@ -20,6 +20,9 @@ const countFormat = new Intl.NumberFormat("ru-RU");
 const percentFormat = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractionDigits: 1, signDisplay: "exceptZero" });
 const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const WORDSTAT_URL = "https://docs.google.com/spreadsheets/d/1lBIgNVVyg7fT7j_rjVybfxUMBZ74NiuWDfPm3BZsIAY/edit";
+const EXAM_GROUPS_URL = "https://docs.google.com/spreadsheets/d/1ZPbHfKN6smZKKRqPa-pqjYqf1U9pzUi1YLYhy_5wsnQ/edit?gid=522389953";
+
+function sourceLabel(key: string) { return key === "sales" ? "Продажи" : key === "examGroups" ? "Группы ГИБДД · практика" : "Сливы"; }
 
 function count(value: number | null) { return value === null ? "—" : countFormat.format(value); }
 function percent(value: number | null) { return value === null ? "—" : percentFormat.format(value); }
@@ -85,8 +88,12 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
   const summary = comparison.salesSummary;
   const lossRows = comparison.months.filter((row) => row.losses !== null);
   const lossCount = lossRows.length ? lossRows.reduce((sum, row) => sum + (row.losses as number), 0) : null;
+  const showExamGroups = city === "СПБ";
+  const visibleSources = snapshot?.sources.filter((source) => showExamGroups || source.key !== "examGroups") ?? [];
+  const hasExamGroupSource = snapshot?.sources.some((source) => source.key === "examGroups") ?? false;
   const cityName = city === "МСК" ? "Москва" : city === "СПБ" ? "Санкт-Петербург" : "Москва + СПб";
-  const sourceWarnings = [...new Set([...(snapshot?.warnings ?? []), ...(snapshot?.sources.flatMap((source) => source.warnings) ?? [])])];
+  const hiddenWarnings = new Set(snapshot?.sources.filter((source) => !showExamGroups && source.key === "examGroups").flatMap((source) => source.warnings) ?? []);
+  const sourceWarnings = [...new Set([...(snapshot?.warnings ?? []).filter((warning) => !hiddenWarnings.has(warning)), ...visibleSources.flatMap((source) => source.warnings)])];
   const apiError = error || (snapshot?.status === "error" ? "Таблицы продаж и сливов сейчас недоступны." : "");
   const hasChartData = comparison.months.some((row) => row.plotDemand !== null || row.plotSales !== null || row.plotLosses !== null);
   const hasLossYoY = comparison.months.some((row) => row.lossesYoY !== null);
@@ -114,14 +121,14 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
 
   return <div className="demand-comparison" aria-busy={busy}>
     <section className="demand-panel demand-comparison-controls" aria-label="Настройки сравнения спроса">
-      <div className="demand-comparison-intro"><h2>Количество и отношение к спросу</h2><p>Выберите город, показатель и годы. Спрос, продажи и сливы остаются отдельными величинами.</p></div>
+      <div className="demand-comparison-intro"><h2>Количество и отношение к спросу</h2><p>Выберите город, показатель и годы. Спрос, продажи и сливы остаются отдельными величинами.{showExamGroups && " Для СПб доступны заявленные группы ГИБДД на практику."}</p></div>
       <div className="demand-comparison-fields">
         <label htmlFor={cityId}>Город<select id={cityId} value={city} onChange={(event) => setCity(event.target.value as DemandComparisonCity)}><option value="Все">Москва + СПб</option><option value="МСК">Москва</option><option value="СПБ">Санкт-Петербург</option></select></label>
         <button className="select-button demand-comparison-refresh" type="button" disabled={busy} onClick={() => void reload(canRefresh)}><RefreshCw size={15} aria-hidden="true" />{busy ? "Загрузка…" : canRefresh ? "Обновить таблицы" : "Перечитать данные"}</button>
       </div>
     </section>
 
-    {snapshot && <ul className="demand-comparison-source-status" aria-label="Состояние источников">{snapshot.sources.map((source) => <li key={source.key}><strong>{source.key === "sales" ? "Продажи" : "Сливы"}:</strong> {source.status === "cached" ? "последняя успешная выгрузка" : source.status === "error" ? "источник недоступен" : "данные из таблицы"}{source.fromMonth && source.toMonth ? ` · ${source.key === "losses" ? "общая сводка: " : ""}${monthName(source.fromMonth)} — ${monthName(source.toMonth)}` : ""}{source.breakdown && ` · города: ${coverageText(source.breakdown)}`}{source.readAt && ` · ${dateTime(source.readAt)} МСК`}</li>)}</ul>}
+    {snapshot && <ul className="demand-comparison-source-status" aria-label="Состояние источников">{visibleSources.map((source) => <li key={source.key}><strong>{sourceLabel(source.key)}:</strong> {source.status === "cached" ? "последняя успешная выгрузка" : source.status === "error" ? "источник недоступен" : "данные из таблицы"}{source.fromMonth && source.toMonth ? ` · ${source.key === "losses" ? "общая сводка: " : source.key === "examGroups" ? "доступные месяцы с разрывами: " : ""}${monthName(source.fromMonth)} — ${monthName(source.toMonth)}` : ""}{source.breakdown && ` · города: ${coverageText(source.breakdown)}`}{source.readAt && ` · ${dateTime(source.readAt)} МСК`}</li>)}{showExamGroups && !hasExamGroupSource && <li>Данные групп ГИБДД пока не загружены.</li>}</ul>}
 
     {(apiError || sourceWarnings.length > 0) && <div className={`demand-feedback${apiError ? " demand-feedback-error" : ""}`} role={apiError ? "alert" : "status"}><TriangleAlert size={17} aria-hidden="true" /><div>{apiError && <p>{apiError}</p>}{sourceWarnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
 
@@ -152,12 +159,12 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
     </section>
 
     <section className="demand-panel demand-comparison-data" aria-label="Месячные значения и источники">
-      <div className="demand-comparison-heading"><h3>Помесячно</h3><p id={tableHelpId}>Спрос — запросы «автошкола», продажи — количество договоров, сливы — количество из сводки. «—» означает отсутствие данных, а 0 — подтверждённый ноль.</p></div>
-      <div className="demand-data-scroll demand-comparison-table" role="region" aria-label="Помесячные данные; таблицу можно прокручивать по горизонтали" aria-describedby={`${tableHelpId} ${annualHelpId}`} tabIndex={0}>
+      <div className="demand-comparison-heading"><h3>Помесячно</h3><p id={tableHelpId}>Спрос — запросы «автошкола», продажи — количество договоров, сливы — количество из сводки.{showExamGroups && " Группы ГИБДД — заявленные группы категории B на практику, а не количество учеников."} «—» означает отсутствие данных, а 0 — подтверждённый ноль.</p></div>
+      <div className={`demand-data-scroll demand-comparison-table${showExamGroups ? " demand-comparison-table-with-exam-groups" : ""}`} role="region" aria-label="Помесячные данные; таблицу можно прокручивать по горизонтали" aria-describedby={`${tableHelpId} ${annualHelpId}`} tabIndex={0}>
         <table>
           <caption>{city === "Все" ? "Москва + Санкт-Петербург" : city === "МСК" ? "Москва" : "Санкт-Петербург"} · {year} и {year - 1}. Продажи и сливы показаны отдельно.</caption>
-          <thead><tr><th scope="col">Месяц</th><th scope="col">Спрос {year - 1}</th><th scope="col">Спрос {year}</th><th scope="col">Δ спроса</th><th scope="col">Продажи {year - 1}</th><th scope="col">Продажи {year}</th><th scope="col">Δ продаж</th><th scope="col">Модель продаж</th><th scope="col">Факт − модель</th><th scope="col">Сливы {year - 1}</th><th scope="col">Сливы {year}</th><th scope="col">Δ сливов</th></tr></thead>
-          <tbody>{comparison.months.map((row, index) => <tr key={row.month} className={row.complete ? "" : "demand-comparison-incomplete"}><th scope="row">{MONTH_NAMES[index]}{!row.complete && <small>Месяц не завершён</small>}</th><td>{count(row.previousDemand)}</td><td>{count(row.demand)}</td><td>{percent(row.demandYoY)}</td><td>{count(row.previousSales)}</td><td>{count(row.sales)}</td><td>{percent(row.salesYoY)}</td><td>{decimal(row.expectedSales)}</td><td>{decimal(row.salesGap)}</td><td>{count(row.previousLosses)}</td><td>{count(row.losses)}</td><td>{percent(row.lossesYoY)}</td></tr>)}</tbody>
+          <thead><tr><th scope="col">Месяц</th><th scope="col">Спрос {year - 1}</th><th scope="col">Спрос {year}</th><th scope="col">Δ спроса</th><th scope="col">Продажи {year - 1}</th><th scope="col">Продажи {year}</th><th scope="col">Δ продаж</th><th scope="col">Модель продаж</th><th scope="col">Факт − модель</th><th scope="col">Сливы {year - 1}</th><th scope="col">Сливы {year}</th><th scope="col">Δ сливов</th>{showExamGroups && <><th scope="col">Группы ГИБДД {year - 1}</th><th scope="col">Группы ГИБДД {year}</th><th scope="col">Δ групп</th></>}</tr></thead>
+          <tbody>{comparison.months.map((row, index) => <tr key={row.month} className={row.complete ? "" : "demand-comparison-incomplete"}><th scope="row">{MONTH_NAMES[index]}{!row.complete && <small>Месяц не завершён</small>}</th><td>{count(row.previousDemand)}</td><td>{count(row.demand)}</td><td>{percent(row.demandYoY)}</td><td>{count(row.previousSales)}</td><td>{count(row.sales)}</td><td>{percent(row.salesYoY)}</td><td>{decimal(row.expectedSales)}</td><td>{decimal(row.salesGap)}</td><td>{count(row.previousLosses)}</td><td>{count(row.losses)}</td><td>{percent(row.lossesYoY)}</td>{showExamGroups && <><td>{count(row.previousExamGroups)}</td><td>{count(row.examGroups)}</td><td>{percent(row.examGroupsYoY)}</td></>}</tr>)}</tbody>
           <tfoot className="demand-comparison-annual">
             <tr>
               <th scope="row">Среднее за месяц<small>По месяцам с данными</small></th>
@@ -172,6 +179,11 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
               <AnnualMeanCell value={annual.previousLosses.average} months={annual.previousLosses.months} />
               <AnnualMeanCell value={annual.losses.average} months={annual.losses.months} />
               <AnnualMeanCell value={annual.lossesYoY.value} months={annual.lossesYoY.months} paired />
+              {showExamGroups && <>
+                <AnnualMeanCell value={annual.previousExamGroups.average} months={annual.previousExamGroups.months} />
+                <AnnualMeanCell value={annual.examGroups.average} months={annual.examGroups.months} />
+                <AnnualMeanCell value={annual.examGroupsYoY.value} months={annual.examGroupsYoY.months} paired />
+              </>}
             </tr>
           </tfoot>
         </table>
@@ -181,11 +193,13 @@ export default function DemandComparison({ demandRecords, writePassword, canRefr
         <summary>Источники и правила расчёта<ChevronDown size={15} aria-hidden="true" /></summary>
         <ul>
           <li><a href={WORDSTAT_URL} target="_blank" rel="noreferrer">Wordstat · история спроса<ExternalLink size={12} aria-hidden="true" /></a><p>Месячная частотность запроса «автошкола». Для двух городов нужны оба значения за месяц; последние 30 дней вместо месяца не используются.</p></li>
-          {snapshot?.sources.map((source) => <li key={source.key}>
-            <a href={source.url} target="_blank" rel="noreferrer">{source.key === "sales" ? "Продажи" : "Сливы · общая сводка"} · {source.sheetName}<ExternalLink size={12} aria-hidden="true" /></a>
+          {visibleSources.map((source) => <li key={source.key}>
+            <a href={source.url} target="_blank" rel="noreferrer">{source.key === "losses" ? "Сливы · общая сводка" : sourceLabel(source.key)} · {source.sheetName}<ExternalLink size={12} aria-hidden="true" /></a>
             <p>{source.fromMonth && source.toMonth ? `${monthName(source.fromMonth)} — ${monthName(source.toMonth)}. ` : ""}{source.status === "cached" ? "Последняя успешная выгрузка. " : source.status === "error" ? "Источник недоступен. " : ""}{source.readAt && `Прочитано ${dateTime(source.readAt)} МСК.`}</p>
+            {source.key === "examGroups" && <p>Сумма групп категории B по автошколам листа «СВОД». Заявленные группы на практику показаны отдельным показателем СПб; это группы, а не ученики. Пропуски не заполнены, другие листы не подмешиваются.</p>}
             {source.breakdown && <><a href={source.breakdown.url} target="_blank" rel="noreferrer">Сливы · разбивка по городам · {source.breakdown.sheetName}<ExternalLink size={12} aria-hidden="true" /></a><p>{coverageText(source.breakdown)}. Значения каждого города берутся из его столбца.</p></>}
           </li>)}
+          {showExamGroups && !hasExamGroupSource && <li><a href={EXAM_GROUPS_URL} target="_blank" rel="noreferrer">Группы ГИБДД · практика · СВОД<ExternalLink size={12} aria-hidden="true" /></a><p>Данные групп ГИБДД пока не загружены. Сумма групп категории B по автошколам листа «СВОД»; пропуски не заполнены.</p></li>}
         </ul>
         <p>Продажи берутся целиком из листа «Договоры» предоставленной таблицы. Сливы Москвы и СПб берутся из городской разбивки; значение «Москва + СПб» — из общей сводки. Если их суммы расходятся, разница не распределяется между городами. Вычеты из лидов, показатели amoCRM и оплаты ПС здесь не применяются. Эти источники описывают разные совокупности: продажи и сливы не складываются. Проценты год к году не рассчитываются при отсутствии или нулевом значении прошлого года.</p>
       </details>

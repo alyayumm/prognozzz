@@ -42,6 +42,7 @@
 .demand-dynamics-inspector-year > strong { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .demand-dynamics-inspector-year > strong i { width: 8px; height: 8px; border-radius: 50%; }
 .demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
+.demand-dynamics-with-exam-groups :is(.demand-dynamics-inspector, .demand-dynamics-annual) dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dt { color: var(--muted-strong, #536481); font-size: 11px; line-height: 1.5; }
 .demand-dynamics :is(.demand-dynamics-inspector, .demand-dynamics-annual) dd { margin: 4px 0 0; font-size: 14px; font-weight: 750; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .demand-dynamics-inspector > p { padding: 10px 0; color: var(--muted-strong, #536481); font-size: 12px; line-height: 1.6; }
