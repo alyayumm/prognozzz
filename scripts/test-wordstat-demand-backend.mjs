@@ -245,7 +245,7 @@ const historyHeaders = ['Месяц', 'Город', 'Поисковая фраз
 const historyRow = (month = '01.2018', city = 'Москва', count = '161\u00a0010', updated = '28.10.2026 17:22') => [month, city, 'автошкола', count, updated];
 
 function sheetFixture({ rows = [historyRow(), historyRow('01.2018', 'Санкт-Петербург', '65 066')], heading = historyHeaders,
-  properties = {}, cache = [], sourceError = false, lockAvailable = true, reportedLastRow, failFinalMarker = false } = {}) {
+  properties = {}, cache = [], sourceError = false, lockAvailable = true, reportedLastRow, failFinalMarker = false, now = '2026-10-28T14:30:00Z' } = {}) {
   const defaultSourceId = '1lBIgNVVyg7fT7j_rjVybfxUMBZ74NiuWDfPm3BZsIAY';
   const props = { ...(cache.length ? { WORDSTAT_DEMAND_CACHE_SOURCE: 'sheet:' + (properties.WORDSTAT_SOURCE_SPREADSHEET_ID || defaultSourceId) } : {}), ...properties }, reads = [], writes = [];
   let cacheValues = cache.length ? [headers, ...cache] : [], releases = 0, failSource = sourceError;
@@ -264,7 +264,7 @@ function sheetFixture({ rows = [historyRow(), historyRow('01.2018', 'Санкт-
       return [heading, ...rows].slice(r - 1, r - 1 + h);
     } }),
   };
-  const api = runInNewContext(`${source}\nwordstatNow_ = () => new Date('2026-10-28T14:30:00Z');\n({ get:getWordstatDemand_, sync:syncWordstatDemand_ });`, {
+  const api = runInNewContext(`${source}\nwordstatNow_ = () => new Date('${now}');\n({ get:getWordstatDemand_, sync:syncWordstatDemand_ });`, {
     PropertiesService: { getScriptProperties: () => ({
       getProperty: key => props[key] ?? null, setProperty: (key, value) => {
         if (failFinalMarker && key === 'WORDSTAT_DEMAND_CACHE_SOURCE' && String(value).startsWith('sheet:')) throw new Error('Property write failed');
@@ -295,6 +295,47 @@ test('default sheet source reads monthly history without Cloud credentials or ca
   assert.equal(result.lastSyncedAt, '2026-10-28T14:22:00.000Z');
   assert.equal(JSON.stringify(result).includes('unused-private'), false);
   assert.equal(f.writes.length, 0); assert.deepEqual(f.reads, [[1, 1, 3, 5]]);
+});
+
+test('regional scope belongs to each source month and survives saving and cached fallback', () => {
+  const f = sheetFixture({ now: '2026-11-23T08:00:00Z', rows: [
+    historyRow('09.2026', 'Москва', 10), historyRow('09.2026', 'Санкт-Петербург', 20),
+    historyRow('10.2026', 'Москва', 30), historyRow('10.2026', 'Санкт-Петербург и Ленинградская область', 40),
+  ] });
+  const result = plain(f.api.sync());
+  assert.deepEqual(result.records.map(({ month, city, regionId, count }) => [month, city, regionId, count]), [
+    ['2026-09', 'МСК', '213', 10], ['2026-09', 'СПБ', '2', 20],
+    ['2026-10', 'МСК', '213', 30], ['2026-10', 'СПБ', '10174', 40],
+  ]);
+  assert.equal(f.cache().find(row => row[1] === '2026-10' && row[2] === 'СПБ')[3], '10174');
+  f.setSourceError(true);
+  const fallback = plain(f.api.get());
+  assert.equal(fallback.status, 'error');
+  assert.deepEqual(fallback.records, result.records);
+  assert.equal(f.writes.length, 1);
+});
+
+test('same-count source duplicates with different geography cannot replace the cache', () => {
+  const cache = [cachedRow('2026-08'), cachedRow('2026-08', 'СПБ')];
+  const f = sheetFixture({ cache, rows: [historyRow('09.2026', 'Москва', 10),
+    historyRow('09.2026', 'Санкт-Петербург', 20),
+    historyRow('09.2026', 'Санкт-Петербург и Ленинградская область', 20),
+  ] });
+  assert.throws(() => f.api.sync(), /охват/);
+  assert.equal(f.writes.length, 0);
+  assert.deepEqual(f.cache(), [headers, ...cache]);
+});
+
+test('cached scope validates city-region combinations and rejects conflicting duplicate geography', () => {
+  for (const cache of [
+    [cachedRow('2026-08').map((value, index) => index === 3 ? '10174' : value)],
+    [cachedRow('2026-08', 'СПБ').map((value, index) => index === 3 ? '999' : value)],
+    [cachedRow('2026-08', 'СПБ'), cachedRow('2026-08', 'СПБ').map((value, index) => index === 3 ? '10174' : value)],
+  ]) {
+    const f = sheetFixture({ cache, sourceError: true });
+    assert.deepEqual(plain(f.api.get()).records, []);
+    assert.equal(f.writes.length, 0);
+  }
 });
 
 test('sheet refresh writes only a complete validated snapshot; native dates, true zero, gaps and missing share are supported', () => {

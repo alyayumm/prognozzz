@@ -192,7 +192,8 @@ function wordstatReadHistorySheet_(spreadsheetId, latestAvailableMonth) {
     if (row.every((value) => value === '' || value === null)) return;
     const month = wordstatHistoryMonth_(row[columns[0]]);
     const cityText = String(row[columns[1]] || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    const city = ['москва', 'мск'].indexOf(cityText) >= 0 ? 'МСК' : ['санкт-петербург', 'санкт петербург', 'спб'].indexOf(cityText) >= 0 ? 'СПБ' : '';
+    const includesLeningradRegion = cityText === 'санкт-петербург и ленинградская область';
+    const city = ['москва', 'мск'].indexOf(cityText) >= 0 ? 'МСК' : includesLeningradRegion || ['санкт-петербург', 'санкт петербург', 'спб'].indexOf(cityText) >= 0 ? 'СПБ' : '';
     const phrase = String(row[columns[2]] || '').trim().toLowerCase();
     if (!month || !city || phrase !== 'автошкола') throw wordstatSafeError_('Wordstat: неверный месяц, город или поисковая фраза в строке ' + (index + 2) + '. Сохранённая история не изменена.');
     // Current/future months can be unfinished in the source and stay out of seasonal comparisons.
@@ -201,10 +202,11 @@ function wordstatReadHistorySheet_(spreadsheetId, latestAvailableMonth) {
     const count = wordstatCount_(typeof rawCount === 'string' ? rawCount.replace(/[\s\u00a0\u202f]+/g, '') : rawCount);
     const updatedAt = wordstatHistoryTimestamp_(row[columns[4]]);
     if (count === null || !updatedAt) throw wordstatSafeError_('Wordstat: неверная частотность или время обновления в строке ' + (index + 2) + '. Сохранённая история не изменена.');
+    const regionId = includesLeningradRegion ? '10174' : city === 'МСК' ? '213' : '2';
     const key = city + ':' + month;
     const previous = byMonthCity[key];
-    if (previous && previous.count !== count) throw wordstatSafeError_('Wordstat: в истории есть противоречивые значения города и месяца. Сохранённая история не изменена.');
-    if (!previous || updatedAt > previous.updatedAt) byMonthCity[key] = { month: month, city: city, regionId: city === 'МСК' ? '213' : '2', count: count, share: null, updatedAt: updatedAt };
+    if (previous && (previous.count !== count || previous.regionId !== regionId)) throw wordstatSafeError_('Wordstat: в истории есть противоречивые значения или охват города и месяца. Сохранённая история не изменена.');
+    if (!previous || updatedAt > previous.updatedAt) byMonthCity[key] = { month: month, city: city, regionId: regionId, count: count, share: null, updatedAt: updatedAt };
     monthsByCity[city][month] = true;
   });
   const moscowMonths = Object.keys(monthsByCity['МСК']).sort();
@@ -326,9 +328,15 @@ function wordstatReadRecords_(latestAvailableMonth) {
       throw new Error('Wordstat: некорректные сохранённые данные.');
     }
     if (month > latestAvailableMonth) return;
+    const regionId = String(row[3] || (city === 'МСК' ? '213' : '2')).trim();
+    if (city === 'МСК' ? regionId !== '213' : regionId !== '2' && regionId !== '10174') {
+      throw new Error('Wordstat: некорректный регион сохранённой истории.');
+    }
+    const previous = byId[city + ':' + month];
+    if (previous && previous.regionId !== regionId) throw new Error('Wordstat: противоречивый охват сохранённой истории.');
     const timestamp = row[6] instanceof Date ? row[6].toISOString() : String(row[6] || '');
     byId[city + ':' + month] = {
-      month: month, city: city, regionId: city === 'МСК' ? '213' : '2',
+      month: month, city: city, regionId: regionId,
       count: count, share: share, updatedAt: Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : '',
     };
   });
