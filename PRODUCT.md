@@ -24,6 +24,7 @@ Do not make the dashboard feel like a marketing landing page, a decorative bento
 
 - Shared source of truth: saved values must live in the shared Google Sheets layer when possible.
 - Separation by meaning: `Все` means `МСК + СПБ`; separate messages pipelines and source breakdowns stay in their own views. Per the final rule confirmed on 11 November 2026, lead type `Сообщение` is excluded from qualification at every stage, including successful deals; lead and sale metrics follow their own rules.
+- Qualification owner exclusions: native amoCRM owners `10549050` (Багрянская Юлия) and `12326414` (Егорова Екатерина) never contribute to OP or OM qualification in any cohort, including target refusals, target duplicates and successful deals. This rule, confirmed on 25 November 2026, is reapplied to fresh and cached leads; their sales remain counted independently.
 - Fast daily entry: inputs should be compact, scannable, and save whole groups of values at once.
 - Explain the chart: events, source splits, forecasts, recommendations, and brand deltas should clarify why totals moved.
 - Brand restraint: use RECTOP blue, navy, ice surfaces, and simple controls without decorative clutter.

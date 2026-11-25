@@ -85,8 +85,8 @@ test('only the two native owner IDs exclude leads; names and custom owners canno
         custom_fields_values: [field('Ответственный', 'Менеджер')] });
       for (const version of [item, api.cached(api.record(item, dictionaries))]) {
         assert.equal(api.leadFacts(version, dictionaries, config), null, `${id}/${owner}`);
-        assert.equal(api.normalize(version, dictionaries, config).isQualified, true,
-          'lead-only owner exclusions must not change qualification');
+        assert.equal(api.normalize(version, dictionaries, config).isQualified, false,
+          'the two native owners are excluded from qualification as well as leads');
       }
     }
   }
@@ -208,7 +208,8 @@ test('independent traffic counts include referral, OM and message leads once and
     [fresh({ source_name: 'РЕК/КЭШБЕК' }), { leads: 1, qualified: 0, omQualified: 0, omLeads: 0 }],
     [fresh({ responsible_user_name: 'Технический' }), { leads: 1, qualified: 0, omQualified: 1, omLeads: 0 }],
     [fresh({ responsible_user_name: 'Системный' }), { leads: 1, qualified: 1, omQualified: 0, omLeads: 0 }],
-    [fresh({ responsible_user_id: 10549050 }), { leads: 0, qualified: 1, omQualified: 0, omLeads: 0 }],
+    [fresh({ responsible_user_id: 10549050 }), { leads: 0, qualified: 0, omQualified: 0, omLeads: 0 }],
+    [fresh({ responsible_user_id: 12326414 }), { leads: 0, qualified: 0, omQualified: 0, omLeads: 0 }],
     [fresh({ custom_fields_values: [field('Тип лида', 'Сообщение')] }), { leads: 1, qualified: 0, omQualified: 0, omLeads: 0 }],
   ];
   for (const [item, expected] of cases) {
@@ -255,7 +256,7 @@ test('main refresh deduplicates all leads, leaves qualification and sales intact
   const qualified = f.saved().find(row => row.city === 'МСК' && row.metric === 'Квалы');
   assert.equal(lead.fact, 7);
   assert.equal(lead.omLeads, 0);
-  assert.equal(qualified.fact, 3, 'open message types do not qualify; native excluded lead owners still qualify for OP');
+  assert.equal(qualified.fact, 2, 'message types and the two excluded native owners do not qualify');
   assert.equal(qualified.omQualified, 1);
   for (const key of ['plan', 'forecast', 'recommendations']) assert.equal(lead[key], existing[0][key]);
   assert.ok(lead.comment.includes('ручная заметка'));
@@ -270,11 +271,11 @@ test('sales department excludes open city message types and referrals from quali
   const day = result.daily[0];
   assert.equal(day.totalTraffic, 7);
   assert.equal(day.mskTraffic, 7);
-  assert.equal(day.totalQualified, 3);
+  assert.equal(day.totalQualified, 2);
   assert.equal(day.totalDeals, 2);
   const managers = Object.values(result.byManager);
   assert.equal(managers.reduce((sum, manager) => sum + manager.totalTraffic, 0), 7);
-  assert.equal(managers.reduce((sum, manager) => sum + manager.factQualified, 0), 3);
+  assert.equal(managers.reduce((sum, manager) => sum + manager.factQualified, 0), 2);
   assert.equal(result.byManager['Технический'].refusalLeads, 0);
 });
 
@@ -300,7 +301,7 @@ test('historical September and October cohorts recalculate all leads from comple
     assert.equal(lead.plan, 40); assert.equal(lead.forecast, 44); assert.equal(lead.recommendations, 2);
     assert.ok(lead.comment.includes('ручная заметка'));
     assert.ok(lead.comment.includes('[AMO_LEADS_ALL=1]'));
-    assert.equal(qualified.fact, 3); assert.equal(qualified.omQualified, 1);
+    assert.equal(qualified.fact, 2); assert.equal(qualified.omQualified, 1);
     assert.equal(qualified.plan, 30); assert.equal(qualified.forecast, 35);
     assert.equal(snapshot.rows.some(row => row.date === date && row.metric === 'Продажи'), false);
   }

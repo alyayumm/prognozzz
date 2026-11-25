@@ -77,6 +77,38 @@ test('System ownership does not qualify excluded stages or unrelated lost reason
   }
 });
 
+test('Bagryanskaya and Egorova never qualify fresh or cached arrivals, while their sales remain', () => {
+  for (const ownerId of [10549050, 12326414]) {
+    for (const date of ['2026-10-01', '2026-11-07', '2026-11-15']) {
+      for (const stage of [
+        { status_id: 41892613, status_name: 'Брифинг' },
+        { status_id: 143, status_name: 'Закрыто и не реализовано', loss_reason_id: 3421768, loss_reason: { name: 'Дорого' } },
+        { status_id: 143, status_name: 'Закрыто и не реализовано', loss_reason_id: 23760226, loss_reason: { name: 'Дубль ЦЕЛЕВОЙ' } },
+        { status_id: 142, status_name: 'Успешно реализовано' },
+      ]) {
+        const fresh = lead({ ...stage, responsible_user_id: ownerId, responsible_user_name: 'Системный',
+          created_at: Date.parse(`${date}T12:00:00Z`) / 1000, custom_fields_values: yesFlag });
+        const stale = api.cached(record({ responsibleUserId: String(ownerId), responsibleUserName: 'Системный',
+          createdAt: `${date} 12:00:00`, createdDate: date, stageName: stage.status_name,
+          statusId: String(stage.status_id), lossReasonId: String(stage.loss_reason_id || ''),
+          lossReasonName: stage.loss_reason?.name || '', isQualified: 'TRUE' }));
+        for (const item of [fresh, stale]) {
+          const normalized = api.normalize(item, dictionaries, config);
+          assert.equal(normalized.isQualified, false, `${ownerId} ${date} ${stage.status_name}`);
+          assert.equal(normalized.isOmQualified, false);
+        }
+      }
+    }
+    const sold = api.cached(record({ responsibleUserId: String(ownerId), createdDate: '2026-10-01',
+      statusId: '142', stageName: 'Успешно реализовано', category: 'А+Б',
+      closedAt: '2026-10-02 12:00:00', closedDate: '2026-10-02' }));
+    const department = api.department(config, [], [sold]);
+    assert.equal(department.daily.reduce((sum, day) => sum + day.totalQualified, 0), 0);
+    assert.equal(department.daily.reduce((sum, day) => sum + day.totalDeals, 0), 2);
+  }
+  assert.equal(api.normalize(lead(), dictionaries, config).isQualified, true);
+});
+
 test('embedded API loss reasons survive raw caching and qualify Practice', () => {
   const lossLead = lead({ status_name: 'Закрыто и не реализовано', status_id: 143, loss_reason_id: 999,
     _embedded: { loss_reason: [{ id: 999, name: 'Практика' }] } });

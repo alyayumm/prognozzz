@@ -1887,6 +1887,9 @@ function salesAmoSalesFacts_(lead, dictionaries, config) {
 }
 
 function salesAmoIsQualified_(stageName, lead) {
+  // Native excluded owners never qualify for OP or OM, including successful deals.
+  const ownerId = String((lead && (lead.responsible_user_id || lead.responsibleUserId)) || '').trim();
+  if (ownerId === '10549050' || ownerId === '12326414') return false;
   const stage = salesNormalizeLabel_(stageName);
   if (!stage) return false;
   // Match "Целевые лиды (технический)" in the Dynamics amoCRM export.
